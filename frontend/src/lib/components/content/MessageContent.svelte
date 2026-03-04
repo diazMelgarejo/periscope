@@ -29,6 +29,11 @@
 
   let isUser = $derived(message.role === "user");
 
+  /** Whether the text (prose) segments for this role should render. */
+  let showText = $derived(
+    ui.isBlockVisible(isUser ? "user" : "assistant"),
+  );
+
   let accentColor = $derived(
     isUser ? "var(--accent-blue)" : "var(--accent-purple)",
   );
@@ -93,21 +98,27 @@
   <div class="message-body">
     {#each segments as segment}
       {#if segment.type === "thinking"}
-        {#if ui.showThinking}
+        {#if ui.isBlockVisible("thinking")}
           <ThinkingBlock content={segment.content} />
         {/if}
       {:else if segment.type === "tool"}
-        <ToolBlock
-          content={segment.content}
-          label={segment.label}
-          toolCall={segment.toolCall}
-        />
+        {#if ui.isBlockVisible("tool")}
+          <ToolBlock
+            content={segment.content}
+            label={segment.label}
+            toolCall={segment.toolCall}
+          />
+        {/if}
       {:else if segment.type === "code"}
-        <CodeBlock content={segment.content} language={segment.label} />
+        {#if ui.isBlockVisible("code")}
+          <CodeBlock content={segment.content} language={segment.label} />
+        {/if}
       {:else}
-        <div class="text-content markdown">
-          {@html renderMarkdown(segment.content)}
-        </div>
+        {#if showText}
+          <div class="text-content markdown">
+            {@html renderMarkdown(segment.content)}
+          </div>
+        {/if}
       {/if}
     {/each}
   </div>
