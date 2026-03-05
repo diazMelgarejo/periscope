@@ -25,19 +25,21 @@ const (
 // EngineConfig holds the configuration needed by the sync
 // engine, replacing per-agent positional parameters.
 type EngineConfig struct {
-	AgentDirs map[parser.AgentType][]string
-	Machine   string
+	AgentDirs               map[parser.AgentType][]string
+	Machine                 string
+	BlockedResultCategories []string
 }
 
 // Engine orchestrates session file discovery and sync.
 type Engine struct {
-	db            *db.DB
-	agentDirs     map[parser.AgentType][]string
-	machine       string
-	syncMu        gosync.Mutex // serializes all sync operations
-	mu            gosync.RWMutex
-	lastSync      time.Time
-	lastSyncStats SyncStats
+	db                      *db.DB
+	agentDirs               map[parser.AgentType][]string
+	machine                 string
+	blockedResultCategories map[string]bool
+	syncMu                  gosync.Mutex // serializes all sync operations
+	mu                      gosync.RWMutex
+	lastSync                time.Time
+	lastSyncStats           SyncStats
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
@@ -66,11 +68,31 @@ func NewEngine(
 	}
 
 	return &Engine{
-		db:        database,
-		agentDirs: dirs,
-		machine:   cfg.Machine,
-		skipCache: skipCache,
+		db:                      database,
+		agentDirs:               dirs,
+		machine:                 cfg.Machine,
+		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
+		skipCache:               skipCache,
 	}
+}
+
+// blockedCategorySet converts a slice of category names into a
+// set for O(1) lookup. Returns nil when the slice is empty.
+// Entries are trimmed and title-cased to match parser categories.
+func blockedCategorySet(cats []string) map[string]bool {
+	if len(cats) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(cats))
+	for _, c := range cats {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		c = strings.ToUpper(c[:1]) + strings.ToLower(c[1:])
+		m[c] = true
+	}
+	return m
 }
 
 // LastSync returns the time of the last completed sync.
@@ -1423,7 +1445,7 @@ type pendingWrite struct {
 
 func (e *Engine) writeBatch(batch []pendingWrite) {
 	for _, pw := range batch {
-		msgs := toDBMessages(pw)
+		msgs := toDBMessages(pw, e.blockedResultCategories)
 		s := toDBSession(pw)
 		s.MessageCount, s.UserMessageCount =
 			postFilterCounts(msgs)
@@ -1483,7 +1505,7 @@ func (e *Engine) writeMessages(
 // single-session re-syncs where existing content may have
 // changed (not just appended).
 func (e *Engine) writeSessionFull(pw pendingWrite) {
-	msgs := toDBMessages(pw)
+	msgs := toDBMessages(pw, e.blockedResultCategories)
 	s := toDBSession(pw)
 	s.MessageCount, s.UserMessageCount =
 		postFilterCounts(msgs)
@@ -1531,7 +1553,7 @@ func toDBSession(pw pendingWrite) db.Session {
 
 // toDBMessages converts parsed messages to db.Message rows
 // with tool-result pairing and filtering applied.
-func toDBMessages(pw pendingWrite) []db.Message {
+func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 	msgs := make([]db.Message, len(pw.msgs))
 	for i, m := range pw.msgs {
 		msgs[i] = db.Message{
@@ -1549,7 +1571,7 @@ func toDBMessages(pw pendingWrite) []db.Message {
 			ToolResults: convertToolResults(m.ToolResults),
 		}
 	}
-	return pairAndFilter(msgs)
+	return pairAndFilter(msgs, blocked)
 }
 
 // postFilterCounts returns the total and user message counts
@@ -1795,6 +1817,7 @@ func convertToolResults(
 		results[i] = db.ToolResult{
 			ToolUseID:     tr.ToolUseID,
 			ContentLength: tr.ContentLength,
+			ContentRaw:    tr.ContentRaw,
 		}
 	}
 	return results
@@ -1803,8 +1826,8 @@ func convertToolResults(
 // pairAndFilter pairs tool results with their corresponding
 // tool calls, then removes user messages that carried only
 // tool_result blocks (no displayable text).
-func pairAndFilter(msgs []db.Message) []db.Message {
-	pairToolResults(msgs)
+func pairAndFilter(msgs []db.Message, blocked map[string]bool) []db.Message {
+	pairToolResults(msgs, blocked)
 	filtered := msgs[:0]
 	for _, m := range msgs {
 		if m.Role == "user" &&
@@ -1817,10 +1840,10 @@ func pairAndFilter(msgs []db.Message) []db.Message {
 	return filtered
 }
 
-// pairToolResults matches tool_result content lengths to their
+// pairToolResults matches tool_result content to their
 // corresponding tool_calls across message boundaries using
-// tool_use_id.
-func pairToolResults(msgs []db.Message) {
+// tool_use_id. Categories in blocked are stored without content.
+func pairToolResults(msgs []db.Message, blocked map[string]bool) {
 	idx := make(map[string]*db.ToolCall)
 	for i := range msgs {
 		for j := range msgs[i].ToolCalls {
@@ -1837,6 +1860,9 @@ func pairToolResults(msgs []db.Message) {
 		for _, tr := range m.ToolResults {
 			if tc, ok := idx[tr.ToolUseID]; ok {
 				tc.ResultContentLength = tr.ContentLength
+				if !blocked[tc.Category] {
+					tc.ResultContent = parser.DecodeContent(tr.ContentRaw)
+				}
 			}
 		}
 	}

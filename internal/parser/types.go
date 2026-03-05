@@ -250,6 +250,7 @@ type ParsedToolCall struct {
 type ParsedToolResult struct {
 	ToolUseID     string
 	ContentLength int
+	ContentRaw    string // raw JSON of the content field; decode with DecodeContent
 }
 
 // ParsedMessage holds a single extracted message.
