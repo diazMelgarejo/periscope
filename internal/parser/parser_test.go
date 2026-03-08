@@ -484,7 +484,7 @@ func TestFormatToolUseVariants(t *testing.T) {
 		{
 			"edit_file",
 			`{"type":"tool_use","name":"edit_file","input":{"path":"main.go"}}`,
-			"[Write: main.go]",
+			"[Edit: main.go]",
 		},
 		{
 			"create_file",
@@ -1127,7 +1127,12 @@ func TestFormatGeminiToolCall(t *testing.T) {
 		{
 			"edit_file",
 			`{"name":"edit_file","args":{"file_path":"fix.go"},"displayName":"EditFile"}`,
-			"[Write: fix.go]",
+			"[Edit: fix.go]",
+		},
+		{
+			"replace",
+			`{"name":"replace","args":{"file_path":"fix.go"},"displayName":"Replace"}`,
+			"[Edit: fix.go]",
 		},
 		{
 			"run_command",
@@ -1138,6 +1143,11 @@ func TestFormatGeminiToolCall(t *testing.T) {
 			"execute_command",
 			`{"name":"execute_command","args":{"command":"ls -la"},"displayName":"Exec"}`,
 			"[Bash]\n$ ls -la",
+		},
+		{
+			"run_shell_command",
+			`{"name":"run_shell_command","args":{"command":"make build"},"displayName":"Shell"}`,
+			"[Bash]\n$ make build",
 		},
 		{
 			"list_directory",
@@ -1153,6 +1163,16 @@ func TestFormatGeminiToolCall(t *testing.T) {
 			"grep with pattern",
 			`{"name":"grep","args":{"pattern":"func main"},"displayName":"Grep"}`,
 			"[Grep: func main]",
+		},
+		{
+			"grep_search with query",
+			`{"name":"grep_search","args":{"query":"TODO"},"displayName":"GrepSearch"}`,
+			"[Grep: TODO]",
+		},
+		{
+			"glob",
+			`{"name":"glob","args":{"pattern":"**/*.go"},"displayName":"Glob"}`,
+			"[Glob: **/*.go]",
 		},
 		{
 			"unknown tool with displayName",
