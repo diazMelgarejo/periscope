@@ -16,6 +16,7 @@ import type { ListSessionsParams } from "../api/client.js";
 vi.mock("../api/client.js", () => ({
   listSessions: vi.fn(),
   getProjects: vi.fn(),
+  getAgents: vi.fn(),
 }));
 
 function mockListSessions(
@@ -653,16 +654,170 @@ describe("SessionsStore", () => {
       expect(sessions.projects[0]!.name).toBe("proj");
     });
 
-    it("should propagate rejection to all concurrent callers", async () => {
+    it("should resolve without throwing when API rejects", async () => {
       vi.mocked(api.getProjects).mockRejectedValueOnce(
         new Error("network"),
       );
 
-      const p1 = sessions.loadProjects();
-      const p2 = sessions.loadProjects();
+      await expect(
+        sessions.loadProjects(),
+      ).resolves.toBeUndefined();
+      // Projects stay at default (empty).
+      expect(sessions.projects).toHaveLength(0);
+    });
 
-      await expect(p1).rejects.toThrow("network");
-      await expect(p2).rejects.toThrow("network");
+    it("should allow retry after a failed load", async () => {
+      vi.mocked(api.getProjects).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await sessions.loadProjects();
+
+      // Second attempt should succeed.
+      mockGetProjects();
+      await sessions.loadProjects();
+      expect(sessions.projects).toHaveLength(1);
+    });
+  });
+
+  describe("non-throwing background loads", () => {
+    it("load preserves previous sessions on failure", async () => {
+      const existing = [makeSession({ id: "s1" })];
+      sessions.sessions = existing;
+      sessions.total = 1;
+
+      vi.mocked(api.listSessions).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await sessions.load();
+
+      expect(sessions.loading).toBe(false);
+      expect(sessions.sessions).toHaveLength(1);
+      expect(sessions.sessions[0]!.id).toBe("s1");
+      expect(sessions.total).toBe(1);
+    });
+
+    it("initFromParams + load preserves sessions on failure", async () => {
+      const existing = [makeSession({ id: "s1" })];
+      sessions.sessions = existing;
+      sessions.total = 1;
+
+      vi.mocked(api.listSessions).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      sessions.initFromParams({ project: "other" });
+      await sessions.load();
+
+      expect(sessions.loading).toBe(false);
+      expect(sessions.sessions).toHaveLength(1);
+      expect(sessions.sessions[0]!.id).toBe("s1");
+      expect(sessions.total).toBe(1);
+    });
+
+    it("filter change preserves sessions on failure", async () => {
+      const existing = [makeSession({ id: "s1" })];
+      sessions.sessions = existing;
+      sessions.total = 1;
+
+      vi.mocked(api.listSessions).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      sessions.setAgentFilter("claude");
+      await vi.waitFor(() => {
+        expect(sessions.loading).toBe(false);
+      });
+
+      expect(sessions.sessions).toHaveLength(1);
+      expect(sessions.sessions[0]!.id).toBe("s1");
+      expect(sessions.total).toBe(1);
+    });
+
+    it("loadProjects resolves when API rejects", async () => {
+      vi.mocked(api.getProjects).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await expect(
+        sessions.loadProjects(),
+      ).resolves.toBeUndefined();
+      expect(sessions.projects).toHaveLength(0);
+    });
+
+    it("loadAgents resolves when API rejects", async () => {
+      vi.mocked(api.getAgents).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await expect(
+        sessions.loadAgents(),
+      ).resolves.toBeUndefined();
+      expect(sessions.agents).toHaveLength(0);
+    });
+  });
+
+  describe("invalidateFilterCaches version guard", () => {
+    beforeEach(() => {
+      // Both loadProjects and loadAgents fire inside
+      // invalidateFilterCaches, so supply defaults for the
+      // API the test isn't explicitly controlling.
+      vi.mocked(api.getProjects).mockResolvedValue({
+        projects: [],
+      });
+      vi.mocked(api.getAgents).mockResolvedValue({
+        agents: [],
+      });
+    });
+
+    it("discards stale projects response after invalidation", async () => {
+      let resolveStale!: (v: { projects: { name: string; session_count: number }[] }) => void;
+      const stalePromise = new Promise<{ projects: { name: string; session_count: number }[] }>(
+        (r) => { resolveStale = r; },
+      );
+      vi.mocked(api.getProjects)
+        .mockReturnValueOnce(stalePromise)
+        .mockResolvedValueOnce({
+          projects: [{ name: "fresh-proj", session_count: 5 }],
+        });
+
+      // Start first load (will hang on stalePromise).
+      sessions.loadProjects();
+
+      // Invalidate before stale resolves — bumps version,
+      // clears promise, and starts a fresh load.
+      sessions.invalidateFilterCaches();
+
+      // Now resolve the stale request.
+      resolveStale({
+        projects: [{ name: "stale-proj", session_count: 1 }],
+      });
+      await vi.waitFor(() => {
+        expect(sessions.projects).toHaveLength(1);
+      });
+
+      // Fresh response should win.
+      expect(sessions.projects[0]!.name).toBe("fresh-proj");
+    });
+
+    it("discards stale agents response after invalidation", async () => {
+      type AgentsRes = { agents: { name: string; session_count: number }[] };
+      let resolveStale!: (v: AgentsRes) => void;
+      const stalePromise = new Promise<AgentsRes>(
+        (r) => { resolveStale = r; },
+      );
+      vi.mocked(api.getAgents)
+        .mockReturnValueOnce(stalePromise)
+        .mockResolvedValueOnce({
+          agents: [{ name: "fresh-agent", session_count: 3 }],
+        });
+
+      sessions.loadAgents();
+      sessions.invalidateFilterCaches();
+
+      resolveStale({
+        agents: [{ name: "stale-agent", session_count: 1 }],
+      });
+      await vi.waitFor(() => {
+        expect(sessions.agents).toHaveLength(1);
+      });
+
+      expect(sessions.agents[0]!.name).toBe("fresh-agent");
     });
   });
 });

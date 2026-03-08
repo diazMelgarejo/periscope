@@ -52,11 +52,16 @@ class SessionsStore {
   loading: boolean = $state(false);
   filters: Filters = $state(defaultFilters());
 
+  /** Set before router.navigate() to survive initFromParams() reset. */
+  pendingNavTarget: string | null = null;
+
   private loadVersion: number = 0;
   private projectsLoaded: boolean = false;
   private projectsPromise: Promise<void> | null = null;
+  private projectsVersion: number = 0;
   private agentsLoaded: boolean = false;
   private agentsPromise: Promise<void> | null = null;
+  private agentsVersion: number = 0;
 
   get activeSession(): Session | undefined {
     return this.sessions.find((s) => s.id === this.activeSessionId);
@@ -135,13 +140,22 @@ class SessionsStore {
         ? minUserMsgs
         : 0,
     };
-    this.activeSessionId = null;
-    this.resetPagination();
+    if (this.pendingNavTarget) {
+      this.activeSessionId = this.pendingNavTarget;
+      this.pendingNavTarget = null;
+    } else {
+      this.activeSessionId = null;
+    }
   }
 
   async load() {
     const version = ++this.loadVersion;
     this.loading = true;
+    const prev = {
+      sessions: this.sessions,
+      nextCursor: this.nextCursor,
+      total: this.total,
+    };
     this.resetPagination();
     try {
       let cursor: string | undefined = undefined;
@@ -175,6 +189,14 @@ class SessionsStore {
           this.total = loaded.length;
           break;
         }
+      }
+    } catch {
+      // Restore previous state so a transient failure
+      // doesn't wipe the visible session list.
+      if (this.loadVersion === version) {
+        this.sessions = prev.sessions;
+        this.nextCursor = prev.nextCursor;
+        this.total = prev.total;
       }
     } finally {
       if (this.loadVersion === version) {
@@ -231,13 +253,20 @@ class SessionsStore {
   async loadProjects() {
     if (this.projectsLoaded) return;
     if (this.projectsPromise) return this.projectsPromise;
+    const ver = this.projectsVersion;
     this.projectsPromise = (async () => {
       try {
         const res = await api.getProjects();
-        this.projects = res.projects;
-        this.projectsLoaded = true;
+        if (ver === this.projectsVersion) {
+          this.projects = res.projects;
+          this.projectsLoaded = true;
+        }
+      } catch {
+        // Non-fatal; projects list stays stale.
       } finally {
-        this.projectsPromise = null;
+        if (ver === this.projectsVersion) {
+          this.projectsPromise = null;
+        }
       }
     })();
     return this.projectsPromise;
@@ -246,13 +275,20 @@ class SessionsStore {
   async loadAgents() {
     if (this.agentsLoaded) return;
     if (this.agentsPromise) return this.agentsPromise;
+    const ver = this.agentsVersion;
     this.agentsPromise = (async () => {
       try {
         const res = await api.getAgents();
-        this.agents = res.agents;
-        this.agentsLoaded = true;
+        if (ver === this.agentsVersion) {
+          this.agents = res.agents;
+          this.agentsLoaded = true;
+        }
+      } catch {
+        // Non-fatal; agents list stays stale.
       } finally {
-        this.agentsPromise = null;
+        if (ver === this.agentsVersion) {
+          this.agentsPromise = null;
+        }
       }
     })();
     return this.agentsPromise;
@@ -291,7 +327,6 @@ class SessionsStore {
   setProjectFilter(project: string) {
     this.filters = { ...defaultFilters(), project, agent: this.filters.agent };
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
@@ -302,21 +337,18 @@ class SessionsStore {
       this.filters.agent = agent;
     }
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
   setRecentlyActiveFilter(active: boolean) {
     this.filters.recentlyActive = active;
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
   setMinUserMessagesFilter(n: number) {
     this.filters.minUserMessages = n;
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
@@ -326,7 +358,6 @@ class SessionsStore {
       this.filters.project = "";
     }
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
@@ -347,8 +378,73 @@ class SessionsStore {
     const project = this.filters.project;
     this.filters = { ...defaultFilters(), project };
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
+  }
+
+  /** Recently deleted session IDs for undo toast. */
+  recentlyDeleted: { id: string; timer: ReturnType<typeof setTimeout> }[] =
+    $state([]);
+
+  async deleteSession(id: string) {
+    await api.deleteSession(id);
+    const before = this.sessions.length;
+    this.sessions = this.sessions.filter((s) => s.id !== id);
+    const removed = before - this.sessions.length;
+    if (removed > 0) {
+      this.total = Math.max(0, this.total - removed);
+    }
+    if (this.activeSessionId === id) {
+      this.activeSessionId = null;
+    }
+    const timer = setTimeout(() => {
+      this.recentlyDeleted = this.recentlyDeleted.filter(
+        (d) => d.id !== id,
+      );
+    }, 10_000);
+    this.recentlyDeleted = [...this.recentlyDeleted, { id, timer }];
+    this.invalidateFilterCaches();
+  }
+
+  async restoreSession(id: string) {
+    await api.restoreSession(id);
+    this.clearRecentlyDeleted(id);
+    this.invalidateFilterCaches();
+    await this.load();
+  }
+
+  invalidateFilterCaches() {
+    this.projectsVersion++;
+    this.projectsLoaded = false;
+    this.projectsPromise = null;
+    this.agentsVersion++;
+    this.agentsLoaded = false;
+    this.agentsPromise = null;
+    this.loadProjects();
+    this.loadAgents();
+  }
+
+  /** Remove one or all entries from the undo toast list. */
+  clearRecentlyDeleted(id?: string) {
+    if (id) {
+      this.recentlyDeleted = this.recentlyDeleted.filter((d) => {
+        if (d.id === id) {
+          clearTimeout(d.timer);
+          return false;
+        }
+        return true;
+      });
+    } else {
+      for (const d of this.recentlyDeleted) clearTimeout(d.timer);
+      this.recentlyDeleted = [];
+    }
+  }
+
+  async renameSession(id: string, displayName: string | null) {
+    const updated = await api.renameSession(id, displayName);
+    const idx = this.sessions.findIndex((s) => s.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = { ...this.sessions[idx]!, ...updated };
+    }
   }
 }
 
