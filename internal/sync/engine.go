@@ -128,9 +128,9 @@ func (e *Engine) SyncPaths(paths []string) {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 
-	results := e.startWorkers(files)
+	results := e.startWorkers(context.Background(), files)
 	stats := e.collectAndBatch(
-		results, len(files), nil,
+		context.Background(), results, len(files), nil,
 	)
 	e.persistSkipCache()
 
@@ -551,7 +551,7 @@ const resyncTempSuffix = "-resync"
 // handle. This avoids the per-row trigger overhead of bulk
 // deleting hundreds of thousands of messages in place.
 func (e *Engine) ResyncAll(
-	onProgress ProgressFunc,
+	ctx context.Context, onProgress ProgressFunc,
 ) SyncStats {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
@@ -565,8 +565,9 @@ func (e *Engine) ResyncAll(
 	// OpenCode) so OpenCode-only datasets don't trigger the
 	// guard. Fail closed: if we can't query, assume old DB
 	// has file-backed data worth protecting.
-	ctx := context.Background()
-	oldFileSessions, err := origDB.FileBackedSessionCount(ctx)
+	oldFileSessions, err := origDB.FileBackedSessionCount(
+		context.Background(),
+	)
 	if err != nil {
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
@@ -616,11 +617,12 @@ func (e *Engine) ResyncAll(
 
 	// 3. Point engine at newDB and sync into it.
 	e.db = newDB
-	stats := e.syncAllLocked(onProgress)
+	stats := e.syncAllLocked(ctx, onProgress)
 	e.db = origDB // restore immediately
 
 	// Abort swap when the fresh DB would be worse than the
 	// original:
+	// - sync was cancelled (partial rebuild)
 	// - nothing synced at all (empty discovery, or all skipped)
 	//   when old DB had data
 	// - more files failed than succeeded (permission errors,
@@ -630,7 +632,8 @@ func (e *Engine) ResyncAll(
 	emptyDiscovery := stats.filesDiscovered == 0 &&
 		stats.filesOK == 0 &&
 		oldFileSessions > 0
-	abortSwap := emptyDiscovery ||
+	abortSwap := stats.Aborted ||
+		emptyDiscovery ||
 		(stats.Synced == 0 && stats.TotalSessions > 0) ||
 		(stats.Failed > 0 && stats.Failed > stats.filesOK)
 	if abortSwap {
@@ -801,15 +804,21 @@ func removeWAL(path string) {
 }
 
 // SyncAll discovers and syncs all session files from all agents.
-func (e *Engine) SyncAll(onProgress ProgressFunc) SyncStats {
+func (e *Engine) SyncAll(
+	ctx context.Context, onProgress ProgressFunc,
+) SyncStats {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
-	return e.syncAllLocked(onProgress)
+	return e.syncAllLocked(ctx, onProgress)
 }
 
 func (e *Engine) syncAllLocked(
-	onProgress ProgressFunc,
+	ctx context.Context, onProgress ProgressFunc,
 ) SyncStats {
+	if ctx.Err() != nil {
+		return SyncStats{Aborted: true}
+	}
+
 	t0 := time.Now()
 
 	var all []parser.DiscoveredFile
@@ -852,9 +861,9 @@ func (e *Engine) syncAllLocked(
 	}
 
 	tWorkers := time.Now()
-	results := e.startWorkers(all)
+	results := e.startWorkers(ctx, all)
 	stats := e.collectAndBatch(
-		results, len(all), onProgress,
+		ctx, results, len(all), onProgress,
 	)
 	if verbose {
 		log.Printf(
@@ -864,18 +873,40 @@ func (e *Engine) syncAllLocked(
 		)
 	}
 
+	// If cancelled (either collectAndBatch set Aborted, or
+	// context was cancelled after the loop with no file-backed
+	// sessions), return partial stats without running further
+	// phases or mutating state. Don't update lastSync or
+	// lastSyncStats so the UI still reflects the last
+	// completed sync.
+	if stats.Aborted || ctx.Err() != nil {
+		stats.Aborted = true
+		return stats
+	}
+
 	// Sync OpenCode sessions (DB-backed, not file-based).
 	// Uses full replace because OpenCode messages can change
 	// in place (streaming updates, tool result pairing).
 	tOC := time.Now()
-	ocPending := e.syncOpenCode()
+	ocPending := e.syncOpenCode(ctx)
 	if len(ocPending) > 0 {
 		stats.TotalSessions += len(ocPending)
-		stats.RecordSynced(len(ocPending))
 		tWrite := time.Now()
+		var ocWritten int
 		for _, pw := range ocPending {
-			e.writeSessionFull(pw)
+			if ctx.Err() != nil {
+				break
+			}
+			switch err := e.writeSessionFull(pw); {
+			case err == nil:
+				ocWritten++
+			case errors.Is(err, db.ErrSessionExcluded):
+				// Intentional skip, not a failure.
+			default:
+				stats.RecordFailed()
+			}
 		}
+		stats.RecordSynced(ocWritten)
 		if verbose {
 			log.Printf(
 				"opencode write: %d sessions in %s",
@@ -889,6 +920,11 @@ func (e *Engine) syncAllLocked(
 			"opencode sync: %s",
 			time.Since(tOC).Round(time.Millisecond),
 		)
+	}
+
+	if ctx.Err() != nil {
+		stats.Aborted = true
+		return stats
 	}
 
 	tPersist := time.Now()
@@ -911,19 +947,28 @@ func (e *Engine) syncAllLocked(
 // syncOpenCode syncs sessions from OpenCode SQLite databases.
 // Uses per-session time_updated to detect changes, so only
 // modified sessions are fully parsed. Returns pending writes.
-func (e *Engine) syncOpenCode() []pendingWrite {
+func (e *Engine) syncOpenCode(
+	ctx context.Context,
+) []pendingWrite {
 	var allPending []pendingWrite
 	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
+		if ctx.Err() != nil {
+			break
+		}
 		if dir == "" {
 			continue
 		}
-		allPending = append(allPending, e.syncOneOpenCode(dir)...)
+		allPending = append(
+			allPending, e.syncOneOpenCode(ctx, dir)...,
+		)
 	}
 	return allPending
 }
 
 // syncOneOpenCode handles a single OpenCode directory.
-func (e *Engine) syncOneOpenCode(dir string) []pendingWrite {
+func (e *Engine) syncOneOpenCode(
+	ctx context.Context, dir string,
+) []pendingWrite {
 	dbPath := filepath.Join(dir, "opencode.db")
 
 	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
@@ -950,6 +995,9 @@ func (e *Engine) syncOneOpenCode(dir string) []pendingWrite {
 
 	var pending []pendingWrite
 	for _, sid := range changed {
+		if ctx.Err() != nil {
+			break
+		}
 		sess, msgs, err := parser.ParseOpenCodeSession(
 			dbPath, sid, e.machine,
 		)
@@ -972,8 +1020,11 @@ func (e *Engine) syncOneOpenCode(dir string) []pendingWrite {
 }
 
 // startWorkers fans out file processing across a worker pool
-// and returns a channel of results.
+// and returns a channel of results. When ctx is cancelled,
+// workers skip remaining jobs with a context error instead
+// of parsing files.
 func (e *Engine) startWorkers(
+	ctx context.Context,
 	files []parser.DiscoveredFile,
 ) <-chan syncJob {
 	workers := min(max(runtime.NumCPU(), 2), maxWorkers)
@@ -984,6 +1035,15 @@ func (e *Engine) startWorkers(
 	for range workers {
 		go func() {
 			for file := range jobs {
+				if ctx.Err() != nil {
+					results <- syncJob{
+						processResult: processResult{
+							err: ctx.Err(),
+						},
+						path: file.Path,
+					}
+					continue
+				}
 				results <- syncJob{
 					processResult: e.processFile(file),
 					path:          file.Path,
@@ -1001,7 +1061,10 @@ func (e *Engine) startWorkers(
 
 // collectAndBatch drains the results channel, batches
 // successful parses, and writes them to the database.
+// When ctx is cancelled, it stops processing new results
+// and returns partial stats.
 func (e *Engine) collectAndBatch(
+	ctx context.Context,
 	results <-chan syncJob, total int,
 	onProgress ProgressFunc,
 ) SyncStats {
@@ -1016,10 +1079,25 @@ func (e *Engine) collectAndBatch(
 
 	var pending []pendingWrite
 
-	for range total {
-		r := <-results
+	for i := range total {
+		var r syncJob
+		select {
+		case <-ctx.Done():
+			stats.Aborted = true
+			drainResults(results, total-i)
+			goto flush
+		case r = <-results:
+		}
 
 		if r.err != nil {
+			// Workers emit ctx.Err() for files skipped
+			// after cancellation — treat the same as the
+			// ctx.Done() branch above.
+			if ctx.Err() != nil {
+				stats.Aborted = true
+				drainResults(results, total-i-1)
+				goto flush
+			}
 			stats.RecordFailed()
 			if r.mtime != 0 {
 				e.cacheSkip(r.path, r.mtime)
@@ -1078,6 +1156,7 @@ func (e *Engine) collectAndBatch(
 		}
 	}
 
+flush:
 	if len(pending) > 0 {
 		stats.RecordSynced(len(pending))
 		progress.MessagesIndexed += countMessages(pending)
@@ -1089,6 +1168,14 @@ func (e *Engine) collectAndBatch(
 		onProgress(progress)
 	}
 	return stats
+}
+
+// drainResults consumes remaining items from the results
+// channel so that worker goroutines can exit and be collected.
+func drainResults(results <-chan syncJob, remaining int) {
+	for range remaining {
+		<-results
+	}
 }
 
 // incrementalUpdate holds the delta produced by an
@@ -1885,7 +1972,10 @@ func (e *Engine) writeMessages(
 // delete+reinsert of its messages. Used by explicit
 // single-session re-syncs where existing content may have
 // changed (not just appended).
-func (e *Engine) writeSessionFull(pw pendingWrite) {
+// writeSessionFull returns nil on success,
+// db.ErrSessionExcluded for intentional skips, or
+// another error for real failures.
+func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	msgs := toDBMessages(pw, e.blockedResultCategories)
 	s := toDBSession(pw)
 	s.MessageCount, s.UserMessageCount =
@@ -1895,10 +1985,10 @@ func (e *Engine) writeSessionFull(pw pendingWrite) {
 			if pw.sess.File.Path != "" {
 				e.cacheSkip(pw.sess.File.Path, pw.sess.File.Mtime)
 			}
-		} else {
-			log.Printf("upsert session %s: %v", s.ID, err)
+			return db.ErrSessionExcluded
 		}
-		return
+		log.Printf("upsert session %s: %v", s.ID, err)
+		return err
 	}
 	if err := e.db.ReplaceSessionMessages(
 		pw.sess.ID, msgs,
@@ -1907,7 +1997,9 @@ func (e *Engine) writeSessionFull(pw pendingWrite) {
 			"replace messages for %s: %v",
 			pw.sess.ID, err,
 		)
+		return err
 	}
+	return nil
 }
 
 // toDBSession converts a pendingWrite to a db.Session.
@@ -2111,9 +2203,12 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 	}
 
 	for _, pr := range res.results {
-		e.writeSessionFull(
+		if err := e.writeSessionFull(
 			pendingWrite{sess: pr.Session, msgs: pr.Messages},
-		)
+		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+			return fmt.Errorf("write session %s: %w",
+				pr.Session.ID, err)
+		}
 	}
 	return nil
 }
@@ -2164,9 +2259,12 @@ func (e *Engine) syncSingleOpenCode(
 		if sess == nil {
 			continue
 		}
-		e.writeSessionFull(
+		if err := e.writeSessionFull(
 			pendingWrite{sess: *sess, msgs: msgs},
-		)
+		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+			return fmt.Errorf("write session %s: %w",
+				sess.ID, err)
+		}
 		return nil
 	}
 
