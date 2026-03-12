@@ -128,6 +128,12 @@ func setupWithServerOpts(
 		if r.Host == "example.com" || r.Host == "" {
 			r.Host = defaultHost
 		}
+		// httptest.NewRequest sets RemoteAddr to 192.0.2.1:1234
+		// (a non-routable test IP). Override to loopback so that
+		// auth middleware treats test requests as local.
+		if r.RemoteAddr == "192.0.2.1:1234" {
+			r.RemoteAddr = "127.0.0.1:1234"
+		}
 		// Auto-set Origin for mutating requests so tests
 		// don't need to set it manually on every inline
 		// httptest.NewRequest.
@@ -1431,6 +1437,7 @@ func TestHostHeaderAllowsLegitimate(t *testing.T) {
 			http.MethodGet, "/api/v1/stats", nil,
 		)
 		req.Host = host
+		req.RemoteAddr = "127.0.0.1:1234"
 		w := httptest.NewRecorder()
 		te.srv.Handler().ServeHTTP(w, req)
 		if w.Code == http.StatusForbidden {
@@ -1444,6 +1451,10 @@ func TestHostHeaderAllowsConfiguredPublicOriginHost(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 	req.Host = "viewer.example.test:8004"
+	// In the managed Caddy flow, the backend only accepts loopback
+	// connections. Set RemoteAddr to loopback so authMiddleware
+	// passes the request through to the host-check layer.
+	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	te.srv.Handler().ServeHTTP(w, req)
 	assertStatus(t, w, http.StatusOK)
@@ -1454,6 +1465,9 @@ func TestHostHeaderPublicOriginsDoNotExpandTrustedHosts(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 	req.Host = "viewer.example.test:8004"
+	// Use loopback RemoteAddr so authMiddleware passes through and
+	// the 403 comes from hostCheckMiddleware, not auth.
+	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	te.srv.Handler().ServeHTTP(w, req)
 	assertStatus(t, w, http.StatusForbidden)
@@ -1507,6 +1521,7 @@ func TestHostHeaderBindAllPort80AllowsPortlessLoopback(t *testing.T) {
 					http.MethodGet, "/api/v1/stats", nil,
 				)
 				req.Host = host
+				req.RemoteAddr = "127.0.0.1:1234"
 				w := httptest.NewRecorder()
 				te.srv.Handler().ServeHTTP(w, req)
 				assertStatus(t, w, http.StatusOK)
@@ -1585,10 +1600,15 @@ func TestHostHeaderBindAllPort80AllowsPortlessLANIP(t *testing.T) {
 			te := setup(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
+				// LAN access now requires remote_access + auth token.
+				c.RemoteAccess = true
+				c.AuthToken = "test-token"
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 			req.Host = host
+			req.RemoteAddr = lanIP + ":1234"
+			req.Header.Set("Authorization", "Bearer test-token")
 			w := httptest.NewRecorder()
 			te.srv.Handler().ServeHTTP(w, req)
 			assertStatus(t, w, http.StatusOK)
@@ -1697,10 +1717,15 @@ func TestHostHeaderBindAllAllowsLANIP(t *testing.T) {
 		t.Run(bindHost, func(t *testing.T) {
 			te := setup(t, func(c *config.Config) {
 				c.Host = bindHost
+				// LAN access now requires remote_access + auth token.
+				c.RemoteAccess = true
+				c.AuthToken = "test-token"
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 			req.Host = host
+			req.RemoteAddr = lanIP + ":1234"
+			req.Header.Set("Authorization", "Bearer test-token")
 			w := httptest.NewRecorder()
 			te.srv.Handler().ServeHTTP(w, req)
 			assertStatus(t, w, http.StatusOK)
@@ -1830,6 +1855,84 @@ func TestCORSAllowMethods(t *testing.T) {
 				methods, want,
 			)
 		}
+	}
+}
+
+func TestAuthErrorIncludesCORSHeaders(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.Host = "0.0.0.0"
+		c.RemoteAccess = true
+		c.AuthToken = "secret-token"
+	})
+
+	// Request with wrong token from a cross-origin remote client.
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/stats", nil,
+	)
+	req.Header.Set("Origin", "http://192.168.1.50:8080")
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	req.RemoteAddr = "192.168.1.50:9999"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusUnauthorized)
+
+	cors := w.Header().Get("Access-Control-Allow-Origin")
+	if cors != "http://192.168.1.50:8080" {
+		t.Fatalf(
+			"expected CORS Allow-Origin on auth error, got %q",
+			cors,
+		)
+	}
+}
+
+func TestAuthErrorNoCORSWithoutOrigin(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.Host = "0.0.0.0"
+		c.RemoteAccess = true
+		c.AuthToken = "secret-token"
+	})
+
+	// Request without Origin header should not get CORS headers.
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/stats", nil,
+	)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	req.RemoteAddr = "192.168.1.50:9999"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusUnauthorized)
+
+	cors := w.Header().Get("Access-Control-Allow-Origin")
+	if cors != "" {
+		t.Fatalf(
+			"expected no CORS header without Origin, got %q",
+			cors,
+		)
+	}
+}
+
+func TestForbiddenNoCORSWhenRemoteDisabled(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.Host = "0.0.0.0"
+		// remote_access is false — non-loopback requests are
+		// rejected with 403 and no CORS headers.
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/stats", nil,
+	)
+	req.Header.Set("Origin", "http://192.168.1.50:8080")
+	req.RemoteAddr = "192.168.1.50:9999"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusForbidden)
+
+	cors := w.Header().Get("Access-Control-Allow-Origin")
+	if cors != "" {
+		t.Fatalf(
+			"expected no CORS on 403 when remote disabled, got %q",
+			cors,
+		)
 	}
 }
 
