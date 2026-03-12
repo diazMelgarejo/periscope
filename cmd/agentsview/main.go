@@ -9,10 +9,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -34,8 +32,6 @@ const (
 	periodicSyncInterval  = 15 * time.Minute
 	unwatchedPollInterval = 2 * time.Minute
 	watcherDebounce       = 500 * time.Millisecond
-	browserPollInterval   = 100 * time.Millisecond
-	browserPollAttempts   = 60
 )
 
 func main() {
@@ -94,7 +90,6 @@ Server flags:
   -tls-cert string    TLS certificate path for managed Caddy HTTPS mode
   -tls-key string     TLS key path for managed Caddy HTTPS mode
   -allowed-subnet str Client CIDR allowed to connect to the managed proxy
-  -no-browser         Don't open browser on startup
 
 Sync flags:
   -full              Force a full resync regardless of data version
@@ -190,6 +185,11 @@ func runServe(args []string) {
 	// Remove stale temp DB from a prior crashed resync.
 	cleanResyncTemp(cfg.DBPath)
 
+	ctx, stop := signal.NotifyContext(
+		context.Background(), os.Interrupt, syscall.SIGTERM,
+	)
+	defer stop()
+
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		Machine:                 "local",
@@ -197,9 +197,12 @@ func runServe(args []string) {
 	})
 
 	if database.NeedsResync() {
-		runInitialResync(engine)
+		runInitialResync(ctx, engine)
 	} else {
-		runInitialSync(engine)
+		runInitialSync(ctx, engine)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 
 	stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
@@ -257,12 +260,8 @@ func runServe(args []string) {
 			BuildDate: buildDate,
 		}),
 		server.WithDataDir(cfg.DataDir),
+		server.WithBaseContext(ctx),
 	)
-
-	ctx, stop := signal.NotifyContext(
-		context.Background(), os.Interrupt, syscall.SIGTERM,
-	)
-	defer stop()
 
 	serveErrCh := make(chan error, 1)
 	go func() {
@@ -340,10 +339,6 @@ func runServe(args []string) {
 			version, localURL, publicURL,
 			time.Since(start).Round(time.Millisecond),
 		)
-	}
-
-	if !cfg.NoBrowser {
-		go openBrowser(publicURL)
 	}
 
 	var caddyErrCh <-chan error
@@ -480,26 +475,30 @@ func cleanResyncTemp(dbPath string) {
 	}
 }
 
-func runInitialSync(engine *sync.Engine) {
+func runInitialSync(
+	ctx context.Context, engine *sync.Engine,
+) {
 	fmt.Println("Running initial sync...")
 	t := time.Now()
-	stats := engine.SyncAll(printSyncProgress)
+	stats := engine.SyncAll(ctx, printSyncProgress)
 	printSyncSummary(stats, t)
 }
 
-func runInitialResync(engine *sync.Engine) {
+func runInitialResync(
+	ctx context.Context, engine *sync.Engine,
+) {
 	fmt.Println("Data version changed, running full resync...")
 	t := time.Now()
-	stats := engine.ResyncAll(printSyncProgress)
+	stats := engine.ResyncAll(ctx, printSyncProgress)
 	printSyncSummary(stats, t)
 
-	// If resync was aborted (swap didn't happen), fall back
-	// to a normal incremental sync so the server starts with
-	// current file data rather than a potentially stale DB.
-	if stats.Aborted {
+	// If resync was aborted due to data issues (not
+	// cancellation), fall back to an incremental sync so
+	// the server starts with current data.
+	if stats.Aborted && ctx.Err() == nil {
 		fmt.Println("Resync incomplete, running incremental sync...")
 		t = time.Now()
-		fallback := engine.SyncAll(printSyncProgress)
+		fallback := engine.SyncAll(ctx, printSyncProgress)
 		printSyncSummary(fallback, t)
 	}
 }
@@ -610,7 +609,7 @@ func startPeriodicSync(engine *sync.Engine) {
 	defer ticker.Stop()
 	for range ticker.C {
 		log.Println("Running scheduled sync...")
-		engine.SyncAll(nil)
+		engine.SyncAll(context.Background(), nil)
 	}
 }
 
@@ -619,31 +618,6 @@ func startUnwatchedPoll(engine *sync.Engine) {
 	defer ticker.Stop()
 	for range ticker.C {
 		log.Println("Polling unwatched directories...")
-		engine.SyncAll(nil)
+		engine.SyncAll(context.Background(), nil)
 	}
-}
-
-func openBrowser(url string) {
-	for range browserPollAttempts {
-		time.Sleep(browserPollInterval)
-		resp, err := http.Get(url + "/api/v1/stats")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-	}
-
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32",
-			"url.dll,FileProtocolHandler", url)
-	default:
-		return
-	}
-	_ = cmd.Run()
 }
