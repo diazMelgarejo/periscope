@@ -13,15 +13,18 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { applyHighlight } from "../../utils/highlight.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import type { Session } from "../../api/types.js";
 
   interface Props {
     message: Message;
     isSubagentContext?: boolean;
+    highlightQuery?: string;
+    isCurrentHighlight?: boolean;
   }
 
-  let { message, isSubagentContext = false }: Props = $props();
+  let { message, isSubagentContext = false, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
 
   let copied = $state(false);
 
@@ -99,9 +102,11 @@
     return "U";
   });
 
+  let hasSearchQuery = $derived(highlightQuery.trim() !== "");
+
   /** Whether the text (prose) segments for this role should render. */
   let showText = $derived(
-    ui.isBlockVisible(isUser ? "user" : "assistant"),
+    hasSearchQuery || ui.isBlockVisible(isUser ? "user" : "assistant"),
   );
 
   let accentColor = $derived(
@@ -202,20 +207,31 @@
   <div class="message-body">
     {#each segments as segment}
       {#if segment.type === "thinking"}
-        {#if ui.isBlockVisible("thinking")}
-          <ThinkingBlock content={segment.content} />
+        {#if hasSearchQuery || ui.isBlockVisible("thinking")}
+          <ThinkingBlock
+            content={segment.content}
+            highlightQuery={highlightQuery}
+            isCurrentHighlight={isCurrentHighlight}
+          />
         {/if}
       {:else if segment.type === "tool"}
-        {#if ui.isBlockVisible("tool")}
+        {#if hasSearchQuery || ui.isBlockVisible("tool")}
           <ToolBlock
             content={segment.content}
             label={segment.label}
             toolCall={segment.toolCall}
+            highlightQuery={highlightQuery}
+            isCurrentHighlight={isCurrentHighlight}
           />
         {/if}
       {:else if segment.type === "code"}
-        {#if ui.isBlockVisible("code")}
-          <CodeBlock content={segment.content} language={segment.label} />
+        {#if hasSearchQuery || ui.isBlockVisible("code")}
+          <CodeBlock
+            content={segment.content}
+            language={segment.label}
+            highlightQuery={highlightQuery}
+            isCurrentHighlight={isCurrentHighlight}
+          />
         {/if}
       {:else if segment.type === "skill"}
         {#if showText}
@@ -223,7 +239,14 @@
         {/if}
       {:else}
         {#if showText}
-          <div class="text-content markdown">
+          <div
+            class="text-content markdown"
+            use:applyHighlight={{
+              q: highlightQuery,
+              current: isCurrentHighlight,
+              content: segment.content,
+            }}
+          >
             {@html renderMarkdown(segment.content)}
           </div>
         {/if}
