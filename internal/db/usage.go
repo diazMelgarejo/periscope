@@ -140,7 +140,9 @@ func (db *DB) GetDailyUsage(
 SELECT
 	COALESCE(m.timestamp, s.started_at) as ts,
 	m.model,
-	m.token_usage
+	m.token_usage,
+	m.claude_message_id,
+	m.claude_request_id
 FROM messages m
 JOIN sessions s ON m.session_id = s.id
 WHERE m.token_usage != ''
@@ -168,6 +170,8 @@ WHERE m.token_usage != ''
 		query += " AND s.agent = ?"
 		args = append(args, f.Agent)
 	}
+	query += ` ORDER BY COALESCE(m.timestamp, s.started_at) ASC,
+		m.session_id ASC, m.ordinal ASC`
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -191,13 +195,20 @@ WHERE m.token_usage != ''
 
 	accum := make(map[dateModelKey]*modelAccum)
 
+	type dedupKey struct {
+		msgID, reqID string
+	}
+	seen := make(map[dedupKey]struct{})
+
 	var (
 		ts        string
 		model     string
 		tokenJSON string
+		msgID     string
+		reqID     string
 	)
 	for rows.Next() {
-		if err := rows.Scan(&ts, &model, &tokenJSON); err != nil {
+		if err := rows.Scan(&ts, &model, &tokenJSON, &msgID, &reqID); err != nil {
 			return DailyUsageResult{},
 				fmt.Errorf("scanning daily usage row: %w", err)
 		}
@@ -208,6 +219,17 @@ WHERE m.token_usage != ''
 		}
 		if f.To != "" && date > f.To {
 			continue
+		}
+
+		// Dedup AFTER the date filter so out-of-range rows
+		// (pulled in by the ±14h timezone padding) don't mark
+		// a key as seen and suppress the in-range duplicate.
+		if msgID != "" && reqID != "" {
+			key := dedupKey{msgID: msgID, reqID: reqID}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
 		}
 
 		// token_usage is written by our parsers and never by
