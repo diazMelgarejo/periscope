@@ -25,7 +25,7 @@ import (
 // formatting changes). Old databases with a lower user_version
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
-const dataVersion = 8
+const dataVersion = 9
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -306,6 +306,14 @@ func (db *DB) migrateColumns() error {
 		{
 			"messages", "has_output_tokens",
 			"ALTER TABLE messages ADD COLUMN has_output_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"messages", "claude_message_id",
+			"ALTER TABLE messages ADD COLUMN claude_message_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"messages", "claude_request_id",
+			"ALTER TABLE messages ADD COLUMN claude_request_id TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"sessions", "total_output_tokens",
