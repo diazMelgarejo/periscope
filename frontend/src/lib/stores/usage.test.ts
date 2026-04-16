@@ -67,6 +67,49 @@ async function loadStore() {
   return import("./usage.svelte.js");
 }
 
+describe("UsageStore filter persistence", () => {
+  beforeEach(() => {
+    installStorage();
+    localStorage.removeItem(TOGGLES_KEY);
+    localStorage.removeItem("usage-filters");
+    vi.clearAllMocks();
+  });
+
+  it("saves exclude filters to localStorage on fetchAll", async () => {
+    const { usage } = await loadStore();
+    usage.excludedProjects = "proj-a";
+    usage.excludedAgents = "claude";
+    await usage.fetchAll();
+
+    const saved = JSON.parse(
+      localStorage.getItem("usage-filters") ?? "{}",
+    );
+    expect(saved.excludedProjects).toBe("proj-a");
+    expect(saved.excludedAgents).toBe("claude");
+  });
+
+  it("restores exclude filters from localStorage on load", async () => {
+    localStorage.setItem(
+      "usage-filters",
+      JSON.stringify({
+        excludedProjects: "saved-proj",
+        excludedModels: "opus",
+      }),
+    );
+    const { usage } = await loadStore();
+    expect(usage.excludedProjects).toBe("saved-proj");
+    expect(usage.excludedModels).toBe("opus");
+    expect(usage.excludedAgents).toBe("");
+  });
+
+  it("falls back to defaults on corrupted localStorage", async () => {
+    localStorage.setItem("usage-filters", "not json");
+    const { usage } = await loadStore();
+    expect(usage.excludedProjects).toBe("");
+    expect(usage.excludedAgents).toBe("");
+  });
+});
+
 describe("UsageStore group-by linking", () => {
   beforeEach(() => {
     installStorage();

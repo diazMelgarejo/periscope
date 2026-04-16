@@ -86,6 +86,44 @@ function today(): string {
   return localDateStr(new Date());
 }
 
+const USAGE_FILTERS_KEY = "usage-filters";
+
+export interface UsageFilterState {
+  excludedProjects: string;
+  excludedAgents: string;
+  excludedModels: string;
+}
+
+function loadUsageFilters(): UsageFilterState {
+  try {
+    const raw = localStorage.getItem(USAGE_FILTERS_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw) as Partial<UsageFilterState>;
+      return {
+        excludedProjects: saved.excludedProjects ?? "",
+        excludedAgents: saved.excludedAgents ?? "",
+        excludedModels: saved.excludedModels ?? "",
+      };
+    }
+  } catch {
+    // Corrupted localStorage — fall back to defaults.
+  }
+  return { excludedProjects: "", excludedAgents: "", excludedModels: "" };
+}
+
+function saveUsageFilters(f: UsageFilterState): void {
+  try {
+    const data: UsageFilterState = {
+      excludedProjects: f.excludedProjects,
+      excludedAgents: f.excludedAgents,
+      excludedModels: f.excludedModels,
+    };
+    localStorage.setItem(USAGE_FILTERS_KEY, JSON.stringify(data));
+  } catch {
+    // localStorage full or unavailable — silently skip.
+  }
+}
+
 type Endpoint = "summary" | "topSessions";
 
 class UsageStore {
@@ -97,9 +135,17 @@ class UsageStore {
   // as checked; clicking one unchecks it (excludes it).
   // Sent directly to the backend as exclude_project / exclude_agent
   // / exclude_model query params (NOT IN filtering).
+  // Initialized from localStorage to survive tab switches.
   excludedProjects: string = $state("");
   excludedAgents: string = $state("");
   excludedModels: string = $state("");
+
+  constructor() {
+    const saved = loadUsageFilters();
+    this.excludedProjects = saved.excludedProjects;
+    this.excludedAgents = saved.excludedAgents;
+    this.excludedModels = saved.excludedModels;
+  }
 
   summary = $state<UsageSummaryResponse | null>(null);
   topSessions = $state<TopUsageSessionsResponse | null>(null);
@@ -264,6 +310,7 @@ class UsageStore {
   }
 
   async fetchAll() {
+    saveUsageFilters(this);
     await Promise.all([
       this.fetchSummary(),
       this.fetchTopSessions(),

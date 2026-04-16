@@ -18,7 +18,7 @@ export interface SessionGroup {
   endedAt: string | null;
 }
 
-interface Filters {
+export interface Filters {
   project: string;
   machine: string;
   agent: string;
@@ -52,6 +52,89 @@ function defaultFilters(): Filters {
   };
 }
 
+const SESSION_FILTERS_KEY = "session-filters";
+
+function loadSavedFilters(): Filters {
+  try {
+    const raw = localStorage.getItem(SESSION_FILTERS_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw) as Partial<Filters>;
+      return { ...defaultFilters(), ...saved };
+    }
+  } catch {
+    // Corrupted localStorage — fall back to defaults.
+  }
+  return defaultFilters();
+}
+
+function saveFilters(f: Filters): void {
+  try {
+    localStorage.setItem(SESSION_FILTERS_KEY, JSON.stringify(f));
+  } catch {
+    // localStorage full or unavailable — silently skip.
+  }
+}
+
+/** Serialize a Filters object into URL query params.
+ *  Default-valued fields are omitted so the URL stays clean. */
+export function filtersToParams(
+  f: Filters,
+): Record<string, string> {
+  const p: Record<string, string> = {};
+  if (f.project) p["project"] = f.project;
+  if (f.machine) p["machine"] = f.machine;
+  if (f.agent) p["agent"] = f.agent;
+  if (f.date) p["date"] = f.date;
+  if (f.dateFrom) p["date_from"] = f.dateFrom;
+  if (f.dateTo) p["date_to"] = f.dateTo;
+  if (f.recentlyActive) p["active_since"] = "true";
+  if (f.hideUnknownProject) p["exclude_project"] = "unknown";
+  if (f.minMessages > 0) p["min_messages"] = String(f.minMessages);
+  if (f.maxMessages > 0) p["max_messages"] = String(f.maxMessages);
+  if (f.minUserMessages > 0) {
+    p["min_user_messages"] = String(f.minUserMessages);
+  }
+  if (!f.includeOneShot) p["include_one_shot"] = "false";
+  if (f.includeAutomated) p["include_automated"] = "true";
+  return p;
+}
+
+/** Parse URL query params into a typed Filters object.
+ *  Unknown/missing params fall back to defaults. */
+export function parseFiltersFromParams(
+  params: Record<string, string>,
+): Filters {
+  const minMsgs = parseInt(params["min_messages"] ?? "", 10);
+  const maxMsgs = parseInt(params["max_messages"] ?? "", 10);
+  const minUserMsgs = parseInt(params["min_user_messages"] ?? "", 10);
+
+  const hideUnknown = params["exclude_project"] === "unknown";
+  let project = params["project"] ?? "";
+  if (hideUnknown && project === "unknown") {
+    project = "";
+  }
+
+  const oneShotParam = params["include_one_shot"];
+  const includeOneShot =
+    oneShotParam === undefined ? true : oneShotParam === "true";
+
+  return {
+    project,
+    machine: params["machine"] ?? "",
+    agent: params["agent"] ?? "",
+    date: params["date"] ?? "",
+    dateFrom: params["date_from"] ?? "",
+    dateTo: params["date_to"] ?? "",
+    recentlyActive: params["active_since"] === "true",
+    hideUnknownProject: hideUnknown,
+    minMessages: Number.isFinite(minMsgs) ? minMsgs : 0,
+    maxMessages: Number.isFinite(maxMsgs) ? maxMsgs : 0,
+    minUserMessages: Number.isFinite(minUserMsgs) ? minUserMsgs : 0,
+    includeOneShot,
+    includeAutomated: params["include_automated"] === "true",
+  };
+}
+
 class SessionsStore {
   sessions: Session[] = $state([]);
   projects: ProjectInfo[] = $state([]);
@@ -62,7 +145,7 @@ class SessionsStore {
   nextCursor: string | null = $state(null);
   total: number = $state(0);
   loading: boolean = $state(false);
-  filters: Filters = $state(defaultFilters());
+  filters: Filters = $state(loadSavedFilters());
 
   private loadVersion: number = 0;
   private projectsLoaded: boolean = false;
@@ -124,61 +207,19 @@ class SessionsStore {
   }
 
   initFromParams(params: Record<string, string>) {
-    const minMsgs = parseInt(
-      params["min_messages"] ?? "",
-      10,
-    );
-    const maxMsgs = parseInt(
-      params["max_messages"] ?? "",
-      10,
-    );
-    const minUserMsgs = parseInt(
-      params["min_user_messages"] ?? "",
-      10,
-    );
-
-    const hideUnknown =
-      params["exclude_project"] === "unknown";
-    let project = params["project"] ?? "";
-    if (hideUnknown && project === "unknown") {
-      project = "";
-    }
-
     const prevOneShot = this.filters.includeOneShot;
     const prevAutomated = this.filters.includeAutomated;
-    // Default is true (show single-turn); only false when
-    // explicitly set to "false" in URL params.
-    const oneShotParam = params["include_one_shot"];
-    const nextOneShot =
-      oneShotParam === undefined ? true : oneShotParam === "true";
-    const nextAutomated =
-      params["include_automated"] === "true";
-
-    this.filters = {
-      project,
-      machine: params["machine"] ?? "",
-      agent: params["agent"] ?? "",
-      date: params["date"] ?? "",
-      dateFrom: params["date_from"] ?? "",
-      dateTo: params["date_to"] ?? "",
-      recentlyActive: params["active_since"] === "true",
-      hideUnknownProject: hideUnknown,
-      minMessages: Number.isFinite(minMsgs) ? minMsgs : 0,
-      maxMessages: Number.isFinite(maxMsgs) ? maxMsgs : 0,
-      minUserMessages: Number.isFinite(minUserMsgs)
-        ? minUserMsgs
-        : 0,
-      includeOneShot: nextOneShot,
-      includeAutomated: nextAutomated,
-    };
-    if (prevOneShot !== nextOneShot ||
-        prevAutomated !== nextAutomated) {
+    const next = parseFiltersFromParams(params);
+    this.filters = next;
+    if (prevOneShot !== next.includeOneShot ||
+        prevAutomated !== next.includeAutomated) {
       this.invalidateFilterCaches();
     }
     this.setActiveSession(null);
   }
 
   async load() {
+    saveFilters(this.filters);
     const version = ++this.loadVersion;
     this.loading = true;
     // Preserve old data during reload — clearing eagerly

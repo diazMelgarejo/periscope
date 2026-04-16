@@ -21,7 +21,7 @@
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
   import SettingsPage from "./lib/components/settings/SettingsPage.svelte";
-  import { sessions } from "./lib/stores/sessions.svelte.js";
+  import { sessions, filtersToParams } from "./lib/stores/sessions.svelte.js";
   import { messages } from "./lib/stores/messages.svelte.js";
   import { sync } from "./lib/stores/sync.svelte.js";
   import { ui } from "./lib/stores/ui.svelte.js";
@@ -204,16 +204,27 @@
     messageListRef?.scrollToOrdinal(next.ordinals[0]!);
   }
 
-  // React to route changes: initialize session filters from URL params.
-  // Only track route and params — NOT sessionId. When the URL sync
-  // effect deselects a session (changing sessionId), we must not
-  // re-run initFromParams or it will reset filters the user just set.
+  /** True when URL params contain session filter keys (deep-link). */
+  const SESSION_FILTER_KEYS = new Set([
+    "project", "machine", "agent", "date", "date_from", "date_to",
+    "active_since", "exclude_project", "min_messages", "max_messages",
+    "min_user_messages", "include_one_shot", "include_automated",
+  ]);
+  function hasFilterParams(params: Record<string, string>): boolean {
+    return Object.keys(params).some((k) => SESSION_FILTER_KEYS.has(k));
+  }
+
+  // React to route changes: reload sessions and apply URL params.
+  // Only apply URL deep-link params (initFromParams) when the URL
+  // actually contains filter keys — a bare /sessions preserves the
+  // current store state (restored from localStorage).
+  // Only track route and params — NOT sessionId.
   $effect(() => {
-    const _route = router.route;
+    const route = router.route;
     const params = router.params;
     untrack(() => {
       const sid = router.sessionId;
-      if (!sid) {
+      if (!sid && route === "sessions" && hasFilterParams(params)) {
         sessions.initFromParams(params);
       }
       sessions.load();
@@ -264,26 +275,6 @@
     });
   });
 
-  // Build URL params from current session filters.
-  function buildFilterParams(): Record<string, string> {
-    const f = sessions.filters;
-    const p: Record<string, string> = {};
-    if (f.project) p.project = f.project;
-    if (f.machine) p.machine = f.machine;
-    if (f.agent) p.agent = f.agent;
-    if (f.date) p.date = f.date;
-    if (f.dateFrom) p.date_from = f.dateFrom;
-    if (f.dateTo) p.date_to = f.dateTo;
-    if (f.recentlyActive) p.active_since = "true";
-    if (f.hideUnknownProject) p.exclude_project = "unknown";
-    if (f.minMessages > 0) p.min_messages = String(f.minMessages);
-    if (f.maxMessages > 0) p.max_messages = String(f.maxMessages);
-    if (f.minUserMessages > 0) p.min_user_messages = String(f.minUserMessages);
-    if (!f.includeOneShot) p.include_one_shot = "false";
-    if (f.includeAutomated) p.include_automated = "true";
-    return p;
-  }
-
   // Sync active session to URL.
   $effect(() => {
     const activeId = sessions.activeSessionId;
@@ -294,8 +285,36 @@
       if (activeId) {
         router.navigateToSession(activeId);
       } else {
-        router.navigateFromSession(buildFilterParams());
+        router.navigateFromSession(filtersToParams(sessions.filters));
       }
+    });
+  });
+
+  // Compare only filter keys so sticky params (e.g. desktop)
+  // don't cause spurious replaceParams calls.
+  function filterParamsEqual(
+    a: Record<string, string>,
+    b: Record<string, string>,
+  ): boolean {
+    for (const k of SESSION_FILTER_KEYS) {
+      if ((a[k] ?? "") !== (b[k] ?? "")) return false;
+    }
+    return true;
+  }
+
+  // URL write-back: keep query string in sync with filter state
+  // when on /sessions with no session selected, so users can
+  // share/bookmark the view and the URL reflects what's shown.
+  // Tracks route so a tab switch back to /sessions also syncs
+  // the URL with localStorage-restored filters.
+  $effect(() => {
+    const route = router.route;
+    const newParams = filtersToParams(sessions.filters);
+    untrack(() => {
+      if (route !== "sessions") return;
+      if (router.sessionId) return;
+      if (filterParamsEqual(router.params, newParams)) return;
+      router.replaceParams(newParams);
     });
   });
 
