@@ -131,21 +131,13 @@ func runServe(cfg config.Config) {
 	// background LiteLLM refresh follows immediately.
 	seedPricing(database)
 
-	// Auto-bind to 0.0.0.0 when remote access is enabled so the
-	// server is reachable from the network. Only override if the
-	// user hasn't explicitly set --host via the CLI flag.
-	if cfg.RemoteAccess && !cfg.HostExplicit && cfg.Host == "127.0.0.1" {
-		cfg.Host = "0.0.0.0"
-	}
-
-	// When remote access is enabled, ensure an auth token exists so
-	// the API is never exposed on the network without authentication.
-	if cfg.RemoteAccess {
+	// When auth is required, ensure a token exists.
+	if cfg.RequireAuth {
 		if err := cfg.EnsureAuthToken(); err != nil {
 			log.Fatalf("Failed to generate auth token: %v", err)
 		}
 		if cfg.AuthToken != "" {
-			fmt.Printf("Remote access enabled. Auth token: %s\n", cfg.AuthToken)
+			fmt.Printf("Auth enabled. Token: %s\n", cfg.AuthToken)
 		}
 	}
 
