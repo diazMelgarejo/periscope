@@ -8,10 +8,26 @@ import {
 import {
   createSessionsStore,
   buildSessionGroups,
+  parseFiltersFromParams,
+  filtersToParams,
 } from "./sessions.svelte.js";
+import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
 import * as api from "../api/client.js";
 import type { ListSessionsParams } from "../api/client.js";
+
+// Install a minimal localStorage mock for the test environment.
+const storageData = new Map<string, string>();
+Object.defineProperty(globalThis, "localStorage", {
+  value: {
+    getItem: (key: string) => storageData.get(key) ?? null,
+    setItem: (key: string, value: string) => { storageData.set(key, value); },
+    removeItem: (key: string) => { storageData.delete(key); },
+    clear: () => { storageData.clear(); },
+  },
+  configurable: true,
+  writable: true,
+});
 
 vi.mock("../api/client.js", () => ({
   listSessions: vi.fn(),
@@ -49,6 +65,7 @@ describe("SessionsStore", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    storageData.clear();
     mockListSessions();
     sessions = createSessionsStore();
   });
@@ -97,6 +114,165 @@ describe("SessionsStore", () => {
       expect(sessions.filters.date).toBe("");
       expect(sessions.filters.minMessages).toBe(0);
       expect(sessions.filters.maxMessages).toBe(0);
+    });
+  });
+
+  describe("localStorage persistence", () => {
+    it("should save filters to localStorage on load", async () => {
+      sessions.filters.project = "myproj";
+      sessions.filters.agent = "claude";
+      await sessions.load();
+
+      const saved = JSON.parse(
+        localStorage.getItem("session-filters") ?? "{}",
+      );
+      expect(saved.project).toBe("myproj");
+      expect(saved.agent).toBe("claude");
+    });
+
+    it("should restore filters from localStorage on create", async () => {
+      localStorage.setItem(
+        "session-filters",
+        JSON.stringify({ project: "saved-proj", agent: "codex" }),
+      );
+      const store = createSessionsStore();
+      expect(store.filters.project).toBe("saved-proj");
+      expect(store.filters.agent).toBe("codex");
+      // Defaults for fields not in localStorage
+      expect(store.filters.minMessages).toBe(0);
+      expect(store.filters.includeOneShot).toBe(true);
+    });
+
+    it("should fall back to defaults on corrupted localStorage", () => {
+      localStorage.setItem("session-filters", "not json");
+      const store = createSessionsStore();
+      expect(store.filters.project).toBe("");
+      expect(store.filters.includeOneShot).toBe(true);
+    });
+  });
+
+  describe("parseFiltersFromParams", () => {
+    it("should parse all known URL params", () => {
+      const f = parseFiltersFromParams({
+        project: "myproj",
+        machine: "host-a",
+        agent: "claude",
+        date: "2024-06-15",
+        date_from: "2024-06-01",
+        date_to: "2024-06-30",
+        active_since: "true",
+        exclude_project: "unknown",
+        min_messages: "5",
+        max_messages: "100",
+        min_user_messages: "3",
+        include_one_shot: "false",
+        include_automated: "true",
+      });
+      expect(f.project).toBe("myproj");
+      expect(f.machine).toBe("host-a");
+      expect(f.agent).toBe("claude");
+      expect(f.date).toBe("2024-06-15");
+      expect(f.dateFrom).toBe("2024-06-01");
+      expect(f.dateTo).toBe("2024-06-30");
+      expect(f.recentlyActive).toBe(true);
+      expect(f.hideUnknownProject).toBe(true);
+      expect(f.minMessages).toBe(5);
+      expect(f.maxMessages).toBe(100);
+      expect(f.minUserMessages).toBe(3);
+      expect(f.includeOneShot).toBe(false);
+      expect(f.includeAutomated).toBe(true);
+    });
+
+    it("should return defaults for empty params", () => {
+      const f = parseFiltersFromParams({});
+      expect(f.project).toBe("");
+      expect(f.agent).toBe("");
+      expect(f.minMessages).toBe(0);
+      expect(f.includeOneShot).toBe(true);
+      expect(f.includeAutomated).toBe(false);
+    });
+
+    it("should clear project=unknown when exclude_project=unknown", () => {
+      const f = parseFiltersFromParams({
+        project: "unknown",
+        exclude_project: "unknown",
+      });
+      expect(f.project).toBe("");
+      expect(f.hideUnknownProject).toBe(true);
+    });
+
+    it("should handle non-numeric min_messages", () => {
+      const f = parseFiltersFromParams({ min_messages: "abc" });
+      expect(f.minMessages).toBe(0);
+    });
+  });
+
+  describe("filtersToParams", () => {
+    it("should return empty params for default filters", () => {
+      const params = filtersToParams(parseFiltersFromParams({}));
+      expect(params).toEqual({});
+    });
+
+    it("should serialize all set filters", () => {
+      const f: Filters = {
+        project: "myproj",
+        machine: "host-a",
+        agent: "claude",
+        date: "2024-06-15",
+        dateFrom: "2024-06-01",
+        dateTo: "2024-06-30",
+        recentlyActive: true,
+        hideUnknownProject: true,
+        minMessages: 5,
+        maxMessages: 100,
+        minUserMessages: 3,
+        includeOneShot: false,
+        includeAutomated: true,
+      };
+      expect(filtersToParams(f)).toEqual({
+        project: "myproj",
+        machine: "host-a",
+        agent: "claude",
+        date: "2024-06-15",
+        date_from: "2024-06-01",
+        date_to: "2024-06-30",
+        active_since: "true",
+        exclude_project: "unknown",
+        min_messages: "5",
+        max_messages: "100",
+        min_user_messages: "3",
+        include_one_shot: "false",
+        include_automated: "true",
+      });
+    });
+
+    it("should round-trip through parseFiltersFromParams", () => {
+      const original: Filters = {
+        project: "myproj",
+        machine: "host-a",
+        agent: "claude",
+        date: "2024-06-15",
+        dateFrom: "2024-06-01",
+        dateTo: "2024-06-30",
+        recentlyActive: true,
+        hideUnknownProject: true,
+        minMessages: 5,
+        maxMessages: 100,
+        minUserMessages: 3,
+        includeOneShot: false,
+        includeAutomated: true,
+      };
+      const params = filtersToParams(original);
+      const parsed = parseFiltersFromParams(params);
+      expect(parsed).toEqual(original);
+    });
+
+    it("should round-trip default filters as empty", () => {
+      const defaults = parseFiltersFromParams({});
+      const params = filtersToParams(defaults);
+      const reparsed = parseFiltersFromParams(params);
+      expect(reparsed).toEqual(defaults);
+      expect(params).toEqual({});
     });
   });
 
