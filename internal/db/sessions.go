@@ -860,6 +860,57 @@ func (db *DB) FindSessionIDsByPartial(
 	return ids, rows.Err()
 }
 
+// FindSessionIDsByRawSuffix returns up to limit session IDs whose
+// stored id is either the exact raw input or the raw input
+// preceded by an agent prefix (e.g. "codex:<uuid>"). The suffix
+// comparison uses SUBSTR rather than LIKE so that SQL wildcard
+// characters ('_' and '%') present in session IDs (which permit
+// underscores) are compared literally instead of matching any
+// character. Results are sorted by most recently active first.
+// Excludes soft-deleted sessions.
+func (db *DB) FindSessionIDsByRawSuffix(
+	ctx context.Context, raw string, limit int,
+) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE (id = ?1
+		        OR SUBSTR(id, -(LENGTH(?1) + 1)) = ':' || ?1)
+		   AND deleted_at IS NULL
+		 ORDER BY (id = ?1) DESC,
+		          COALESCE(
+		              NULLIF(ended_at, ''),
+		              NULLIF(started_at, ''),
+		              created_at
+		          ) DESC
+		 LIMIT ?2`,
+		raw, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding sessions by raw suffix %q: %w",
+			raw, err,
+		)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(
+				"scanning session id: %w", err,
+			)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // GetSessionDataVersion returns the data_version for a session.
 // Returns 0 when the session does not exist.
 func (db *DB) GetSessionDataVersion(id string) int {
