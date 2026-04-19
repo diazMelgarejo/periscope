@@ -65,6 +65,7 @@
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
   import RecentEditsPage from "./lib/components/recentedits/RecentEditsPage.svelte";
   import SettingsPage from "./lib/components/settings/SettingsPage.svelte";
+  import ContextPage from "./lib/components/context/ContextPage.svelte";
   import { sessions, filtersToParams } from "./lib/stores/sessions.svelte.js";
   import { messages } from "./lib/stores/messages.svelte.js";
   import { sync } from "./lib/stores/sync.svelte.js";
@@ -474,6 +475,7 @@
   // hydration effect above so scroll intent is not re-applied
   // every time hydration state changes.
   $effect(() => {
+    const route = router.route;
     const sid = router.sessionId;
     const msgParam = router.params["msg"] ?? null;
     untrack(() => {
@@ -489,6 +491,22 @@
       }
     });
   });
+
+  function sessionTab(): "transcript" | "context" {
+    return router.params["tab"] === "context"
+      ? "context"
+      : "transcript";
+  }
+
+  function setSessionTab(tab: "transcript" | "context") {
+    const next = { ...router.params };
+    if (tab === "context") {
+      next["tab"] = "context";
+    } else {
+      delete next["tab"];
+    }
+    router.replaceParams(next);
+  }
 
   // Resolve msg=last once messages are loaded.
   $effect(() => {
@@ -520,6 +538,9 @@
           filterParams,
           router.params,
         );
+        if (router.params["tab"] === "context") {
+          nextParams["tab"] = "context";
+        }
         if (activeId === currentUrlSessionId) {
           if (
             lastDetailFilterParamsSignature !== null &&
@@ -686,6 +707,10 @@
   <div class="page-scroll settings-page-host">
     <SettingsPage />
   </div>
+{:else if router.route === "context" && router.sessionId}
+  <div class="page-scroll">
+    <ContextPage sessionId={router.sessionId} />
+  </div>
 {:else}
   <ThreeColumnLayout>
     {#snippet sidebar()}
@@ -699,7 +724,35 @@
           session={session}
           onBack={() => sessions.deselectSession()}
         />
-        <MessageList bind:this={messageListRef} />
+        <div class="session-tabs">
+          <button
+            class:active={sessionTab() === "transcript"}
+            onclick={() => setSessionTab("transcript")}
+          >
+            Transcript
+          </button>
+          <button
+            class:active={sessionTab() === "context"}
+            onclick={() => setSessionTab("context")}
+          >
+            Context
+          </button>
+          <button
+            class="open-standalone"
+            onclick={() => router.navigateToContext(sessions.activeSessionId!)}
+          >
+            Open Standalone
+          </button>
+        </div>
+        {#if sessionTab() === "context"}
+          <ContextPage
+            sessionId={sessions.activeSessionId}
+            embedded={true}
+            session={session}
+          />
+        {:else}
+          <MessageList bind:this={messageListRef} />
+        {/if}
       {:else}
         <AnalyticsPage />
       {/if}
@@ -785,6 +838,32 @@
   .settings-page-host {
     display: flex;
     overflow: hidden;
+  }
+
+  .session-tabs {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px 12px;
+  }
+
+  .session-tabs button {
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .session-tabs button.active {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--bg-surface) 82%, #0f766e 18%);
+  }
+
+  .session-tabs .open-standalone {
+    margin-left: auto;
   }
 
   /* kit-ui-check-ignore: undo toast carries an inline restore action; kit-ui FlashBanner only supports text+dismiss today, so replacing this would change the delete/undo workflow. */

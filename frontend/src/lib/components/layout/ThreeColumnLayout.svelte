@@ -306,7 +306,7 @@
     <nav class="mobile-nav">
       <button
         class="mobile-nav-btn"
-        class:active={router.route === "sessions"}
+        class:active={router.route === "sessions" || router.route === "context"}
         onclick={() => mobileNav("sessions")}
       >
         <LayoutGridIcon size="12" strokeWidth="2" aria-hidden="true" />

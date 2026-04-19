@@ -416,6 +416,18 @@ func (s *Server) routes() {
 	s.api = humago.New(s.mux, s.humaConfig())
 	s.registerTypedAPIRoutes()
 
+	// Periscope context-visualizer routes: not yet migrated to the typed
+	// huma route groups above (registerSessionRoutes and friends already
+	// cover every other manual route this fork previously registered here
+	// -- verified against internal/server/huma_routes_sessions.go before
+	// dropping the duplicates). These two are still fork-unique.
+	s.mux.Handle(
+		"GET /api/v1/sessions/{id}/context", s.withTimeout(s.handleGetSessionContext),
+	)
+	s.mux.Handle(
+		"GET /api/v1/sessions/{id}/context/timeline", s.withTimeout(s.handleGetSessionContextTimeline),
+	)
+
 	if s.pprofEnabled {
 		s.mux.HandleFunc("/debug/pprof/", httppprof.Index)
 		s.mux.HandleFunc("/debug/pprof/cmdline", httppprof.Cmdline)
