@@ -452,6 +452,12 @@ func (b *codexSessionBuilder) handleSubagentActivity(
 //	input_tokens - cached_input_tokens → input_tokens  (uncached)
 //	output_tokens                      → output_tokens
 //	cached_input_tokens                → cache_read_input_tokens
+//
+// Codex reports cached_input_tokens as a subset of input_tokens
+// rather than an additive input budget. Keep the cached value in
+// token_usage for cache/cost analysis; context_tokens is
+// reconstructed as uncached + cached, which is arithmetically the
+// provider-reported input_tokens total (no double count).
 func (b *codexSessionBuilder) applyCodexTokenUsage(
 	msg *ParsedMessage, raw string,
 ) {
