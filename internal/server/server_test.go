@@ -19,11 +19,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/dbtest"
 	"github.com/wesm/agentsview/internal/parser"
 	"github.com/wesm/agentsview/internal/server"
+	"github.com/wesm/agentsview/internal/service"
 	"github.com/wesm/agentsview/internal/sync"
 	"github.com/wesm/agentsview/internal/testjsonl"
 )
@@ -3027,6 +3031,31 @@ func TestGetMessages_Limits(t *testing.T) {
 	}
 }
 
+// TestGetMessages_InvalidDirection verifies that the HTTP
+// endpoint rejects direction values outside {asc, desc} with
+// 400 instead of silently coercing to asc. The CLI enforces the
+// same contract; both must agree.
+func TestGetMessages_InvalidDirection(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 1)
+
+	w := te.get(t, "/api/v1/sessions/s1/messages?direction=backwards")
+	assertStatus(t, w, http.StatusBadRequest)
+	assert.Contains(t, w.Body.String(), "direction",
+		"error body should mention 'direction'")
+}
+
+// TestHandleWatchSession_UnknownID_Returns404 verifies that the
+// SSE watch endpoint fails fast on an unknown session id so a
+// typo doesn't leave a heartbeat stream open indefinitely.
+func TestHandleWatchSession_UnknownID_Returns404(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/sessions/no-such-id/watch")
+	assertStatus(t, w, http.StatusNotFound)
+	assert.Contains(t, w.Body.String(), "no-such-id")
+}
+
 func TestGetVersion(t *testing.T) {
 	v := server.VersionInfo{
 		Version:   "v1.2.3",
@@ -3267,4 +3296,77 @@ func TestSessionWatch_AuthViaQueryTokenSucceeds(t *testing.T) {
 	if w.Code == http.StatusUnauthorized {
 		t.Fatalf("query-token auth failed on /watch: status %d", w.Code)
 	}
+}
+
+func TestHandleToolCalls_Basic(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "tc-1", "my-app", 2)
+	te.seedMessages(t, "tc-1", 2, func(i int, m *db.Message) {
+		if i == 1 {
+			m.Role = "assistant"
+			m.HasToolUse = true
+			m.ToolCalls = []db.ToolCall{
+				{
+					ToolName:  "Read",
+					Category:  "Read",
+					ToolUseID: "toolu_1",
+					InputJSON: `{"file_path":"/tmp/x"}`,
+				},
+				{
+					ToolName:  "Bash",
+					Category:  "Bash",
+					ToolUseID: "toolu_2",
+					InputJSON: `{"command":"ls"}`,
+				},
+			}
+		}
+	})
+
+	w := te.get(t, "/api/v1/sessions/tc-1/tool-calls")
+	assertStatus(t, w, http.StatusOK)
+
+	var body struct {
+		ToolCalls []service.ToolCall `json:"tool_calls"`
+		Count     int                `json:"count"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	require.Equal(t, 2, body.Count)
+	require.Len(t, body.ToolCalls, 2)
+	assert.Equal(t, "Read", body.ToolCalls[0].ToolName)
+	assert.Equal(t, "toolu_1", body.ToolCalls[0].ToolUseID)
+	assert.Equal(t, `{"file_path":"/tmp/x"}`, body.ToolCalls[0].InputJSON)
+	assert.Equal(t, "Bash", body.ToolCalls[1].ToolName)
+	assert.NotEmpty(t, body.ToolCalls[0].Timestamp)
+	assert.Equal(t, 1, body.ToolCalls[0].Ordinal)
+}
+
+func TestHandleSyncSession_MissingFields(t *testing.T) {
+	te := setup(t)
+	body := strings.NewReader(`{}`)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/sessions/sync", body)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestHandleSyncSession_BothFields(t *testing.T) {
+	te := setup(t)
+	body := strings.NewReader(
+		`{"path":"/tmp/a","id":"s-1"}`)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/sessions/sync", body)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestHandleSyncSession_InvalidJSON(t *testing.T) {
+	te := setup(t)
+	body := strings.NewReader(`not json`)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/sessions/sync", body)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusBadRequest)
 }
