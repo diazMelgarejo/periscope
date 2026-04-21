@@ -97,6 +97,13 @@ type Config struct {
 
 	ResultContentBlockedCategories []string `json:"result_content_blocked_categories,omitempty" toml:"result_content_blocked_categories"`
 
+	// EventsCoalesceInterval is the minimum wall-clock time between
+	// SSE data_changed broadcasts to connected clients. Emits that
+	// arrive within this window after a prior broadcast are coalesced
+	// into a single trailing broadcast, bounding dashboard refetch
+	// work during bursts of sync activity. Zero disables coalescing.
+	EventsCoalesceInterval time.Duration `json:"events_coalesce_interval,omitempty" toml:"events_coalesce_interval"`
+
 	// HostExplicit is true when the user passed --host on the CLI.
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
@@ -158,6 +165,7 @@ func Default() (Config, error) {
 		agentDirSource:                 agentDirSource,
 		WatchExcludePatterns:           []string{".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", ".next"},
 		ResultContentBlockedCategories: []string{"Read", "Glob"},
+		EventsCoalesceInterval:         10 * time.Second,
 	}, nil
 }
 
@@ -338,8 +346,10 @@ func (c *Config) loadFile() error {
 		RemoteAccess                   bool           `toml:"remote_access"`
 		DisableUpdateCheck             bool           `toml:"disable_update_check"`
 		PG                             PGConfig       `toml:"pg"`
+		EventsCoalesceInterval         time.Duration  `toml:"events_coalesce_interval"`
 	}
-	if _, err := toml.DecodeFile(path, &file); err != nil {
+	meta, err := toml.DecodeFile(path, &file)
+	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
 	if file.GithubToken != "" {
@@ -393,6 +403,12 @@ func (c *Config) loadFile() error {
 	}
 	if file.PG.ExcludeProjects != nil && c.PG.ExcludeProjects == nil {
 		c.PG.ExcludeProjects = file.PG.ExcludeProjects
+	}
+	// IsDefined distinguishes "unset" (leave default 10s) from an
+	// explicit "0s" (disable coalescing). Checking != 0 would silently
+	// ignore the latter.
+	if meta.IsDefined("events_coalesce_interval") {
+		c.EventsCoalesceInterval = file.EventsCoalesceInterval
 	}
 
 	// Parse config-file dir arrays for agents that have a
@@ -599,6 +615,10 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 		"require-auth", false,
 		"Require a bearer token for all API requests",
 	)
+	fs.Duration(
+		"events-coalesce-interval", 10*time.Second,
+		"Minimum interval between SSE data_changed broadcasts (0 disables coalescing)",
+	)
 }
 
 // RegisterServePFlags registers serve-command flags on fs.
@@ -659,6 +679,10 @@ func RegisterServePFlags(fs *pflag.FlagSet) {
 		"require-auth", false,
 		"Require a bearer token for all API requests",
 	)
+	fs.Duration(
+		"events-coalesce-interval", 10*time.Second,
+		"Minimum interval between SSE data_changed broadcasts (0 disables coalescing)",
+	)
 }
 
 // applyFlags copies explicitly-set flags from fs into cfg.
@@ -714,6 +738,10 @@ func applyFlagValue(cfg *Config, name, value string) {
 		cfg.DisableUpdateCheck = value == "true"
 	case "require-auth":
 		cfg.RequireAuth = value == "true"
+	case "events-coalesce-interval":
+		if d, err := time.ParseDuration(value); err == nil {
+			cfg.EventsCoalesceInterval = d
+		}
 	}
 }
 
