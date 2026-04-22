@@ -26,12 +26,14 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 15: Codex parser now subtracts cached_input_tokens
-// from input_tokens before storing, matching the Anthropic
-// convention that downstream cost and usage queries assume.
-// Prior rows double-counted cached tokens at the full input
-// rate; re-parsing rewrites token_usage and context_tokens.
-const dataVersion = 15
+// Bumped to 16: Codex parser now filters synthetic
+// <turn_aborted> system messages from the user-message stream.
+// Prior rows had inflated user_message_count for review sessions
+// that were aborted mid-turn (e.g., roborev codex exec runs),
+// which prevented IsAutomatedSession from gating them on the
+// single-turn requirement. Re-parsing rewrites user_message_count
+// so the is_automated backfill can classify them correctly.
+const dataVersion = 16
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -572,7 +574,7 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 // Guarded by a stats marker so it only runs once per pattern
 // version.
 func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
-	const marker = "is_automated_backfill_v2"
+	const marker = IsAutomatedBackfillMarker
 	var done int
 	if err := w.QueryRow(
 		`SELECT count(*) FROM stats
@@ -664,7 +666,9 @@ func batchUpdateAutomated(
 			phs[j] = "?"
 		}
 		_, err := w.Exec(
-			"UPDATE sessions SET is_automated = ?"+
+			"UPDATE sessions"+
+				" SET is_automated = ?,"+
+				"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
 				" WHERE id IN ("+
 				strings.Join(phs, ",")+
 				")",

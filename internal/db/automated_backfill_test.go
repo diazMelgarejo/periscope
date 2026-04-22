@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestBackfillIsAutomatedBidirectional(t *testing.T) {
@@ -37,7 +38,8 @@ func TestBackfillIsAutomatedBidirectional(t *testing.T) {
 
 	// Clear the marker so the backfill will run.
 	_, err = d.getWriter().Exec(
-		"DELETE FROM stats WHERE key = 'is_automated_backfill_v2'",
+		"DELETE FROM stats WHERE key = ?",
+		IsAutomatedBackfillMarker,
 	)
 	requireNoError(t, err, "clear marker")
 
@@ -77,7 +79,8 @@ func TestBackfillIsAutomatedMarkerIdempotent(t *testing.T) {
 
 	// Clear the marker and run backfill.
 	_, err := d.getWriter().Exec(
-		"DELETE FROM stats WHERE key = 'is_automated_backfill_v2'",
+		"DELETE FROM stats WHERE key = ?",
+		IsAutomatedBackfillMarker,
 	)
 	requireNoError(t, err, "clear marker")
 
@@ -103,5 +106,159 @@ func TestBackfillIsAutomatedMarkerIdempotent(t *testing.T) {
 	requireNoError(t, err, "get review")
 	if review.IsAutomated {
 		t.Error("second run should be no-op; is_automated should still be 0")
+	}
+}
+
+// TestIncrementalUpdateReclassifiesOnPatternChange covers the
+// case where the classifier gained a new pattern after a row
+// was originally inserted. The row took the incremental path on
+// subsequent parses, so UpsertSession never ran again to set
+// is_automated. UpdateSessionIncremental must re-evaluate.
+func TestIncrementalUpdateReclassifiesOnPatternChange(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Simulate a pre-existing single-turn session whose
+	// first_message now matches a classifier pattern but whose
+	// stored is_automated is stale at 0.
+	insertSession(t, d, "changelog-inc", "proj", func(s *Session) {
+		fm := "You are generating a changelog for myrepo version 1.0.0."
+		s.FirstMessage = &fm
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET is_automated = 0 WHERE id = 'changelog-inc'",
+	)
+	requireNoError(t, err, "force stale is_automated=0")
+
+	// Incremental update with umc still <= 1.
+	err = d.UpdateSessionIncremental(
+		"changelog-inc", nil, 2, 1, 1024, 100, 0, 0, false, false,
+	)
+	requireNoError(t, err, "incremental update")
+
+	got, err := d.GetSession(ctx, "changelog-inc")
+	requireNoError(t, err, "get changelog-inc")
+	if !got.IsAutomated {
+		t.Error("is_automated should be re-set after incremental update")
+	}
+}
+
+// TestIncrementalUpdateClearsWhenCountGrows covers the existing
+// guard: when user_message_count grows past 1, is_automated must
+// be cleared even if first_message still matches a pattern.
+func TestIncrementalUpdateClearsWhenCountGrows(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "grew-past-one", "proj", func(s *Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	// After UpsertSession the row is correctly is_automated=1.
+	pre, err := d.GetSession(ctx, "grew-past-one")
+	requireNoError(t, err, "get pre")
+	if !pre.IsAutomated {
+		t.Fatalf("precondition: expected is_automated=1 after upsert")
+	}
+
+	// Incremental update pushes umc > 1 — must clear.
+	err = d.UpdateSessionIncremental(
+		"grew-past-one", nil, 7, 3, 2048, 200, 0, 0, false, false,
+	)
+	requireNoError(t, err, "incremental update")
+
+	got, err := d.GetSession(ctx, "grew-past-one")
+	requireNoError(t, err, "get grew-past-one")
+	if got.IsAutomated {
+		t.Error("is_automated should be cleared when umc grows > 1")
+	}
+}
+
+// TestIncrementalUpdateLeavesNonMatching covers a non-automated
+// single-turn session: re-evaluation must NOT set is_automated
+// when first_message doesn't match any pattern.
+func TestIncrementalUpdateLeavesNonMatching(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "normal-single", "proj", func(s *Session) {
+		fm := "Fix the login bug please"
+		s.FirstMessage = &fm
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	err := d.UpdateSessionIncremental(
+		"normal-single", nil, 2, 1, 1024, 100, 0, 0, false, false,
+	)
+	requireNoError(t, err, "incremental update")
+
+	got, err := d.GetSession(ctx, "normal-single")
+	requireNoError(t, err, "get normal-single")
+	if got.IsAutomated {
+		t.Error("is_automated should stay 0 for non-matching first_message")
+	}
+}
+
+func TestBackfillIsAutomatedBumpsLocalModifiedAt(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Seed a single-turn roborev session that the new classifier
+	// will flip to is_automated = 1.
+	insertSession(t, d, "to-flip", "proj", func(s *Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	// Force is_automated = 0 so the backfill has work to do.
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET is_automated = 0 WHERE id = 'to-flip'",
+	)
+	requireNoError(t, err, "force to-flip to 0")
+
+	// Snapshot local_modified_at before the backfill.
+	before, err := d.GetSessionFull(ctx, "to-flip")
+	requireNoError(t, err, "get to-flip before")
+	var beforeLM string
+	if before.LocalModifiedAt != nil {
+		beforeLM = *before.LocalModifiedAt
+	}
+
+	// SQLite's strftime('now') ticks at millisecond precision.
+	// Sleep a few ms so a re-set produces a strictly later value.
+	// (Mirrors internal/db/signals_test.go:164.)
+	time.Sleep(5 * time.Millisecond)
+
+	// Clear the marker so the backfill runs.
+	_, err = d.getWriter().Exec(
+		"DELETE FROM stats WHERE key = ?",
+		IsAutomatedBackfillMarker,
+	)
+	requireNoError(t, err, "clear marker")
+
+	d.mu.Lock()
+	err = d.backfillIsAutomatedLocked(d.getWriter())
+	d.mu.Unlock()
+	requireNoError(t, err, "backfill run")
+
+	after, err := d.GetSessionFull(ctx, "to-flip")
+	requireNoError(t, err, "get to-flip after")
+	if !after.IsAutomated {
+		t.Fatal("to-flip should be automated after backfill")
+	}
+	if after.LocalModifiedAt == nil || *after.LocalModifiedAt == "" {
+		t.Fatal("local_modified_at not set after backfill")
+	}
+	if *after.LocalModifiedAt <= beforeLM {
+		t.Errorf(
+			"local_modified_at not bumped: before=%q after=%q",
+			beforeLM, *after.LocalModifiedAt,
+		)
 	}
 }
