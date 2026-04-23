@@ -113,7 +113,14 @@ var Registry = []AgentDef{
 		ConfigKey:   "opencode_dirs",
 		DefaultDirs: []string{".local/share/opencode"},
 		IDPrefix:    "opencode:",
-		FileBased:   false,
+		WatchSubdirs: []string{
+			"storage/session",
+			"storage/message",
+			"storage/part",
+		},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverOpenCodeSessions,
+		FindSourceFunc: FindOpenCodeSourceFile,
 	},
 	{
 		Type:           AgentOpenHands,

@@ -22,8 +22,10 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
 	@mkdir -p internal/web/dist
-	@test -n "$$(ls internal/web/dist/ 2>/dev/null)" \
-		|| echo ok > internal/web/dist/stub.html
+	@test -f internal/web/dist/.keep \
+		|| printf '%s\n' \
+			'keep embed dir for generated frontend assets' \
+			> internal/web/dist/.keep
 
 # Build the binary (debug, with embedded frontend)
 build: frontend
@@ -56,6 +58,9 @@ frontend:
 	cd frontend && npm install && npm run build
 	rm -rf internal/web/dist
 	cp -r frontend/dist internal/web/dist
+	printf '%s\n' \
+		'keep embed dir for generated frontend assets' \
+		> internal/web/dist/.keep
 
 # Run Vite dev server (use alongside `make dev`)
 frontend-dev:
@@ -286,6 +291,10 @@ tidy:
 clean:
 	rm -f agentsview agentsv
 	rm -rf internal/web/dist dist/ tmp/
+	mkdir -p internal/web/dist
+	printf '%s\n' \
+		'keep embed dir for generated frontend assets' \
+		> internal/web/dist/.keep
 
 # Build release binary for current platform (CGO required for sqlite3)
 release: frontend

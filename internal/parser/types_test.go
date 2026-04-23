@@ -1,6 +1,9 @@
 package parser
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -394,6 +397,235 @@ func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
 				def.DisplayName, def.Type,
 			)
 		}
+	}
+}
+
+func TestOpenCodeRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentOpenCode)
+	if !ok {
+		t.Fatalf("AgentOpenCode missing from Registry")
+	}
+	if !def.FileBased {
+		t.Fatalf("OpenCode FileBased = false, want true")
+	}
+	if def.DiscoverFunc == nil {
+		t.Fatalf("OpenCode DiscoverFunc = nil")
+	}
+	if def.FindSourceFunc == nil {
+		t.Fatalf("OpenCode FindSourceFunc = nil")
+	}
+	if got, want := def.WatchSubdirs, []string{
+		"storage/session",
+		"storage/message",
+		"storage/part",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("OpenCode WatchSubdirs = %v, want %v", got, want)
+	}
+}
+
+func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "storage", "session", "global")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	dbPath := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := ResolveOpenCodeSource(root)
+	if got.Mode != OpenCodeSourceStorage {
+		t.Fatalf("Mode = %v, want %v", got.Mode, OpenCodeSourceStorage)
+	}
+	if got.SessionRoot != filepath.Join(root, "storage", "session") {
+		t.Fatalf("SessionRoot = %q", got.SessionRoot)
+	}
+}
+
+func TestResolveOpenCodeSourceFallsBackToSQLiteOnBrokenStoragePath(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	storagePath := filepath.Join(root, "storage")
+	if err := os.WriteFile(storagePath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write storage marker: %v", err)
+	}
+	dbPath := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := ResolveOpenCodeSource(root)
+	if got.Mode != OpenCodeSourceSQLite {
+		t.Fatalf("Mode = %v, want %v", got.Mode, OpenCodeSourceSQLite)
+	}
+	if got.DBPath != dbPath {
+		t.Fatalf("DBPath = %q, want %q", got.DBPath, dbPath)
+	}
+}
+
+func TestResolveOpenCodeSourceKeepsStorageAuthoritativeWhenUnreadable(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission semantics differ on Windows")
+	}
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "storage", "session", "global")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	storageRoot := filepath.Join(root, "storage")
+	if err := os.Chmod(storageRoot, 0o000); err != nil {
+		t.Fatalf("chmod storage root: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(storageRoot, 0o755)
+	}()
+	dbPath := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := ResolveOpenCodeSource(root)
+	if got.Mode != OpenCodeSourceStorage {
+		t.Fatalf("Mode = %v, want %v", got.Mode, OpenCodeSourceStorage)
+	}
+	if got.SessionRoot != filepath.Join(root, "storage", "session") {
+		t.Fatalf("SessionRoot = %q", got.SessionRoot)
+	}
+}
+
+func TestDiscoverOpenCodeSessions(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "storage", "session", "global")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "ses_test.json")
+	data := []byte(`{"id":"ses_test","directory":"/home/user/code/my-app"}`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	got := DiscoverOpenCodeSessions(root)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Path != path {
+		t.Fatalf("Path = %q, want %q", got[0].Path, path)
+	}
+	if got[0].Project != "my_app" {
+		t.Fatalf("Project = %q, want %q", got[0].Project, "my_app")
+	}
+	if got[0].Agent != AgentOpenCode {
+		t.Fatalf("Agent = %q, want %q", got[0].Agent, AgentOpenCode)
+	}
+}
+
+func TestDiscoverOpenCodeSessionsIgnoresNestedJSON(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "storage", "session", "global")
+	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "ses_test.json")
+	if err := os.WriteFile(path, []byte(`{"id":"ses_test"}`), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nested", "meta.json"), []byte(`{"id":"meta"}`), 0o644); err != nil {
+		t.Fatalf("write nested json: %v", err)
+	}
+
+	got := DiscoverOpenCodeSessions(root)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Path != path {
+		t.Fatalf("Path = %q, want %q", got[0].Path, path)
+	}
+}
+
+func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "storage", "session", "global", "ses_123.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"id":"ses_123"}`), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opencode.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := FindOpenCodeSourceFile(root, "ses_123")
+	if got != path {
+		t.Fatalf("FindOpenCodeSourceFile() = %q, want %q", got, path)
+	}
+}
+
+func TestResolveOpenCodeWatchRootsStorage(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(
+		filepath.Join(root, "storage", "session", "global"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+
+	got := ResolveOpenCodeWatchRoots(root)
+	want := []string{root}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
+	}
+}
+
+func TestResolveOpenCodeWatchRootsSQLite(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(root, "opencode.db"), []byte("x"), 0o644,
+	); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := ResolveOpenCodeWatchRoots(root)
+	want := []string{root}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
+	}
+}
+
+func TestResolveOpenCodeWatchRootsMissingRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	got := ResolveOpenCodeWatchRoots(root)
+	if got != nil {
+		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want nil", got)
+	}
+}
+
+func TestParseOpenCodeSQLiteVirtualPath(t *testing.T) {
+	dbPath := filepath.Join("/tmp", "opencode.db")
+	virtual := OpenCodeSQLiteVirtualPath(dbPath, "ses_123")
+	gotDB, gotSessionID, ok := ParseOpenCodeSQLiteVirtualPath(virtual)
+	if !ok {
+		t.Fatal("expected virtual path to parse")
+	}
+	if gotDB != dbPath || gotSessionID != "ses_123" {
+		t.Fatalf("ParseOpenCodeSQLiteVirtualPath() = (%q, %q), want (%q, %q)", gotDB, gotSessionID, dbPath, "ses_123")
+	}
+	hashDBPath := filepath.Join("/tmp", "opencode#dev", "opencode.db")
+	hashVirtual := OpenCodeSQLiteVirtualPath(hashDBPath, "ses_456")
+	gotDB, gotSessionID, ok = ParseOpenCodeSQLiteVirtualPath(hashVirtual)
+	if !ok {
+		t.Fatal("expected virtual path with # in db path to parse")
+	}
+	if gotDB != hashDBPath || gotSessionID != "ses_456" {
+		t.Fatalf("ParseOpenCodeSQLiteVirtualPath() with # in db path = (%q, %q), want (%q, %q)", gotDB, gotSessionID, hashDBPath, "ses_456")
+	}
+	if _, _, ok := ParseOpenCodeSQLiteVirtualPath("/tmp/project#dir/storage/session/global/ses_123.json"); ok {
+		t.Fatal("expected real storage path with # to be rejected")
 	}
 }
 

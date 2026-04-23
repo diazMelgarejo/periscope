@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -316,6 +318,20 @@ func (oc *openCodeTestDB) addMessage(
 	)
 }
 
+func (oc *openCodeTestDB) updateMessageData(
+	t *testing.T, id string, data map[string]any,
+) {
+	t.Helper()
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal message update: %v", err)
+	}
+	oc.mustExec(t, "update message data",
+		"UPDATE message SET data = ? WHERE id = ?",
+		string(raw), id,
+	)
+}
+
 func (oc *openCodeTestDB) addTextPart(
 	t *testing.T,
 	id, sessionID, messageID, content string,
@@ -407,4 +423,96 @@ func (oc *openCodeTestDB) replaceTextContent(
 		t, amID+"-p", sessionID, amID,
 		assistantContent, timeCreated+1,
 	)
+}
+
+type openCodeStorageFixture struct {
+	root string
+}
+
+func createOpenCodeStorageFixture(
+	t *testing.T, root string,
+) *openCodeStorageFixture {
+	t.Helper()
+	return &openCodeStorageFixture{root: root}
+}
+
+func (oc *openCodeStorageFixture) writeJSON(
+	t *testing.T, path string, data any,
+) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
+
+func (oc *openCodeStorageFixture) addSession(
+	t *testing.T,
+	projectID, sessionID, directory, title string,
+	timeCreated, timeUpdated int64,
+) string {
+	t.Helper()
+	return oc.writeJSON(t, filepath.Join(
+		oc.root, "storage", "session", projectID,
+		sessionID+".json",
+	), map[string]any{
+		"id":        sessionID,
+		"projectID": projectID,
+		"directory": directory,
+		"title":     title,
+		"time": map[string]any{
+			"created": timeCreated,
+			"updated": timeUpdated,
+		},
+	})
+}
+
+func (oc *openCodeStorageFixture) addMessage(
+	t *testing.T,
+	sessionID, messageID, role string,
+	timeCreated int64,
+	extra map[string]any,
+) string {
+	t.Helper()
+	data := map[string]any{
+		"id":        messageID,
+		"sessionID": sessionID,
+		"role":      role,
+		"time": map[string]any{
+			"created": timeCreated,
+		},
+	}
+	maps.Copy(data, extra)
+	return oc.writeJSON(t, filepath.Join(
+		oc.root, "storage", "message", sessionID,
+		messageID+".json",
+	), data)
+}
+
+func (oc *openCodeStorageFixture) addTextPart(
+	t *testing.T,
+	sessionID, messageID, partID, text string,
+	timeCreated int64,
+) string {
+	t.Helper()
+	return oc.writeJSON(t, filepath.Join(
+		oc.root, "storage", "part", messageID,
+		partID+".json",
+	), map[string]any{
+		"id":        partID,
+		"sessionID": sessionID,
+		"messageID": messageID,
+		"type":      "text",
+		"text":      text,
+		"time": map[string]any{
+			"created": timeCreated,
+		},
+	})
 }

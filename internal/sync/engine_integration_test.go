@@ -34,9 +34,11 @@ type testEnv struct {
 }
 
 type testEnvOpts struct {
-	claudeDirs []string
-	codexDirs  []string
-	cursorDirs []string
+	claudeDirs   []string
+	codexDirs    []string
+	cursorDirs   []string
+	opencodeDirs []string
+	emitter      sync.Emitter
 }
 
 type TestEnvOption func(*testEnvOpts)
@@ -59,6 +61,18 @@ func WithCursorDirs(dirs []string) TestEnvOption {
 	}
 }
 
+func WithOpenCodeDirs(dirs []string) TestEnvOption {
+	return func(o *testEnvOpts) {
+		o.opencodeDirs = dirs
+	}
+}
+
+func WithEmitter(em sync.Emitter) TestEnvOption {
+	return func(o *testEnvOpts) {
+		o.emitter = em
+	}
+}
+
 func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	t.Helper()
 	if testing.Short() {
@@ -71,12 +85,11 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	}
 
 	env := &testEnv{
-		geminiDir:   t.TempDir(),
-		opencodeDir: t.TempDir(),
-		iflowDir:    t.TempDir(),
-		ampDir:      t.TempDir(),
-		piDir:       t.TempDir(),
-		db:          dbtest.OpenTestDB(t),
+		geminiDir: t.TempDir(),
+		iflowDir:  t.TempDir(),
+		ampDir:    t.TempDir(),
+		piDir:     t.TempDir(),
+		db:        dbtest.OpenTestDB(t),
 	}
 
 	claudeDirs := options.claudeDirs
@@ -103,20 +116,48 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		env.cursorDir = cursorDirs[0]
 	}
 
+	opencodeDirs := options.opencodeDirs
+	if len(opencodeDirs) == 0 {
+		env.opencodeDir = t.TempDir()
+		opencodeDirs = []string{env.opencodeDir}
+	} else {
+		env.opencodeDir = opencodeDirs[0]
+	}
+
 	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude:   claudeDirs,
 			parser.AgentCodex:    codexDirs,
 			parser.AgentCursor:   cursorDirs,
 			parser.AgentGemini:   {env.geminiDir},
-			parser.AgentOpenCode: {env.opencodeDir},
+			parser.AgentOpenCode: opencodeDirs,
 			parser.AgentIflow:    {env.iflowDir},
 			parser.AgentAmp:      {env.ampDir},
 			parser.AgentPi:       {env.piDir},
 		},
 		Machine: "local",
+		Emitter: options.emitter,
 	})
 	return env
+}
+
+type fakeEmitter struct {
+	mu     gosync.Mutex
+	scopes []string
+}
+
+func (f *fakeEmitter) Emit(scope string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scopes = append(f.scopes, scope)
+}
+
+func (f *fakeEmitter) got() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.scopes))
+	copy(out, f.scopes)
+	return out
 }
 
 // writeSession creates a JSONL session file under baseDir at
@@ -1498,6 +1539,1560 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 	)
 }
 
+func TestSyncEngineOpenCodeStorageBulkSync(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-1",
+		"/home/user/code/myapp", "Storage Sync",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-storage-1", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-storage-1", "msg-u1", "part-u1",
+		"hello from storage", 1704067200000,
+	)
+	oc.addMessage(
+		t, "oc-storage-1", "msg-a1", "assistant",
+		1704067201000, map[string]any{
+			"modelID": "gpt-5.2-codex",
+		},
+	)
+	oc.addTextPart(
+		t, "oc-storage-1", "msg-a1", "part-a1",
+		"reply from storage", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	assertSessionState(t, env.db, "opencode:oc-storage-1",
+		func(sess *db.Session) {
+			if sess.Agent != "opencode" {
+				t.Errorf("agent = %q, want opencode",
+					sess.Agent)
+			}
+		},
+	)
+	if got := env.engine.FindSourceFile("opencode:oc-storage-1"); got != sessionPath {
+		t.Fatalf("FindSourceFile() = %q, want %q", got, sessionPath)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-1",
+		"hello from storage", "reply from storage",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeSQLiteFallback(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-sync-single"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	oc.replaceTextContent(
+		t, sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeSQLiteFallbackPreservesStorageArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-sqlite-single-preserve"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Archive",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"storage archive answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067205000,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello storage", "storage archive answer",
+	)
+}
+
+func TestSyncPathsOpenCodeSQLiteDBEvent(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-sync-paths"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	oc.replaceTextContent(
+		t, sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
+
+	env.engine.SyncPaths([]string{oc.path})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+	)
+}
+
+func TestSyncAllOpenCodeSQLiteFallbackPreservesStorageArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-sqlite-bulk-preserve"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Archive Bulk",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"storage archive answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067205000,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("stats.Failed = %d, want 0", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello storage", "storage archive answer",
+	)
+}
+
+func TestSyncPathsOpenCodeSQLiteDBEventIgnoresStaleSkipCache(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-sync-paths-skip-cache"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	info, err := os.Stat(oc.path)
+	if err != nil {
+		t.Fatalf("stat opencode db: %v", err)
+	}
+	cachedMtime := info.ModTime()
+	env.engine.InjectSkipCache(map[string]int64{
+		oc.path: cachedMtime.UnixNano(),
+	})
+
+	oc.replaceTextContent(
+		t, sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
+	if err := os.Chtimes(oc.path, cachedMtime, cachedMtime); err != nil {
+		t.Fatalf("restore db mtime: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{oc.path})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+	)
+}
+
+func TestSyncPathsOpenCodeSQLiteDBEventContinuesPastBadSession(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	goodSessionID := "oc-sqlite-watch-good"
+	badSessionID := "oc-sqlite-watch-bad"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, goodSessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "good-msg-u1", goodSessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "good-msg-a1", goodSessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "good-part-u1", goodSessionID, "good-msg-u1",
+		"good original question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "good-part-a1", goodSessionID, "good-msg-a1",
+		"good original answer", timeCreated+1,
+	)
+
+	oc.addSession(
+		t, badSessionID, "proj-1",
+		timeCreated+10, timeUpdated+10,
+	)
+	oc.addMessage(
+		t, "bad-msg-u1", badSessionID, "user", timeCreated+10,
+	)
+	oc.addTextPart(
+		t, "bad-part-u1", badSessionID, "bad-msg-u1",
+		"bad original question", timeCreated+10,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        2,
+		Skipped:       0,
+	})
+
+	oc.replaceTextContent(
+		t, goodSessionID,
+		"good updated question",
+		"good updated answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, goodSessionID, timeUpdated+1000)
+	oc.updateSessionTime(t, badSessionID, timeUpdated+2000)
+	oc.mustExec(
+		t, "corrupt bad session message time",
+		"UPDATE message SET time_created = ? WHERE id = ?",
+		"broken-time", "bad-msg-u1",
+	)
+
+	env.engine.SyncPaths([]string{oc.path})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+goodSessionID,
+		"good updated question",
+		"good updated answer",
+	)
+	assertMessageContent(
+		t, env.db, "opencode:"+badSessionID,
+		"bad original question",
+	)
+}
+
+func TestSyncAllOpenCodeSQLiteReparsesStaleDataVersion(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-stale-version"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	oc.updateMessageData(t, "msg-a1", map[string]any{
+		"role":    "assistant",
+		"modelID": "claude-3-7-sonnet",
+	})
+	if err := env.db.SetSessionDataVersion(
+		"opencode:"+sessionID, 0,
+	); err != nil {
+		t.Fatalf("SetSessionDataVersion: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Synced != 1 {
+		t.Fatalf("SyncAll synced = %d, want 1", stats.Synced)
+	}
+
+	msgs := fetchMessages(t, env.db, "opencode:"+sessionID)
+	if got := msgs[1].Model; got != "claude-3-7-sonnet" {
+		t.Fatalf("assistant model = %q, want claude-3-7-sonnet", got)
+	}
+}
+
+func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-retry",
+		"/home/user/code/myapp", "Retry Session",
+		1704067200000, 1704067205000,
+	)
+	messagePath := filepath.Join(
+		env.opencodeDir, "storage", "message",
+		"oc-storage-retry", "msg-u1.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(messagePath), 0o755); err != nil {
+		t.Fatalf("mkdir message dir: %v", err)
+	}
+	if err := os.WriteFile(
+		messagePath, []byte(`{"id":"msg-u1"`), 0o644,
+	); err != nil {
+		t.Fatalf("write invalid message: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+	if sess, err := env.db.GetSession(
+		context.Background(), "opencode:oc-storage-retry",
+	); err != nil {
+		t.Fatalf("GetSession: %v", err)
+	} else if sess != nil {
+		t.Fatalf("unexpected session after invalid child parse: %+v", sess)
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime().UnixNano()
+
+	oc.addMessage(
+		t, "oc-storage-retry", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-storage-retry", "msg-u1", "part-u1",
+		"hello after retry", 1704067200000,
+	)
+	if err := os.Chtimes(
+		sessionPath,
+		time.Unix(0, sessionMtime),
+		time.Unix(0, sessionMtime),
+	); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-retry",
+		"hello after retry",
+	)
+}
+
+func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-mtime",
+		"/home/user/code/myapp", "Mtime Session",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-storage-mtime", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-storage-mtime", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	_, initialMtime, ok := env.db.GetSessionFileInfo(
+		"opencode:oc-storage-mtime",
+	)
+	if !ok {
+		t.Fatal("expected initial session file_mtime")
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime().UnixNano()
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-storage-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(
+		sessionPath,
+		time.Unix(0, sessionMtime),
+		time.Unix(0, sessionMtime),
+	); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+	if _, parsedMsgs, err := parser.ParseOpenCodeFile(
+		sessionPath, "local",
+	); err != nil {
+		t.Fatalf("ParseOpenCodeFile after rewrite: %v", err)
+	} else if len(parsedMsgs) != 1 ||
+		parsedMsgs[0].Content != "updated reply" {
+		t.Fatalf(
+			"parsed messages after rewrite = %#v, want updated reply",
+			parsedMsgs,
+		)
+	}
+
+	env.engine.SyncPaths([]string{partPath})
+
+	_, updatedMtime, ok := env.db.GetSessionFileInfo(
+		"opencode:oc-storage-mtime",
+	)
+	if !ok {
+		t.Fatal("expected updated session file_mtime")
+	}
+	if updatedMtime <= initialMtime {
+		t.Fatalf(
+			"updated file_mtime = %d, want > %d",
+			updatedMtime, initialMtime,
+		)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-mtime",
+		"updated reply",
+	)
+}
+
+func TestSourceMtimeOpenCodeStorageIncludesChildFiles(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-source-mtime",
+		"/home/user/code/myapp", "Source Mtime",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-mtime", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-mtime", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-mtime")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime()
+	future := time.Now().Add(2 * time.Second)
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-source-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(partPath, future, future); err != nil {
+		t.Fatalf("chtimes part: %v", err)
+	}
+	if err := os.Chtimes(sessionPath, sessionMtime, sessionMtime); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-mtime")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
+func TestSourceMtimeOpenCodeStorageTracksChildRemoval(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove",
+		"/home/user/code/myapp", "Source Remove",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-remove", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-remove", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-remove")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	partDir := filepath.Dir(partPath)
+	if err := os.Remove(partPath); err != nil {
+		t.Fatalf("remove part: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(partDir, future, future); err != nil {
+		t.Fatalf("chtimes part dir: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-remove")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
+func TestSourceMtimeOpenCodeStorageTracksPartDirRemoval(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove-dir",
+		"/home/user/code/myapp", "Source Remove Dir",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-remove-dir", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-remove-dir", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-remove-dir")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.RemoveAll(filepath.Dir(partPath)); err != nil {
+		t.Fatalf("remove part dir: %v", err)
+	}
+	partRoot := filepath.Join(
+		env.opencodeDir, "storage", "part",
+	)
+	if err := os.Chtimes(partRoot, future, future); err != nil {
+		t.Fatalf("chtimes part root: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-remove-dir")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
+func TestSourceMtimeOpenCodeStorageTracksMessageDirRemoval(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove-message-dir",
+		"/home/user/code/myapp", "Source Remove Message Dir",
+		1704067200000, 1704067205000,
+	)
+	messagePath := oc.addMessage(
+		t, "oc-source-remove-message-dir", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-source-remove-message-dir", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime(
+		"opencode:oc-source-remove-message-dir",
+	)
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.RemoveAll(filepath.Dir(messagePath)); err != nil {
+		t.Fatalf("remove message dir: %v", err)
+	}
+	messageRoot := filepath.Join(
+		env.opencodeDir, "storage", "message",
+	)
+	if err := os.Chtimes(messageRoot, future, future); err != nil {
+		t.Fatalf("chtimes message root: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime(
+		"opencode:oc-source-remove-message-dir",
+	)
+	if updatedMtime <= initialMtime {
+		t.Fatalf(
+			"updated source mtime = %d, want > %d",
+			updatedMtime, initialMtime,
+		)
+	}
+}
+
+func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, "oc-source-sqlite", "proj-1",
+		1704067200000, 1704067205000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-sqlite")
+	if initialMtime != 1704067205000*1_000_000 {
+		t.Fatalf("initial source mtime = %d, want %d", initialMtime, 1704067205000*1_000_000)
+	}
+
+	oc.updateSessionTime(t, "oc-source-sqlite", 1704067210000)
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-sqlite")
+	if updatedMtime != 1704067210000*1_000_000 {
+		t.Fatalf("updated source mtime = %d, want %d", updatedMtime, 1704067210000*1_000_000)
+	}
+}
+
+func TestSyncAllSinceOpenCodeStorageRequiresSessionMtime(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-since-child",
+		"/home/user/code/myapp", "Since Child",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-since-child", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-since-child", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	cutoff := time.Now()
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime()
+	future := cutoff.Add(2 * time.Second)
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-since-child","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(partPath, future, future); err != nil {
+		t.Fatalf("chtimes part: %v", err)
+	}
+	if err := os.Chtimes(sessionPath, sessionMtime, sessionMtime); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	if stats.Synced != 0 {
+		t.Fatalf("SyncAllSince synced = %d, want 0", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-since-child",
+		"initial reply",
+	)
+
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("chtimes session path: %v", err)
+	}
+
+	stats = env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	if stats.Synced != 1 {
+		t.Fatalf("SyncAllSince synced = %d, want 1", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-since-child",
+		"updated reply",
+	)
+}
+
+func TestSyncAllOpenCodeStorageSkipsUnchangedSessions(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-skip-unchanged",
+		"/home/user/code/myapp", "Skip Unchanged",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-skip-unchanged", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-skip-unchanged", "msg-a1", "part-a1",
+		"stable reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Skipped != 1 || stats.Synced != 0 {
+		t.Fatalf("SyncAll stats = %+v, want 1 skipped and 0 synced", stats)
+	}
+}
+
+func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-missing-message",
+		"/home/user/code/myapp", "Missing Message",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-missing-message", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-missing-message", "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, "oc-missing-message", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-missing-message", "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-missing-message",
+		"question", "answer",
+	)
+}
+
+func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-storage-upgrade-legacy"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	sqlite.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	sqlite.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	sqlite.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"legacy sqlite question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"legacy sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Upgrade",
+		timeCreated, timeUpdated+1000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		timeCreated, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"legacy sqlite question", timeCreated,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"legacy sqlite question",
+		"legacy sqlite answer",
+	)
+}
+
+func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-missing-part",
+		"/home/user/code/myapp", "Missing Part",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-missing-part", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-missing-part", "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	oc.addMessage(
+		t, "oc-missing-part", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-missing-part", "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(filepath.Dir(partPath)); err != nil {
+		t.Fatalf("remove part dir: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("stats.Failed = %d, want 0", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-missing-part",
+		"question", "answer",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeStorageMissingMessagePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-single"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message Single",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeStoragePreservedUpdateDoesNotEmit(
+	t *testing.T,
+) {
+	em := &fakeEmitter{}
+	env := setupTestEnv(t, WithEmitter(em))
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-no-emit"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message No Emit",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	em.mu.Lock()
+	em.scopes = em.scopes[:0]
+	em.mu.Unlock()
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	if got := em.got(); len(got) != 0 {
+		t.Fatalf("expected no emissions for preserved update, got %v", got)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncPathsOpenCodeStorageMissingMessagePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-paths"
+	oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message Paths",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncPathsOpenCodeStoragePreservedUpdateDoesNotEmitOrCountSynced(
+	t *testing.T,
+) {
+	em := &fakeEmitter{}
+	env := setupTestEnv(t, WithEmitter(em))
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-paths-no-emit"
+	oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message Paths No Emit",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	em.mu.Lock()
+	em.scopes = em.scopes[:0]
+	em.mu.Unlock()
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	if got := em.got(); len(got) != 0 {
+		t.Fatalf("expected no emissions for preserved SyncPaths update, got %v", got)
+	}
+	stats := env.engine.LastSyncStats()
+	if stats.Synced != 0 {
+		t.Fatalf("LastSyncStats().Synced = %d, want 0", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncPathsOpenCodeStorageMissingPartDirPreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-part-paths"
+	oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Part Paths",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(filepath.Dir(partPath)); err != nil {
+		t.Fatalf("remove part dir: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeStorageMissingPartPreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-part-single"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Part Single",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	part1Path := oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"first part", 1704067201000,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a2",
+		"second part", 1704067201001,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(part1Path); err != nil {
+		t.Fatalf("remove part file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"first part\nsecond part",
+	)
+}
+
+func TestSyncAllOpenCodeStorageContentRewritePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-content-rewrite"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Content Rewrite",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"complete response", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	dbtest.WriteTestFile(t, partPath, []byte(
+		`{"id":"part-u1","sessionID":"`+sessionID+`","messageID":"msg-u1","type":"text","text":"cut","time":{"created":1704067200000}}`,
+	))
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"complete response",
+	)
+}
+
+func TestSyncAllOpenCodeStorageMissingStepFinishPreservesTokens(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-step-finish"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Step Finish",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, map[string]any{
+			"modelID": "gpt-5.2-codex",
+		},
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+	stepFinishPath := oc.writeJSON(t, filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-a1", "part-a2.json",
+	), map[string]any{
+		"id":        "part-a2",
+		"sessionID": sessionID,
+		"messageID": "msg-a1",
+		"type":      "step-finish",
+		"tokens": map[string]any{
+			"input":  300,
+			"output": 200,
+		},
+		"time": map[string]any{
+			"created": 1704067201001,
+		},
+	})
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(stepFinishPath); err != nil {
+		t.Fatalf("remove step-finish part: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "opencode:"+sessionID,
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full == nil {
+		t.Fatal("session missing after preserve")
+	}
+	if !full.HasTotalOutputTokens || full.TotalOutputTokens != 200 {
+		t.Fatalf(
+			"session output tokens = (%v, %d), want (true, 200)",
+			full.HasTotalOutputTokens, full.TotalOutputTokens,
+		)
+	}
+	if !full.HasPeakContextTokens || full.PeakContextTokens != 300 {
+		t.Fatalf(
+			"session context tokens = (%v, %d), want (true, 300)",
+			full.HasPeakContextTokens, full.PeakContextTokens,
+		)
+	}
+
+	msgs := fetchMessages(t, env.db, "opencode:"+sessionID)
+	if len(msgs) != 1 {
+		t.Fatalf("len(msgs) = %d, want 1", len(msgs))
+	}
+	if !msgs[0].HasOutputTokens || msgs[0].OutputTokens != 200 {
+		t.Fatalf(
+			"message output tokens = (%v, %d), want (true, 200)",
+			msgs[0].HasOutputTokens, msgs[0].OutputTokens,
+		)
+	}
+	if !msgs[0].HasContextTokens || msgs[0].ContextTokens != 300 {
+		t.Fatalf(
+			"message context tokens = (%v, %d), want (true, 300)",
+			msgs[0].HasContextTokens, msgs[0].ContextTokens,
+		)
+	}
+}
+
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
 // call data is fully replaced during OpenCode bulk sync, not
 // left stale from a previous sync.
@@ -2637,6 +4232,261 @@ func TestResyncAllOpenCodeOnly(t *testing.T) {
 	assertMessageContent(
 		t, env.db, agentviewID,
 		"hello opencode", "hi there",
+	)
+}
+
+func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
+	storageBase := t.TempDir()
+	storageRoot := filepath.Join(storageBase, "storage#root")
+	sqliteRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(
+		storageRoot, "storage", "session", "global",
+	), 0o755); err != nil {
+		t.Fatalf("mkdir storage root: %v", err)
+	}
+
+	env := setupTestEnv(
+		t, WithOpenCodeDirs([]string{storageRoot, sqliteRoot}),
+	)
+
+	oc := createOpenCodeDB(t, sqliteRoot)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-resync-sqlite-fallback"
+	var timeCreated int64 = 1704067200000
+	var timeUpdated int64 = 1704067205000
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello sqlite fallback", timeCreated,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+	agentviewID := "opencode:" + sessionID
+	assertSessionMessageCount(t, env.db, agentviewID, 1)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for mixed OpenCode roots: %s",
+				w,
+			)
+		}
+	}
+	if stats.Synced == 0 {
+		t.Fatal(
+			"expected SQLite fallback OpenCode session to be synced",
+		)
+	}
+
+	assertSessionMessageCount(t, env.db, agentviewID, 1)
+	assertMessageContent(
+		t, env.db, agentviewID,
+		"hello sqlite fallback",
+	)
+}
+
+func TestResyncAllOpenCodeStorageArchivePreservesStaleSQLiteFallback(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-storage-to-sqlite"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Then SQLite",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067209000,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for storage->sqlite fallback: %s",
+				w,
+			)
+		}
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello storage",
+	)
+}
+
+func TestResyncAllOpenCodeStorageArchiveAllowsNewerSQLiteFallback(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-storage-to-newer-sqlite"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Then Newer SQLite",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqliteUpdatedAt := time.Now().Add(2 * time.Second).UnixMilli()
+
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, sqliteUpdatedAt,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello newer sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for newer storage->sqlite fallback: %s",
+				w,
+			)
+		}
+	}
+	if stats.Synced == 0 {
+		t.Fatal("expected newer sqlite fallback to be synced")
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello newer sqlite fallback",
+	)
+}
+
+func TestResyncAllOpenCodeStorageMissingMessagePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-resync-missing-message"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Resync Missing Message",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for missing OpenCode message: %s",
+				w,
+			)
+		}
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
 	)
 }
 

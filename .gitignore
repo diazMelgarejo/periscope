@@ -13,7 +13,8 @@ test-results/
 frontend/playwright-report/
 
 # Embedded frontend build output
-internal/web/dist/
+internal/web/dist/*
+!internal/web/dist/.keep
 
 # Test/build artifacts
 /dist/
@@ -54,3 +55,4 @@ html/
 .superset/
 .github/hooks/
 .superpowers/
+.worktrees/
