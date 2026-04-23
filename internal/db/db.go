@@ -26,16 +26,25 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 16: Codex parser now filters synthetic
-// <turn_aborted> system messages from the user-message stream.
-// Prior rows had inflated user_message_count for review sessions
-// that were aborted mid-turn (e.g., roborev codex exec runs),
-// which prevented IsAutomatedSession from gating them on the
-// single-turn requirement. Re-parsing rewrites user_message_count
-// so the is_automated backfill can classify them correctly.
-const dataVersion = 16
+// Bumped to 17: Codex parser now filters <skill> template
+// injections from the user-message stream. Prior rows had
+// inflated user_message_count for sessions where the model
+// invoked a skill (Codex writes the skill template content as a
+// role=user JSONL entry), which prevented IsAutomatedSession
+// from gating them on the single-turn requirement. Re-parsing
+// rewrites user_message_count so the is_automated backfill can
+// classify them correctly.
+//
+// (16: same migration for <turn_aborted> system messages.)
+const dataVersion = 17
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
+
+// ClassifierHashKey is the shared SQLite stats / PG sync_metadata key
+// under which the current is_automated classifier hash is stored.
+// Exported so the postgres package and the classifier rebuild CLI
+// reference one definition instead of repeating the literal.
+const ClassifierHashKey = "is_automated_classifier_hash"
 
 //go:embed schema.sql
 var schemaSQL string
@@ -571,20 +580,22 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 // backfillIsAutomatedLocked recomputes is_automated for all
 // sessions, correcting both false negatives (new patterns) and
 // stale false positives (patterns tightened since last run).
-// Guarded by a stats marker so it only runs once per pattern
-// version.
+// Gated by a stored classifier hash so it only runs when the
+// classifier set (built-in patterns + user prefixes + algorithm
+// version) has changed since the last successful run.
 func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
-	const marker = IsAutomatedBackfillMarker
-	var done int
-	if err := w.QueryRow(
-		`SELECT count(*) FROM stats
-		 WHERE key = ? AND value != 0`, marker,
-	).Scan(&done); err != nil {
+	current := ClassifierHash()
+	var stored string
+	err := w.QueryRow(
+		`SELECT value FROM stats WHERE key = ?`,
+		ClassifierHashKey,
+	).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf(
-			"probing automated backfill marker: %w", err,
+			"probing classifier hash: %w", err,
 		)
 	}
-	if done > 0 {
+	if err == nil && stored == current {
 		return nil
 	}
 
@@ -605,18 +616,18 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 	for rows.Next() {
 		var id, fm string
 		var umc int
-		var current bool
+		var rowAutomated bool
 		if err := rows.Scan(
-			&id, &fm, &umc, &current,
+			&id, &fm, &umc, &rowAutomated,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning backfill candidate: %w", err,
 			)
 		}
 		want := umc <= 1 && IsAutomatedSession(fm)
-		if want && !current {
+		if want && !rowAutomated {
 			setIDs = append(setIDs, id)
-		} else if !want && current {
+		} else if !want && rowAutomated {
 			clearIDs = append(clearIDs, id)
 		}
 	}
@@ -643,12 +654,41 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 		)
 	}
 
-	_, err = w.Exec(
-		`INSERT INTO stats (key, value) VALUES (?, 1)
+	// stats.value is INTEGER affinity; SQLite stores hex text
+	// here verbatim. Switching to STRICT tables would require
+	// moving this row to a TEXT-typed table.
+	if _, err := w.Exec(
+		`INSERT INTO stats (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		marker,
-	)
-	return err
+		ClassifierHashKey, current,
+	); err != nil {
+		return fmt.Errorf(
+			"storing classifier hash: %w", err,
+		)
+	}
+	return nil
+}
+
+// ForceBackfillIsAutomated reclassifies is_automated across
+// every session, ignoring any cached classifier hash. ResyncAll
+// calls this after CopyOrphanedDataFrom because orphan-copied
+// rows carry is_automated values computed against the *old* DB's
+// classifier set; the temp DB's at-Open backfill already ran on
+// an empty table and stamped the current hash, so without this
+// call those rows would be permanently stuck with stale flags.
+func (db *DB) ForceBackfillIsAutomated() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	w := db.getWriter()
+	if _, err := w.Exec(
+		`DELETE FROM stats WHERE key = ?`,
+		ClassifierHashKey,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing classifier hash: %w", err,
+		)
+	}
+	return db.backfillIsAutomatedLocked(w)
 }
 
 func batchUpdateAutomated(

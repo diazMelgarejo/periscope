@@ -270,30 +270,42 @@ func buildPGSessionFilter(
 				pb.add(*f.MinToolFailures))
 	}
 
-	hasFilters := len(filterPreds) > 0 || oneShotPred != ""
-	if !f.IncludeChildren || !hasFilters {
+	if !f.IncludeChildren {
 		allPreds := append(basePreds, filterPreds...)
+		if oneShotPred != "" {
+			allPreds = append(allPreds, oneShotPred)
+		}
 		return strings.Join(allPreds, " AND "), pb.args
 	}
 
+	// Mirrors SQLite buildSessionFilter. The CTE computes the
+	// transitive closure of rows reachable from qualifying
+	// roots, so children only surface when their full parent
+	// chain terminates at a rootMatch-passing root — a plain
+	// single-level parent subquery would let a subagent that
+	// incidentally matches user filters drag its descendants
+	// through as fake roots.
 	baseWhere := strings.Join(basePreds, " AND ")
 
 	rootMatchParts := append([]string{}, filterPreds...)
 	if oneShotPred != "" {
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
+	rootMatchParts = append(rootMatchParts,
+		"relationship_type NOT IN ('subagent', 'fork')")
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 
-	subqWhere := "message_count > 0 AND deleted_at IS NULL"
-	if rootMatch != "" {
-		subqWhere += " AND " + rootMatch
-	}
+	cte := "WITH RECURSIVE tree(id) AS (" +
+		"SELECT id FROM sessions" +
+		" WHERE message_count > 0 AND deleted_at IS NULL AND " +
+		rootMatch +
+		" UNION " +
+		"SELECT s.id FROM sessions s" +
+		" JOIN tree t ON s.parent_session_id = t.id" +
+		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
+		") SELECT id FROM tree"
 
-	where := baseWhere + " AND (" + rootMatch +
-		" OR parent_session_id IN" +
-		" (SELECT id FROM sessions WHERE " +
-		subqWhere + "))"
-
+	where := baseWhere + " AND id IN (" + cte + ")"
 	return where, pb.args
 }
 

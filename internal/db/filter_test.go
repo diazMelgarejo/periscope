@@ -451,16 +451,17 @@ func TestIncludeChildrenScopesToMatchingParent(t *testing.T) {
 			want: []string{"parentA", "childA"},
 		},
 		{
-			// childA (agent=codex) matches the filter directly
-			// even though its parent (parentA, agent=claude)
-			// does not. childB is included because its parent
-			// (parentB, agent=codex) matches.
-			name: "ChildMatchesDirectlyOrViaParent",
+			// Subagent/fork rows can only be included via their
+			// parent, never as direct matches. childA (codex
+			// subagent of claude parentA) is excluded because
+			// its parent doesn't match Agent=codex. childB is
+			// included because its parent parentB matches.
+			name: "SubagentOnlyViaMatchingParent",
 			filter: SessionFilter{
 				IncludeChildren: true,
 				Agent:           "codex",
 			},
-			want: []string{"childA", "parentB", "childB"},
+			want: []string{"parentB", "childB"},
 		},
 		{
 			// Neither parentC (gemini) nor childC (gemini)
@@ -489,6 +490,186 @@ func TestIncludeChildrenScopesToMatchingParent(t *testing.T) {
 			requireSessions(t, d, tt.filter, tt.want)
 		})
 	}
+}
+
+// TestIncludeChildrenExcludesOrphanSubagents reproduces the
+// sidebar bug where subagents whose parent was rotated off disk
+// by Claude Code (or whose parent is excluded by is_automated)
+// surfaced as fake root groups. With IncludeChildren=true and
+// ExcludeAutomated active, a subagent row must ONLY appear when
+// its parent is loaded and also passes the filter — never on
+// its own.
+func TestIncludeChildrenExcludesOrphanSubagents(t *testing.T) {
+	d := testDB(t)
+
+	// Legitimate case: non-automated root with a subagent child.
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "root-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+	})
+
+	// Orphan case 1: subagent whose parent doesn't exist in
+	// the sessions table (parent JSONL was deleted from disk).
+	insertSession(t, d, "orphan-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("missing-parent-id")
+		s.RelationshipType = "subagent"
+	})
+
+	// Orphan case 2: subagent whose parent IS loaded but is
+	// automated, so it fails the ExcludeAutomated filter.
+	fm := "You are a code reviewer. Review the code."
+	insertSession(t, d, "auto-root", "proj", func(s *Session) {
+		s.FirstMessage = &fm
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "auto-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("auto-root")
+		s.RelationshipType = "subagent"
+	})
+
+	// Orphan case 3: fork whose parent is missing.
+	insertSession(t, d, "orphan-fork", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("also-missing")
+		s.RelationshipType = "fork"
+	})
+
+	f := SessionFilter{
+		IncludeChildren:  true,
+		ExcludeAutomated: true,
+	}
+	// Expected: root + its subagent survive; all three orphans
+	// are excluded. auto-root is filtered out by ExcludeAutomated,
+	// which also drops auto-sub (its parent is no longer loaded).
+	requireSessions(t, d, f, []string{"root", "root-sub"})
+}
+
+// TestIncludeChildrenKeepsNestedDescendants guards against a
+// regression where a fork spawned inside a subagent thread
+// (root → subagent → fork) was dropped. The direct-match side
+// excludes fork rows, and a naive subquery that also excluded
+// subagent rows would reject the fork's immediate parent. The
+// parent-side subquery must therefore drop the relationship
+// guard so depth-2+ descendants stay visible.
+func TestIncludeChildrenKeepsNestedDescendants(t *testing.T) {
+	d := testDB(t)
+
+	// Root: non-automated, multi-turn, claude.
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	// Subagent child of root.
+	insertSession(t, d, "sub", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 4
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+	})
+	// Fork spawned inside the subagent thread (depth-2).
+	insertSession(t, d, "nested-fork", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("sub")
+		s.RelationshipType = "fork"
+	})
+
+	f := SessionFilter{
+		IncludeChildren:  true,
+		ExcludeAutomated: true,
+	}
+	requireSessions(t, d, f, []string{
+		"root", "sub", "nested-fork",
+	})
+}
+
+// TestIncludeChildrenExcludesFilteredNestedRoots guards against
+// the case where a user filter fails at every level of a chain.
+// Shape: root(agent=claude) → sub(agent=codex, subagent) →
+// nested-fork(agent=codex, fork). Under Agent=codex, root fails
+// the filter, sub fails the relationship guard, and nested-fork
+// fails the relationship guard. A one-level parent subquery
+// would see sub passing the agent filter and include nested-fork
+// — which then arrives at the frontend without its parent chain
+// and renders as a fake root group. The recursive CTE refuses
+// the whole subtree because nothing qualifies as a tree root.
+func TestIncludeChildrenExcludesFilteredNestedRoots(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "sub", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.MessageCount = 4
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+	})
+	insertSession(t, d, "nested-fork", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("sub")
+		s.RelationshipType = "fork"
+	})
+
+	f := SessionFilter{
+		IncludeChildren: true,
+		Agent:           "codex",
+	}
+	// No codex session has relationship_type = '' (root), so
+	// the CTE has no seed and returns no rows.
+	requireSessions(t, d, f, []string{})
+}
+
+// TestIncludeChildrenNoFiltersExcludesOrphanChildren verifies
+// that the relationship guard applies even when no user
+// filters are active. The prior early-return on !hasFilters
+// left orphan subagent/fork rows unguarded; toggling
+// "include automated" with nothing else selected could
+// resurrect them as fake roots.
+func TestIncludeChildrenNoFiltersExcludesOrphanChildren(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 3
+	})
+	insertSession(t, d, "child", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+	})
+	insertSession(t, d, "orphan", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("nowhere")
+		s.RelationshipType = "subagent"
+	})
+
+	f := SessionFilter{IncludeChildren: true}
+	// No user filters, but the guard still applies: orphan is
+	// excluded, legitimate root+child survive.
+	requireSessions(t, d, f, []string{"root", "child"})
 }
 
 func TestIncludeChildrenExcludeOneShotAgent(t *testing.T) {
