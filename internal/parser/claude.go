@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
@@ -516,26 +517,14 @@ func parseLinear(
 	endedAt = laterTime(globalEnd, endedAt)
 	annotateSubagentSessions(messages, subagentMap)
 
-	userCount := 0
-	firstMsg := ""
-	for _, m := range messages {
-		if m.IsSystem {
-			// Promoted system messages (continuation/resume/
-			// interrupted/task_notification/stop_hook) carry
-			// Role=user so role-keyed analytics ignore them,
-			// but they are not real user turns — skip them
-			// when computing user_message_count / first_message.
-			continue
-		}
-		if m.Role == RoleUser && m.Content != "" {
-			userCount++
-			if firstMsg == "" {
-				firstMsg = truncate(
-					strings.ReplaceAll(m.Content, "\n", " "), 300,
-				)
-			}
-		}
-	}
+	// Promoted system messages (continuation/resume/interrupted/
+	// task_notification/stop_hook) carry Role=user so role-keyed
+	// analytics ignore them, but they are not real user turns;
+	// firstMessageAndUserCount skips them when computing
+	// user_message_count / first_message. It also skips leading
+	// /clear and /effort command envelopes so the sidebar shows
+	// the next real message instead of the command.
+	firstMsg, userCount := firstMessageAndUserCount(messages)
 
 	sess := ParsedSession{
 		ID:               sessionID,
@@ -689,21 +678,7 @@ func parseDAG(
 		}
 		annotateSubagentSessions(messages, subagentMap)
 
-		userCount := 0
-		firstMsg := ""
-		for _, m := range messages {
-			if m.IsSystem {
-				continue
-			}
-			if m.Role == RoleUser && m.Content != "" {
-				userCount++
-				if firstMsg == "" {
-					firstMsg = truncate(
-						strings.ReplaceAll(m.Content, "\n", " "), 300,
-					)
-				}
-			}
-		}
+		firstMsg, userCount := firstMessageAndUserCount(messages)
 
 		sid := sessionID
 		pSID := b.parentID
@@ -1156,6 +1131,65 @@ func isCommandEnvelope(content string) bool {
 	}
 	stripped := xmlCmdStripRe.ReplaceAllString(trimmed, "")
 	return strings.TrimSpace(stripped) == ""
+}
+
+// previewSkippedCommands lists Claude Code commands that should
+// not be used as a session's first_message preview. When a
+// session opens with one of these, the parser skips past it and
+// picks the next real user message so the sidebar shows
+// something descriptive.
+var previewSkippedCommands = []string{"/clear", "/effort"}
+
+// isSkippablePreviewCommand returns true when content is a known
+// Claude Code command (optionally followed by arguments), for the
+// purpose of skipping it when computing first_message. Match is
+// word-boundary: the trimmed content must equal the command
+// exactly or be followed by a whitespace rune, so "/clearcache"
+// does not match "/clear".
+func isSkippablePreviewCommand(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	for _, cmd := range previewSkippedCommands {
+		if !strings.HasPrefix(trimmed, cmd) {
+			continue
+		}
+		if len(trimmed) == len(cmd) {
+			return true
+		}
+		r, _ := utf8.DecodeRuneInString(trimmed[len(cmd):])
+		if unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// firstMessageAndUserCount returns the preview string and the
+// total number of real (non-system) user turns. The preview skips
+// known Claude Code command envelopes like /clear and /effort so
+// sessions that begin with a command still show a meaningful
+// preview; the user count always reflects every non-system user
+// turn, including skipped commands.
+func firstMessageAndUserCount(
+	messages []ParsedMessage,
+) (string, int) {
+	firstMsg := ""
+	userCount := 0
+	for _, m := range messages {
+		if m.IsSystem {
+			continue
+		}
+		if m.Role != RoleUser || m.Content == "" {
+			continue
+		}
+		userCount++
+		if firstMsg == "" &&
+			!isSkippablePreviewCommand(m.Content) {
+			firstMsg = truncate(
+				strings.ReplaceAll(m.Content, "\n", " "), 300,
+			)
+		}
+	}
+	return firstMsg, userCount
 }
 
 // fileEndsWithNewline returns true when the byte at size-1

@@ -27,17 +27,15 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 17: Codex parser now filters <skill> template
-// injections from the user-message stream. Prior rows had
-// inflated user_message_count for sessions where the model
-// invoked a skill (Codex writes the skill template content as a
-// role=user JSONL entry), which prevented IsAutomatedSession
-// from gating them on the single-turn requirement. Re-parsing
-// rewrites user_message_count so the is_automated backfill can
-// classify them correctly.
+// Bumped to 18: Claude parser now skips /clear and /effort
+// command envelopes when computing first_message, so sessions
+// that opened with one of those commands show the next real
+// user message in the sidebar instead of the command text.
+// Re-parsing rewrites first_message with the new logic.
 //
-// (16: same migration for <turn_aborted> system messages.)
-const dataVersion = 17
+// (17: Codex <skill> template filtering.)
+// (16: <turn_aborted> system messages.)
+const dataVersion = 18
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -584,12 +582,13 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 	return nil
 }
 
-// backfillIsAutomatedLocked recomputes is_automated for all
-// sessions, correcting both false negatives (new patterns) and
-// stale false positives (patterns tightened since last run).
-// Gated by a stored classifier hash so it only runs when the
-// classifier set (built-in patterns + user prefixes + algorithm
-// version) has changed since the last successful run.
+// backfillIsAutomatedLocked verifies is_automated for all
+// sessions, correcting both false negatives (new patterns or
+// stale imported rows) and stale false positives (patterns
+// tightened since last run). The stored classifier hash records
+// which classifier wrote the current audit, but it is not a
+// complete integrity marker: rows can be copied from older DBs
+// or stale remote machines after the hash was stamped.
 func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 	current := ClassifierHash()
 	var stored string
@@ -602,15 +601,11 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 			"probing classifier hash: %w", err,
 		)
 	}
-	if err == nil && stored == current {
-		return nil
-	}
 
 	rows, err := w.Query(
 		`SELECT id, first_message, user_message_count,
 			is_automated
-		 FROM sessions
-		 WHERE first_message IS NOT NULL`,
+		 FROM sessions`,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -621,7 +616,8 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 
 	var setIDs, clearIDs []string
 	for rows.Next() {
-		var id, fm string
+		var id string
+		var fm sql.NullString
 		var umc int
 		var rowAutomated bool
 		if err := rows.Scan(
@@ -631,7 +627,10 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 				"scanning backfill candidate: %w", err,
 			)
 		}
-		want := umc <= 1 && IsAutomatedSession(fm)
+		want := false
+		if fm.Valid {
+			want = umc <= 1 && IsAutomatedSession(fm.String)
+		}
 		if want && !rowAutomated {
 			setIDs = append(setIDs, id)
 		} else if !want && rowAutomated {

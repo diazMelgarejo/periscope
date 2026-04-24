@@ -1036,3 +1036,99 @@ func TestParseClaudeSession_PromotesSystemSubtypes(t *testing.T) {
 	assert.Equal(t, "system", systems[1].SourceType)
 	assert.Equal(t, RoleUser, systems[1].Role)
 }
+
+func TestIsSkippablePreviewCommand(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"bare /clear", "/clear", true},
+		{"bare /effort", "/effort", true},
+		{"/clear with trailing space", "/clear ", true},
+		{"/clear with args", "/clear foo", true},
+		{"/effort with args", "/effort max", true},
+		{"surrounded by whitespace", "  /clear  ", true},
+		{"/clear with tab", "/clear\tfoo", true},
+		{"/clear with newline", "/clear\nfoo", true},
+		{"empty string", "", false},
+		{"/clearcache (no word boundary)", "/clearcache", false},
+		{"/effortless (no word boundary)", "/effortless", false},
+		{"/cleareffort", "/cleareffort", false},
+		{"unrelated command", "/unrelated", false},
+		{"prose containing /clear", "hello /clear", false},
+		{"/clear-xyz (dash not whitespace)", "/clear-xyz", false},
+		{"plain text", "Fix the login bug", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isSkippablePreviewCommand(tc.content)
+			assert.Equal(t, tc.want, got,
+				"content=%q", tc.content)
+		})
+	}
+}
+
+func TestParseClaudeSession_SkipClearEffortFirstMessage(t *testing.T) {
+	t.Run("single /clear followed by real message", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<command-name>/clear</command-name>",
+				tsZero,
+			),
+			testjsonl.ClaudeUserJSON("Fix the login bug", tsZeroS1),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "ok"},
+			}, tsZeroS2),
+		)
+		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, "Fix the login bug", sess.FirstMessage)
+		assert.Equal(t, 2, sess.UserMessageCount,
+			"skipped commands still count as user turns")
+	})
+
+	t.Run("cascade /effort then /clear then real", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<command-name>/effort</command-name>\n<command-args>max</command-args>",
+				tsZero,
+			),
+			testjsonl.ClaudeUserJSON(
+				"<command-name>/clear</command-name>",
+				tsZeroS1,
+			),
+			testjsonl.ClaudeUserJSON("Real question", tsZeroS2),
+		)
+		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, "Real question", sess.FirstMessage)
+		assert.Equal(t, 3, sess.UserMessageCount)
+	})
+
+	t.Run("all messages are skipped commands", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<command-name>/clear</command-name>",
+				tsZero,
+			),
+			testjsonl.ClaudeUserJSON(
+				"<command-name>/effort</command-name>",
+				tsZeroS1,
+			),
+		)
+		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, "", sess.FirstMessage)
+		assert.Equal(t, 2, sess.UserMessageCount)
+	})
+
+	t.Run("non-skipped command still becomes first_message", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<command-message>roborev-fix</command-message>\n<command-name>/roborev-fix</command-name>\n<command-args>450</command-args>",
+				tsZero,
+			),
+			testjsonl.ClaudeUserJSON("follow-up", tsZeroS1),
+		)
+		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, "/roborev-fix 450", sess.FirstMessage)
+	})
+}
