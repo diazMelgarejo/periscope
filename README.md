@@ -172,12 +172,13 @@ make install        # install to ~/.local/bin
 
 ```bash
 make test           # Go tests (CGO_ENABLED=1 -tags fts5)
-make lint           # golangci-lint
+make lint           # golangci-lint + NilAway
+make nilaway        # NilAway through custom golangci-lint
 make e2e            # Playwright E2E tests
 ```
 
-Pre-commit hooks via [prek](https://github.com/j178/prek): `make install-hooks`
-after cloning (requires `prek` and `uv`).
+Pre-commit hooks via [prek](https://github.com/j178/prek): run `make lint-tools`
+and `make install-hooks` after cloning (requires `prek` and `uv`).
 
 ### Project Layout
 

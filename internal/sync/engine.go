@@ -2351,6 +2351,9 @@ func (e *Engine) processCodex(
 	if err != nil {
 		return processResult{err: err}
 	}
+	if sess == nil {
+		return processResult{skip: true}
+	}
 
 	sess.File.Inode, sess.File.Device = getFileIdentity(info)
 
@@ -3461,6 +3464,9 @@ func derefInt64(v *int64) int64 {
 func openCodeLegacyArchiveLooksIncomplete(
 	parsed, stored []db.Message,
 ) bool {
+	if parsed == nil {
+		return len(stored) > 0
+	}
 	if len(parsed) < len(stored) {
 		return true
 	}
