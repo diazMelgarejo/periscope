@@ -56,6 +56,66 @@ func hoursAgo(n int) string {
 		Format(time.RFC3339)
 }
 
+func Test_insertSessionFixture_isAutomated_patch(t *testing.T) {
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "auto-1", userMsgs: 5, startedAt: hoursAgo(1),
+		isAutomated: true,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "human-1", userMsgs: 1, startedAt: hoursAgo(1),
+		isAutomated: false,
+	})
+
+	var autoFlag, humanFlag int
+	if err := d.getReader().QueryRow(
+		"SELECT is_automated FROM sessions WHERE id = ?", "auto-1",
+	).Scan(&autoFlag); err != nil {
+		t.Fatalf("read auto-1: %v", err)
+	}
+	if err := d.getReader().QueryRow(
+		"SELECT is_automated FROM sessions WHERE id = ?", "human-1",
+	).Scan(&humanFlag); err != nil {
+		t.Fatalf("read human-1: %v", err)
+	}
+	if autoFlag != 1 {
+		t.Fatalf("auto-1 is_automated = %d, want 1", autoFlag)
+	}
+	if humanFlag != 0 {
+		t.Fatalf("human-1 is_automated = %d, want 0", humanFlag)
+	}
+}
+
+func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "auto", userMsgs: 5, startedAt: hoursAgo(1),
+		isAutomated: true,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "human", userMsgs: 1, startedAt: hoursAgo(1),
+		isAutomated: false,
+	})
+
+	ctx := t.Context()
+	from := time.Now().Add(-24 * time.Hour)
+	to := time.Now().Add(1 * time.Hour)
+	rows, err := d.loadSessionsInWindow(ctx, StatsFilter{}, from, to)
+	if err != nil {
+		t.Fatalf("loadSessionsInWindow: %v", err)
+	}
+	byID := map[string]bool{}
+	for _, r := range rows {
+		byID[r.id] = r.isAutomated
+	}
+	if got, want := byID["auto"], true; got != want {
+		t.Fatalf("auto.isAutomated = %v, want %v", got, want)
+	}
+	if got, want := byID["human"], false; got != want {
+		t.Fatalf("human.isAutomated = %v, want %v", got, want)
+	}
+}
+
 // insertSessionFixture inserts a sessionFixture via the standard
 // UpsertSession path so triggers and defaults stay authoritative.
 // Defaults mirror insertSession in db_test.go (machine=local,
@@ -115,6 +175,24 @@ func insertSessionFixture(t *testing.T, d *DB, f sessionFixture) {
 		s.Cwd = f.cwd
 	})
 	seedAssistantActivity(t, d, f.id, f.assistantTurns, f.totalToolCalls)
+
+	// UpsertSession recomputes is_automated from FirstMessage, so a
+	// fixture's f.isAutomated alone would be silently clobbered when
+	// no first message is set. Patch the column after the upsert so
+	// f.isAutomated is the authoritative value the stats pipeline
+	// reads. Test-only path; production ingest always flows through
+	// UpsertSession's classifier.
+	var want int
+	if f.isAutomated {
+		want = 1
+	}
+	if _, err := d.getWriter().Exec(
+		"UPDATE sessions SET is_automated = ? WHERE id = ?",
+		want, f.id,
+	); err != nil {
+		t.Fatalf("insertSessionFixture %s: patch is_automated: %v",
+			f.id, err)
+	}
 }
 
 // seedAssistantActivity inserts `turns` assistant messages and
@@ -245,13 +323,16 @@ func seedModelMessages(
 	}
 }
 
-func TestArchetypeLabel(t *testing.T) {
+func TestSessionShapeLabel(t *testing.T) {
+	// Automation is decided upstream via sessions.is_automated; this
+	// helper classifies only non-automated sessions, so the lower band
+	// starts at 0 and includes userMsgs=1.
 	cases := []struct {
 		userMsgs int
 		want     string
 	}{
-		{0, "automation"},
-		{1, "automation"},
+		{0, "quick"},
+		{1, "quick"},
 		{2, "quick"},
 		{5, "quick"},
 		{6, "standard"},
@@ -262,10 +343,10 @@ func TestArchetypeLabel(t *testing.T) {
 		{1000, "marathon"},
 	}
 	for _, c := range cases {
-		got := archetypeLabel(c.userMsgs)
+		got := sessionShapeLabel(c.userMsgs)
 		if got != c.want {
 			t.Errorf(
-				"archetypeLabel(%d): got %q, want %q",
+				"sessionShapeLabel(%d): got %q, want %q",
 				c.userMsgs, got, c.want,
 			)
 		}
@@ -301,12 +382,15 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	// 5 sessions: 2 automation (userMsgs 0,1),
+	// 5 sessions: 2 automation (is_automated=true),
 	//             2 deep (userMsgs 20, 40),
 	//             1 marathon (userMsgs 100).
+	// Automation is now authoritative via sessions.is_automated; the
+	// two short rows carry the flag so they flow through the automation
+	// branch regardless of user_message_count.
 	fixtures := []sessionFixture{
-		{id: "s1", userMsgs: 0, startedAt: hoursAgo(5)},
-		{id: "s2", userMsgs: 1, startedAt: hoursAgo(5)},
+		{id: "s1", userMsgs: 0, startedAt: hoursAgo(5), isAutomated: true},
+		{id: "s2", userMsgs: 1, startedAt: hoursAgo(5), isAutomated: true},
 		{id: "s3", userMsgs: 20, startedAt: hoursAgo(5)},
 		{id: "s4", userMsgs: 40, startedAt: hoursAgo(5)},
 		{id: "s5", userMsgs: 100, startedAt: hoursAgo(5)},
@@ -409,6 +493,44 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 
 	if stats.GeneratedAt == "" {
 		t.Errorf("generated_at empty")
+	}
+}
+
+func Test_computeTotalsAndArchetypes_flagAuthority(t *testing.T) {
+	d := testDB(t)
+	// Short non-automated session — must count as human, bucket as "quick".
+	insertSessionFixture(t, d, sessionFixture{
+		id: "short-human", userMsgs: 1, startedAt: hoursAgo(1),
+		isAutomated: false,
+	})
+	// Automated session — bucket as "automation" regardless of its
+	// userMsgs shape. userMsgs=7 is chosen so that under the old
+	// heuristic this row would have landed in "standard", making the
+	// Archetypes.Quick == 1 assertion a real regression guard: old
+	// code produces Quick=0, new code produces Quick=1 from the
+	// short-human fixture.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "auto", userMsgs: 7, startedAt: hoursAgo(1),
+		isAutomated: true,
+	})
+
+	got, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "1d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if got.Totals.SessionsHuman != 1 {
+		t.Fatalf("SessionsHuman = %d, want 1", got.Totals.SessionsHuman)
+	}
+	if got.Totals.SessionsAutomation != 1 {
+		t.Fatalf("SessionsAutomation = %d, want 1",
+			got.Totals.SessionsAutomation)
+	}
+	if got.Archetypes.Quick != 1 {
+		t.Fatalf("Archetypes.Quick = %d, want 1 (short non-automated)",
+			got.Archetypes.Quick)
+	}
+	if got.Archetypes.Automation != 1 {
+		t.Fatalf("Archetypes.Automation = %d, want 1", got.Archetypes.Automation)
 	}
 }
 
@@ -559,8 +681,8 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	ctx := context.Background()
 
 	// Five sessions chosen to place one row in each interesting bucket
-	// for duration and peak_context. userMsgs drives archetype/scope:
-	// a,b → automation (userMsgs <= 1); c,d,e → human.
+	// for duration and peak_context. is_automated drives the scope_human
+	// filter: a,b → automation (isAutomated=true); c,d,e → human.
 	fixtures := []struct {
 		id             string
 		userMsgs       int
@@ -568,12 +690,13 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 		durMin         float64
 		toolCalls      int
 		assistantTurns int
+		isAutomated    bool
 	}{
-		{"a", 0, 2_000, 0.5, 0, 0},
-		{"b", 1, 8_000, 0.9, 1, 1},
-		{"c", 3, 25_000, 10.0, 6, 3},
-		{"d", 10, 60_000, 25.0, 15, 10},
-		{"e", 30, 150_000, 120.0, 30, 30},
+		{"a", 0, 2_000, 0.5, 0, 0, true},
+		{"b", 1, 8_000, 0.9, 1, 1, true},
+		{"c", 3, 25_000, 10.0, 6, 3, false},
+		{"d", 10, 60_000, 25.0, 15, 10, false},
+		{"e", 30, 150_000, 120.0, 30, 30, false},
 	}
 	for _, f := range fixtures {
 		insertSessionFixture(t, d, sessionFixture{
@@ -586,6 +709,7 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 			startedAt:      hoursAgo(10),
 			totalToolCalls: f.toolCalls,
 			assistantTurns: f.assistantTurns,
+			isAutomated:    f.isAutomated,
 		})
 	}
 
@@ -702,6 +826,50 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 			t.Errorf("tools_per_turn scope_all bucket %d: got %d want %d",
 				i, gotTPT[i].Count, w)
 		}
+	}
+}
+
+func Test_computeDistributions_scopeHuman_flag(t *testing.T) {
+	d := testDB(t)
+	// Short non-automated: must count in scope_human.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "short-human", userMsgs: 1, durationMin: 3,
+		startedAt: hoursAgo(1), isAutomated: false,
+	})
+	// Multi-turn automated: must be excluded from scope_human.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "auto-long", userMsgs: 4, durationMin: 30,
+		startedAt: hoursAgo(1), isAutomated: true,
+	})
+
+	got, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "1d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	// scope_all has both rows — mean ~= 16.5.
+	allMean := got.Distributions.DurationMinutes.ScopeAll.Mean
+	if allMean < 15 || allMean > 18 {
+		t.Fatalf("scope_all duration mean = %.2f, want ~16.5", allMean)
+	}
+	// scope_human has only the non-automated short session — mean ~= 3.
+	humanMean := got.Distributions.DurationMinutes.ScopeHuman.Mean
+	if humanMean < 2 || humanMean > 4 {
+		t.Fatalf("scope_human duration mean = %.2f, want ~3 (short-human only)",
+			humanMean)
+	}
+
+	humanUserMessages := got.Distributions.UserMessages.ScopeHuman
+	if humanUserMessages.Mean != 0 {
+		t.Fatalf("scope_human user_messages mean = %.2f, want 0 (<2 filtered)",
+			humanUserMessages.Mean)
+	}
+	bucketedHumanMessages := 0
+	for _, bucket := range humanUserMessages.Buckets {
+		bucketedHumanMessages += bucket.Count
+	}
+	if bucketedHumanMessages != 0 {
+		t.Fatalf("scope_human user_messages bucket total = %d, want 0 (<2 filtered)",
+			bucketedHumanMessages)
 	}
 }
 
@@ -1325,12 +1493,85 @@ func TestGetSessionStats_AgentPortfolio_Empty(t *testing.T) {
 	if ap.ByTokens == nil {
 		t.Errorf("ByTokens: got nil want non-nil map")
 	}
+	if ap.BySessionsHuman == nil {
+		t.Errorf("BySessionsHuman: got nil want non-nil map")
+	}
+	if ap.ByMessagesHuman == nil {
+		t.Errorf("ByMessagesHuman: got nil want non-nil map")
+	}
+	if ap.ByTokensHuman == nil {
+		t.Errorf("ByTokensHuman: got nil want non-nil map")
+	}
 	if len(ap.BySessions) != 0 || len(ap.ByMessages) != 0 ||
 		len(ap.ByTokens) != 0 {
 		t.Errorf("empty window: got non-empty maps %+v", ap)
 	}
+	if len(ap.BySessionsHuman) != 0 || len(ap.ByMessagesHuman) != 0 ||
+		len(ap.ByTokensHuman) != 0 {
+		t.Errorf("empty window: got non-empty human maps %+v", ap)
+	}
 	if ap.Primary != "" {
 		t.Errorf("Primary: got %q want empty", ap.Primary)
+	}
+	if ap.PrimaryHuman != "" {
+		t.Errorf("PrimaryHuman: got %q want empty", ap.PrimaryHuman)
+	}
+}
+
+func Test_computeAgentPortfolio_humanScoped(t *testing.T) {
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "claude-human", agent: "claude", userMsgs: 3,
+		startedAt: hoursAgo(1), totalOutputTok: 100,
+		isAutomated: false,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "codex-auto", agent: "codex", userMsgs: 1,
+		startedAt: hoursAgo(1), totalOutputTok: 50,
+		isAutomated: true,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "gemini-auto", agent: "gemini", userMsgs: 1,
+		startedAt: hoursAgo(1), totalOutputTok: 25,
+		isAutomated: true,
+	})
+
+	got, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "1d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	ap := got.AgentPortfolio
+
+	// All-sessions view: every agent present.
+	if ap.BySessions["claude"] != 1 || ap.BySessions["codex"] != 1 ||
+		ap.BySessions["gemini"] != 1 {
+		t.Fatalf("BySessions = %v, want claude=1,codex=1,gemini=1",
+			ap.BySessions)
+	}
+	// primary ties on count; lexicographic min wins → claude.
+	if ap.Primary != "claude" {
+		t.Fatalf("Primary = %q, want claude", ap.Primary)
+	}
+
+	// Human-scoped view: only claude.
+	if _, ok := ap.BySessionsHuman["codex"]; ok {
+		t.Fatalf("BySessionsHuman must exclude codex: %v",
+			ap.BySessionsHuman)
+	}
+	if _, ok := ap.BySessionsHuman["gemini"]; ok {
+		t.Fatalf("BySessionsHuman must exclude gemini: %v",
+			ap.BySessionsHuman)
+	}
+	if ap.BySessionsHuman["claude"] != 1 {
+		t.Fatalf("BySessionsHuman[claude] = %d, want 1",
+			ap.BySessionsHuman["claude"])
+	}
+	if ap.ByTokensHuman["claude"] != 100 {
+		t.Fatalf("ByTokensHuman[claude] = %d, want 100",
+			ap.ByTokensHuman["claude"])
+	}
+	if ap.PrimaryHuman != "claude" {
+		t.Fatalf("PrimaryHuman = %q, want claude", ap.PrimaryHuman)
 	}
 }
 

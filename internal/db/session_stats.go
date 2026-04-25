@@ -367,6 +367,11 @@ type sessionStatsRow struct {
 	// computeOutcomeStats to resolve enclosing git repositories; empty
 	// string indicates the session had no recorded cwd and is skipped.
 	cwd string
+	// isAutomated mirrors sessions.is_automated. Consumed by
+	// computeTotalsAndArchetypes, computeDistributions, and
+	// computeAgentPortfolio as the single source of truth for
+	// whether a session is automated.
+	isAutomated bool
 }
 
 // loadSessionsInWindow returns the rows the stats pipeline needs.
@@ -446,7 +451,8 @@ func (db *DB) loadSessionsInWindow(
 			0) AS assistant_turns,
 		s.outcome, COALESCE(s.health_grade, ''),
 		s.tool_retry_count, s.compaction_count, s.edit_churn_count,
-		COALESCE(s.cwd, '')
+		COALESCE(s.cwd, ''),
+		s.is_automated
 		FROM sessions s WHERE ` + strings.Join(preds, " AND ")
 
 	sqlRows, err := db.getReader().QueryContext(ctx, query, args...)
@@ -462,7 +468,7 @@ func (db *DB) loadSessionsInWindow(
 		var r sessionStatsRow
 		var startedAt string
 		var endedAt sql.NullString
-		var hasTotalTokens, hasPeak int
+		var hasTotalTokens, hasPeak, isAutomated int
 		if err := sqlRows.Scan(
 			&r.id, &r.agent, &r.project,
 			&startedAt, &endedAt,
@@ -473,6 +479,7 @@ func (db *DB) loadSessionsInWindow(
 			&r.outcome, &r.healthGrade,
 			&r.toolRetryCount, &r.compactionCount, &r.editChurnCount,
 			&r.cwd,
+			&isAutomated,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning session stats row: %w", err,
@@ -498,6 +505,7 @@ func (db *DB) loadSessionsInWindow(
 		}
 		r.hasTotalOutputTokens = hasTotalTokens == 1
 		r.hasPeakContext = hasPeak == 1
+		r.isAutomated = isAutomated == 1
 		out = append(out, r)
 	}
 	if err := sqlRows.Err(); err != nil {
@@ -517,13 +525,13 @@ func parseTimestamp(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
 
-// archetypeLabel classifies a session by its user_message_count per
-// the session-analytics v1 spec. Boundaries are inclusive on both
-// sides of each band.
-func archetypeLabel(userMsgs int) string {
+// sessionShapeLabel classifies a *non-automated* session by its
+// user_message_count. Automated sessions are handled upstream (the
+// caller assigns "automation" based on sessions.is_automated) and
+// never pass through this helper, so the lower band starts at 0
+// rather than 1. Boundaries are inclusive on both sides of each band.
+func sessionShapeLabel(userMsgs int) string {
 	switch {
-	case userMsgs <= 1:
-		return "automation"
 	case userMsgs <= 5:
 		return "quick"
 	case userMsgs <= 15:
@@ -547,26 +555,24 @@ func computeTotalsAndArchetypes(
 		s.Totals.MessagesTotal += r.messageCount
 		s.Totals.UserMessagesTotal += r.userMessageCount
 
-		label := archetypeLabel(r.userMessageCount)
-		switch label {
-		case "automation":
+		var label string
+		if r.isAutomated {
+			label = "automation"
 			s.Archetypes.Automation++
 			s.Totals.SessionsAutomation++
-		case "quick":
-			s.Archetypes.Quick++
+		} else {
+			label = sessionShapeLabel(r.userMessageCount)
 			s.Totals.SessionsHuman++
-			humanMax[label]++
-		case "standard":
-			s.Archetypes.Standard++
-			s.Totals.SessionsHuman++
-			humanMax[label]++
-		case "deep":
-			s.Archetypes.Deep++
-			s.Totals.SessionsHuman++
-			humanMax[label]++
-		case "marathon":
-			s.Archetypes.Marathon++
-			s.Totals.SessionsHuman++
+			switch label {
+			case "quick":
+				s.Archetypes.Quick++
+			case "standard":
+				s.Archetypes.Standard++
+			case "deep":
+				s.Archetypes.Deep++
+			case "marathon":
+				s.Archetypes.Marathon++
+			}
 			humanMax[label]++
 		}
 		archMax[label]++
@@ -645,8 +651,10 @@ func (a *scopedAccumulator) finalize() ScopedDistribution {
 // SessionStats. Scope rules:
 //
 //   - ScopeAll includes every row in the window.
-//   - ScopeHuman requires userMessageCount >= 2 (mirrors the archetype
-//     boundary between automation and quick).
+//   - ScopeHuman excludes any row where is_automated is set. This
+//     aligns scope_human with the single authority for automation
+//     classification; the old userMessageCount >= 2 heuristic is
+//     gone.
 //
 // Per-metric filters excluded from both scopes:
 //
@@ -655,6 +663,12 @@ func (a *scopedAccumulator) finalize() ScopedDistribution {
 //   - ToolsPerTurn: only rows with assistantTurns > 0; a zero-turn
 //     session has no meaningful turn rate and would otherwise bias
 //     bucket 0 toward the zero ratio.
+//
+// Per-metric filters excluded from scope_human only:
+//
+//   - UserMessages: rows with userMessageCount < 2 are excluded from
+//     the human mean and buckets because the v1 human bucket shape
+//     starts at 2. ScopeAll keeps the [0,2) bucket for short sessions.
 //
 // PeakContextTokens is Claude-only: rows from other agents and rows
 // without hasPeakContext data are excluded from every bucket; the
@@ -671,7 +685,7 @@ func computeDistributions(s *SessionStats, rows []sessionStatsRow) {
 	var pcNull int
 
 	for _, r := range rows {
-		human := r.userMessageCount >= 2
+		human := !r.isAutomated
 		if r.endedAt.Valid {
 			dur := r.endedAt.Time.Sub(r.startedAt).Minutes()
 			// Drop clock-skewed / malformed sessions whose ended_at
@@ -688,7 +702,7 @@ func computeDistributions(s *SessionStats, rows []sessionStatsRow) {
 		}
 		umv := float64(r.userMessageCount)
 		umAll.add(umv)
-		if human {
+		if human && r.userMessageCount >= 2 {
 			umHuman.add(umv)
 		}
 		if r.agent == "claude" {
@@ -769,6 +783,9 @@ func computeAgentPortfolio(s *SessionStats, rows []sessionStatsRow) {
 	bySessions := map[string]int{}
 	byMessages := map[string]int{}
 	byTokens := map[string]int64{}
+	bySessionsHuman := map[string]int{}
+	byMessagesHuman := map[string]int{}
+	byTokensHuman := map[string]int64{}
 	for _, r := range rows {
 		if r.agent == "" {
 			continue
@@ -778,11 +795,22 @@ func computeAgentPortfolio(s *SessionStats, rows []sessionStatsRow) {
 		if r.hasTotalOutputTokens {
 			byTokens[r.agent] += r.totalOutputTokens
 		}
+		if !r.isAutomated {
+			bySessionsHuman[r.agent]++
+			byMessagesHuman[r.agent] += r.messageCount
+			if r.hasTotalOutputTokens {
+				byTokensHuman[r.agent] += r.totalOutputTokens
+			}
+		}
 	}
 	s.AgentPortfolio.BySessions = bySessions
 	s.AgentPortfolio.ByMessages = byMessages
 	s.AgentPortfolio.ByTokens = byTokens
 	s.AgentPortfolio.Primary = pickPrimaryAgent(bySessions)
+	s.AgentPortfolio.BySessionsHuman = bySessionsHuman
+	s.AgentPortfolio.ByMessagesHuman = byMessagesHuman
+	s.AgentPortfolio.ByTokensHuman = byTokensHuman
+	s.AgentPortfolio.PrimaryHuman = pickPrimaryAgent(bySessionsHuman)
 }
 
 // pickPrimaryAgent returns the agent with the highest session count.
