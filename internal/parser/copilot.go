@@ -94,6 +94,9 @@ func (b *copilotSessionBuilder) handleUserMessage(
 	if content == "" {
 		return
 	}
+	if isCopilotSyntheticSkillMessage(data, content) {
+		return
+	}
 
 	if b.firstMessage == "" {
 		b.firstMessage = truncate(
@@ -109,6 +112,16 @@ func (b *copilotSessionBuilder) handleUserMessage(
 		ContentLength: len(content),
 	})
 	b.ordinal++
+}
+
+func isCopilotSyntheticSkillMessage(
+	data gjson.Result, content string,
+) bool {
+	source := strings.TrimSpace(data.Get("source").Str)
+	if strings.HasPrefix(source, "skill-") {
+		return true
+	}
+	return strings.HasPrefix(content, "<skill-context")
 }
 
 func (b *copilotSessionBuilder) handleAssistantMessage(

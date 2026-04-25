@@ -27,15 +27,21 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 18: Claude parser now skips /clear and /effort
+// Bumped to 19: Copilot parser now filters synthetic skill
+// context user messages (source "skill-*" or content
+// starting with "<skill-context"), so full resync drops
+// injected skill definitions from stored transcripts and
+// first_message.
+//
+// (18: Claude parser now skips /clear and /effort
 // command envelopes when computing first_message, so sessions
 // that opened with one of those commands show the next real
 // user message in the sidebar instead of the command text.
-// Re-parsing rewrites first_message with the new logic.
+// Re-parsing rewrites first_message with the new logic.)
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 18
+const dataVersion = 19
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

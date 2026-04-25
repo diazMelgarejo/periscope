@@ -313,6 +313,46 @@ func TestCopilotUserMessageCount(t *testing.T) {
 	assertEqual(t, 2, sess.UserMessageCount, "UserMessageCount")
 }
 
+func TestParseCopilotSession_SkipsSyntheticSkillMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataJSON string
+	}{
+		{
+			name:     "SourceAndContent",
+			dataJSON: `{"content":"<skill-context name=\"gh-cli\">\nbody\n</skill-context>","source":"skill-gh-cli"}`,
+		},
+		{
+			name:     "SourceOnly",
+			dataJSON: `{"content":"skill payload without wrapper","source":"skill-prd"}`,
+		},
+		{
+			name:     "ContentOnly",
+			dataJSON: `{"content":"<skill-context name=\"daily-summary\">\nbody\n</skill-context>"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeCopilotJSONL(t,
+				`{"type":"session.start","data":{"sessionId":"skill-filter"},"timestamp":"2025-01-15T10:00:00Z"}`,
+				`{"type":"user.message","data":`+tt.dataJSON+`,"timestamp":"2025-01-15T10:00:01Z"}`,
+				`{"type":"user.message","data":{"content":"Fix the parser"},"timestamp":"2025-01-15T10:00:02Z"}`,
+				`{"type":"assistant.message","data":{"content":"Working on it."},"timestamp":"2025-01-15T10:00:03Z"}`,
+			)
+
+			sess, msgs := parseAndValidateHelper(t, path, "m", 2)
+
+			assertEqual(t, "Fix the parser", sess.FirstMessage, "FirstMessage")
+			assertEqual(t, 1, sess.UserMessageCount, "UserMessageCount")
+			assertEqual(t, RoleUser, msgs[0].Role, "msgs[0].Role")
+			assertEqual(t, "Fix the parser", msgs[0].Content, "msgs[0].Content")
+			assertEqual(t, 0, msgs[0].Ordinal, "msgs[0].Ordinal")
+			assertEqual(t, 1, msgs[1].Ordinal, "msgs[1].Ordinal")
+		})
+	}
+}
+
 func TestParseCopilotSession_ModelChange(t *testing.T) {
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"model-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
