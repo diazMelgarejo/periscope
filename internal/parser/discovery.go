@@ -152,7 +152,11 @@ func DiscoverOpenCodeSessions(root string) []DiscoveredFile {
 }
 
 // FindOpenCodeSourceFile locates a single OpenCode session source
-// path or SQLite backing file by raw session ID.
+// path or SQLite backing file by raw session ID. Returns "" when
+// the session is not present under this root so the caller
+// (Engine.FindSourceFile) can continue searching later configured
+// roots — important when an early hybrid root with an unrelated
+// opencode.db could otherwise shadow a session in a later root.
 func FindOpenCodeSourceFile(root, sessionID string) string {
 	if !IsValidSessionID(sessionID) {
 		return ""
@@ -161,48 +165,99 @@ func FindOpenCodeSourceFile(root, sessionID string) string {
 	src := ResolveOpenCodeSource(root)
 	switch src.Mode {
 	case OpenCodeSourceStorage:
-		entries, err := os.ReadDir(src.SessionRoot)
-		if err != nil {
-			return ""
+		if entries, err := os.ReadDir(src.SessionRoot); err == nil {
+			for _, entry := range entries {
+				if !isDirOrSymlink(entry, src.SessionRoot) {
+					continue
+				}
+				path := filepath.Join(
+					src.SessionRoot, entry.Name(),
+					sessionID+".json",
+				)
+				if info, err := os.Stat(path); err == nil &&
+					!info.IsDir() {
+					return path
+				}
+			}
 		}
-		for _, entry := range entries {
-			if !isDirOrSymlink(entry, src.SessionRoot) {
-				continue
-			}
-			path := filepath.Join(
-				src.SessionRoot, entry.Name(),
-				sessionID+".json",
+		if OpenCodeSQLiteSessionExists(src.DBPath, sessionID) {
+			return OpenCodeSQLiteVirtualPath(
+				src.DBPath, sessionID,
 			)
-			if info, err := os.Stat(path); err == nil &&
-				!info.IsDir() {
-				return path
-			}
 		}
 		return ""
 	case OpenCodeSourceSQLite:
-		return OpenCodeSQLiteVirtualPath(
-			src.DBPath, sessionID,
-		)
+		if OpenCodeSQLiteSessionExists(src.DBPath, sessionID) {
+			return OpenCodeSQLiteVirtualPath(
+				src.DBPath, sessionID,
+			)
+		}
+		return ""
 	default:
 		return ""
 	}
 }
 
+// OpenCodeStorageSessionIDs returns the set of session IDs that
+// have a JSON file under storage/session/*/ in the given root.
+// Returns nil for non-storage roots. In hybrid roots (storage and
+// SQLite both present) the storage transcript is canonical, so
+// callers use this to skip duplicate SQLite metas during sync.
+func OpenCodeStorageSessionIDs(root string) map[string]struct{} {
+	src := ResolveOpenCodeSource(root)
+	if src.Mode != OpenCodeSourceStorage {
+		return nil
+	}
+	entries, err := os.ReadDir(src.SessionRoot)
+	if err != nil {
+		return nil
+	}
+	ids := make(map[string]struct{})
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, src.SessionRoot) {
+			continue
+		}
+		projectDir := filepath.Join(src.SessionRoot, entry.Name())
+		sessionEntries, err := os.ReadDir(projectDir)
+		if err != nil {
+			continue
+		}
+		for _, sessionEntry := range sessionEntries {
+			name := sessionEntry.Name()
+			if sessionEntry.IsDir() ||
+				!strings.HasSuffix(name, ".json") {
+				continue
+			}
+			id := strings.TrimSuffix(name, ".json")
+			if id == "" {
+				continue
+			}
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
 // ResolveOpenCodeWatchRoots returns the directories that should be
-// watched for live OpenCode updates under a configured root. Storage
-// mode targets the storage/ subtree so fsnotify does not recurse over
-// unrelated opencode state (binaries, logs, caches, the SQLite DB),
+// watched for live OpenCode updates under a configured root. Pure
+// storage mode targets the storage/ subtree so fsnotify does not
+// recurse over unrelated opencode state (binaries, logs, caches),
 // while still covering the session/message/part subdirs — including
 // ones that OpenCode creates lazily after the watcher starts, since
-// the watcher auto-adds new subdirectories on Create events. SQLite
-// mode keeps the root as the watch target since the DB sits directly
-// under it.
+// the watcher auto-adds new subdirectories on Create events. Hybrid
+// storage+SQLite roots and pure SQLite mode watch the root so DB/WAL
+// updates are observed too.
 func ResolveOpenCodeWatchRoots(root string) []string {
 	if root == "" {
 		return nil
 	}
-	switch ResolveOpenCodeSource(root).Mode {
+	src := ResolveOpenCodeSource(root)
+	switch src.Mode {
 	case OpenCodeSourceStorage:
+		if info, err := os.Stat(src.DBPath); err == nil &&
+			!info.IsDir() {
+			return []string{root}
+		}
 		return []string{filepath.Join(root, "storage")}
 	case OpenCodeSourceSQLite:
 		return []string{root}

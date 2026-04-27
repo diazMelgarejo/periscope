@@ -792,27 +792,25 @@ func (e *Engine) classifyOpenCodePath(
 		if openCodeDir == "" {
 			continue
 		}
-		src := parser.ResolveOpenCodeSource(openCodeDir)
-		if src.Mode != parser.OpenCodeSourceStorage {
-			if src.Mode != parser.OpenCodeSourceSQLite {
-				continue
-			}
-			rel, ok := isUnder(openCodeDir, path)
-			if !ok {
-				continue
-			}
-			base := filepath.Base(rel)
-			if rel == "opencode.db" ||
-				strings.HasPrefix(base, "opencode.db-") {
+		rel, ok := isUnder(openCodeDir, path)
+		if !ok {
+			continue
+		}
+		base := filepath.Base(rel)
+		if rel == "opencode.db" ||
+			strings.HasPrefix(base, "opencode.db-") {
+			dbPath := filepath.Join(openCodeDir, "opencode.db")
+			if info, err := os.Stat(dbPath); err == nil &&
+				!info.IsDir() {
 				return parser.DiscoveredFile{
-					Path:  src.DBPath,
+					Path:  dbPath,
 					Agent: parser.AgentOpenCode,
 				}, true
 			}
 			continue
 		}
-		rel, ok := isUnder(openCodeDir, path)
-		if !ok {
+		if parser.ResolveOpenCodeSource(openCodeDir).Mode !=
+			parser.OpenCodeSourceStorage {
 			continue
 		}
 		parts := strings.Split(rel, sep)
@@ -1581,11 +1579,10 @@ func (e *Engine) syncOpenCode(
 func (e *Engine) syncOneOpenCode(
 	ctx context.Context, dir string,
 ) []pendingWrite {
-	src := parser.ResolveOpenCodeSource(dir)
-	if src.Mode != parser.OpenCodeSourceSQLite {
+	dbPath := filepath.Join(dir, "opencode.db")
+	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
 		return nil
 	}
-	dbPath := filepath.Join(dir, "opencode.db")
 
 	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
 	if err != nil {
@@ -1596,8 +1593,13 @@ func (e *Engine) syncOneOpenCode(
 		return nil
 	}
 
+	storageIDs := parser.OpenCodeStorageSessionIDs(dir)
+
 	var changed []string
 	for _, m := range metas {
+		if _, ok := storageIDs[m.SessionID]; ok {
+			continue
+		}
 		_, storedMtime, ok :=
 			e.db.GetFileInfoByPath(m.VirtualPath)
 		if ok && storedMtime == m.FileMtime &&
@@ -2393,8 +2395,14 @@ func (e *Engine) processOpenCode(
 		if err != nil {
 			return processResult{err: err}
 		}
+		storageIDs := parser.OpenCodeStorageSessionIDs(
+			filepath.Dir(file.Path),
+		)
 		var results []parser.ParseResult
 		for _, meta := range metas {
+			if _, ok := storageIDs[meta.SessionID]; ok {
+				continue
+			}
 			_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
 			if ok && storedMtime == meta.FileMtime &&
 				e.db.GetDataVersionByPath(meta.VirtualPath) >=
@@ -3902,11 +3910,11 @@ func (e *Engine) syncSingleOpenCode(
 		if dir == "" {
 			continue
 		}
-		if parser.ResolveOpenCodeSource(dir).Mode !=
-			parser.OpenCodeSourceSQLite {
+		dbPath := filepath.Join(dir, "opencode.db")
+		if info, err := os.Stat(dbPath); err != nil ||
+			info.IsDir() {
 			continue
 		}
-		dbPath := filepath.Join(dir, "opencode.db")
 		sess, msgs, err := parser.ParseOpenCodeSession(
 			dbPath, rawID, e.machine,
 		)
