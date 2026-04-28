@@ -25,6 +25,13 @@ const (
 	maxWorkers = 8
 )
 
+type syncWriteMode int
+
+const (
+	syncWriteDefault syncWriteMode = iota
+	syncWriteBulk
+)
+
 var errSessionPreserved = errors.New("session preserved")
 
 // Emitter is notified after a sync pass writes data. Implementations
@@ -261,6 +268,7 @@ func (e *Engine) SyncPaths(paths []string) {
 	results := e.startWorkers(context.Background(), files)
 	stats = e.collectAndBatch(
 		context.Background(), results, len(files), nil,
+		syncWriteDefault,
 	)
 	e.persistSkipCache()
 
@@ -1004,10 +1012,42 @@ func (e *Engine) ResyncAll(
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
 
+	// The temp DB is not swapped into production until the end,
+	// so avoid per-row FTS trigger work during the bulk load and
+	// rebuild the index once all message rows are final.
+	ftsDropped := false
+	if newDB.HasFTS() {
+		tFTS := time.Now()
+		if err := newDB.DropFTS(); err != nil {
+			log.Printf("resync: drop temp fts: %v", err)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			stats = SyncStats{
+				Aborted: true,
+				Warnings: []string{
+					"resync failed: drop temp fts: " +
+						err.Error(),
+				},
+			}
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return
+		}
+		ftsDropped = true
+		log.Printf(
+			"resync: drop temp fts: %s",
+			time.Since(tFTS).Round(time.Millisecond),
+		)
+	}
+
 	// 3. Point engine at newDB and sync into it.
 	e.openCodeArchiveStore = origDB
 	e.db = newDB
-	stats = e.syncAllLocked(ctx, onProgress, time.Time{})
+	stats = e.syncAllLocked(
+		ctx, onProgress, time.Time{}, syncWriteBulk,
+	)
 	e.db = origDB // restore immediately
 	e.openCodeArchiveStore = nil
 
@@ -1169,6 +1209,32 @@ func (e *Engine) ResyncAll(
 		log.Printf("resync: reclassify is_automated: %v", err)
 	}
 
+	if ftsDropped {
+		tFTS := time.Now()
+		if err := newDB.RebuildFTS(); err != nil {
+			log.Printf("resync: rebuild fts: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"fts rebuild failed, aborting swap: "+
+					err.Error(),
+			)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			if rerr := origDB.Reopen(); rerr != nil {
+				log.Printf("resync: recovery reopen: %v", rerr)
+			}
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats
+		}
+		log.Printf(
+			"resync: rebuild fts: %s",
+			time.Since(tFTS).Round(time.Millisecond),
+		)
+	}
+
 	// 5. Close newDB and swap files, then reopen origDB.
 	newDB.Close()
 
@@ -1278,7 +1344,9 @@ func (e *Engine) SyncAll(
 		}
 	}()
 	defer e.syncMu.Unlock()
-	stats = e.syncAllLocked(ctx, onProgress, time.Time{})
+	stats = e.syncAllLocked(
+		ctx, onProgress, time.Time{}, syncWriteDefault,
+	)
 	return
 }
 
@@ -1299,12 +1367,15 @@ func (e *Engine) SyncAllSince(
 		}
 	}()
 	defer e.syncMu.Unlock()
-	stats = e.syncAllLocked(ctx, onProgress, since)
+	stats = e.syncAllLocked(
+		ctx, onProgress, since, syncWriteDefault,
+	)
 	return
 }
 
 func (e *Engine) syncAllLocked(
 	ctx context.Context, onProgress ProgressFunc, since time.Time,
+	writeMode syncWriteMode,
 ) SyncStats {
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
@@ -1361,7 +1432,7 @@ func (e *Engine) syncAllLocked(
 	tWorkers := time.Now()
 	results := e.startWorkers(ctx, all)
 	stats := e.collectAndBatch(
-		ctx, results, len(all), onProgress,
+		ctx, results, len(all), onProgress, writeMode,
 	)
 	if verbose {
 		log.Printf(
@@ -1391,18 +1462,28 @@ func (e *Engine) syncAllLocked(
 		stats.TotalSessions += len(ocPending)
 		tWrite := time.Now()
 		var ocWritten int
-		for _, pw := range ocPending {
-			if ctx.Err() != nil {
-				break
-			}
-			switch err := e.writeSessionFull(pw); {
-			case err == nil:
-				ocWritten++
-			case errors.Is(err, db.ErrSessionExcluded),
-				errors.Is(err, errSessionPreserved):
-				// Intentional skip, not a failure.
-			default:
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			ocWritten, _, failedWrites = e.writeBatch(
+				ocPending, writeMode, true,
+			)
+			for range failedWrites {
 				stats.RecordFailed()
+			}
+		} else {
+			for _, pw := range ocPending {
+				if ctx.Err() != nil {
+					break
+				}
+				switch err := e.writeSessionFull(pw); {
+				case err == nil:
+					ocWritten++
+				case errors.Is(err, db.ErrSessionExcluded),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
 			}
 		}
 		stats.RecordSynced(ocWritten)
@@ -1433,18 +1514,28 @@ func (e *Engine) syncAllLocked(
 		stats.TotalSessions += len(warpPending)
 		tWrite := time.Now()
 		var warpWritten int
-		for _, pw := range warpPending {
-			if ctx.Err() != nil {
-				break
-			}
-			switch err := e.writeSessionFull(pw); {
-			case err == nil:
-				warpWritten++
-			case errors.Is(err, db.ErrSessionExcluded),
-				errors.Is(err, errSessionPreserved):
-				// Intentional skip, not a failure.
-			default:
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			warpWritten, _, failedWrites = e.writeBatch(
+				warpPending, writeMode, true,
+			)
+			for range failedWrites {
 				stats.RecordFailed()
+			}
+		} else {
+			for _, pw := range warpPending {
+				if ctx.Err() != nil {
+					break
+				}
+				switch err := e.writeSessionFull(pw); {
+				case err == nil:
+					warpWritten++
+				case errors.Is(err, db.ErrSessionExcluded),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
 			}
 		}
 		stats.RecordSynced(warpWritten)
@@ -1648,12 +1739,14 @@ func (e *Engine) startWorkers(
 	files []parser.DiscoveredFile,
 ) <-chan syncJob {
 	workers := min(max(runtime.NumCPU(), 2), maxWorkers)
+	buffer := max(workers*2, 1)
 
-	jobs := make(chan parser.DiscoveredFile, len(files))
-	results := make(chan syncJob, len(files))
+	jobs := make(chan parser.DiscoveredFile, buffer)
+	results := make(chan syncJob, buffer)
 
+	var wg gosync.WaitGroup
 	for range workers {
-		go func() {
+		wg.Go(func() {
 			for file := range jobs {
 				if ctx.Err() != nil {
 					results <- syncJob{
@@ -1669,13 +1762,17 @@ func (e *Engine) startWorkers(
 					path:          file.Path,
 				}
 			}
-		}()
+		})
 	}
 
-	for _, f := range files {
-		jobs <- f
-	}
-	close(jobs)
+	go func() {
+		for _, f := range files {
+			jobs <- f
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
 	return results
 }
 
@@ -1687,6 +1784,7 @@ func (e *Engine) collectAndBatch(
 	ctx context.Context,
 	results <-chan syncJob, total int,
 	onProgress ProgressFunc,
+	writeMode syncWriteMode,
 ) SyncStats {
 	var stats SyncStats
 	stats.TotalSessions = total
@@ -1768,9 +1866,12 @@ func (e *Engine) collectAndBatch(
 		}
 
 		if len(pending) >= batchSize {
-			writtenSessions, writtenMessages :=
-				e.writeBatch(pending)
+			writtenSessions, writtenMessages, failedWrites :=
+				e.writeBatch(pending, writeMode, false)
 			stats.RecordSynced(writtenSessions)
+			for range failedWrites {
+				stats.RecordFailed()
+			}
 			progress.MessagesIndexed += writtenMessages
 			pending = pending[:0]
 		}
@@ -1783,9 +1884,12 @@ func (e *Engine) collectAndBatch(
 
 flush:
 	if len(pending) > 0 {
-		writtenSessions, writtenMessages :=
-			e.writeBatch(pending)
+		writtenSessions, writtenMessages, failedWrites :=
+			e.writeBatch(pending, writeMode, false)
 		stats.RecordSynced(writtenSessions)
+		for range failedWrites {
+			stats.RecordFailed()
+		}
 		progress.MessagesIndexed += writtenMessages
 	}
 
@@ -3110,14 +3214,18 @@ type pendingWrite struct {
 
 func (e *Engine) writeBatch(
 	batch []pendingWrite,
-) (writtenSessions, writtenMessages int) {
+	writeMode syncWriteMode,
+	forceReplace bool,
+) (writtenSessions, writtenMessages, failedSessions int) {
+	if writeMode == syncWriteBulk {
+		return e.writeBatchBulk(batch, forceReplace)
+	}
+
 	for _, pw := range batch {
-		msgs := toDBMessages(pw, e.blockedResultCategories)
-		s := toDBSession(pw)
-		s.MessageCount, s.UserMessageCount =
-			postFilterCounts(msgs)
-		e.applyRemoteRewrites(&s, msgs)
-		s.IsAutomated = isAutomatedFromSession(s)
+		s, msgs, ok := e.prepareSessionWrite(pw)
+		if !ok {
+			continue
+		}
 
 		// Detect stale parser version BEFORE UpsertSession
 		// overwrites it. Existing message rows from an
@@ -3129,12 +3237,6 @@ func (e *Engine) writeBatch(
 		if existing := e.db.GetSessionDataVersion(s.ID); existing > 0 &&
 			existing < db.CurrentDataVersion() {
 			stale = true
-		}
-		if e.shouldPreserveOpenCodeArchive(
-			pw.sess.Agent, pw.sess.File.Path, s.ID,
-			pw.sess.File.Mtime, derefString(s.FileHash), msgs,
-		) {
-			continue
 		}
 
 		// UpsertSession first: the session row must exist
@@ -3155,10 +3257,11 @@ func (e *Engine) writeBatch(
 				continue
 			}
 			log.Printf("upsert session %s: %v", s.ID, err)
+			failedSessions++
 			continue
 		}
 
-		replaceMessages := stale ||
+		replaceMessages := forceReplace || stale ||
 			pw.sess.Agent == parser.AgentOpenCode
 
 		var werr error
@@ -3172,6 +3275,7 @@ func (e *Engine) writeBatch(
 				"write messages for %s: %v",
 				s.ID, werr,
 			)
+			failedSessions++
 			continue
 		}
 
@@ -3199,7 +3303,80 @@ func (e *Engine) writeBatch(
 		writtenSessions++
 		writtenMessages += len(msgs)
 	}
-	return writtenSessions, writtenMessages
+	return writtenSessions, writtenMessages, failedSessions
+}
+
+func (e *Engine) prepareSessionWrite(
+	pw pendingWrite,
+) (db.Session, []db.Message, bool) {
+	msgs := toDBMessages(pw, e.blockedResultCategories)
+	s := toDBSession(pw)
+	s.MessageCount, s.UserMessageCount =
+		postFilterCounts(msgs)
+	e.applyRemoteRewrites(&s, msgs)
+	s.IsAutomated = isAutomatedFromSession(s)
+
+	if e.shouldPreserveOpenCodeArchive(
+		pw.sess.Agent, pw.sess.File.Path, s.ID,
+		pw.sess.File.Mtime, derefString(s.FileHash), msgs,
+	) {
+		return db.Session{}, nil, false
+	}
+	return s, msgs, true
+}
+
+type batchSourceFile struct {
+	path  string
+	mtime int64
+}
+
+func (e *Engine) writeBatchBulk(
+	batch []pendingWrite, forceReplace bool,
+) (writtenSessions, writtenMessages, failedSessions int) {
+	writes := make([]db.SessionBatchWrite, 0, len(batch))
+	sources := make(map[string]batchSourceFile, len(batch))
+
+	for _, pw := range batch {
+		s, msgs, ok := e.prepareSessionWrite(pw)
+		if !ok {
+			continue
+		}
+		replaceMessages := forceReplace ||
+			pw.sess.Agent == parser.AgentOpenCode
+		writes = append(writes, db.SessionBatchWrite{
+			Session:         s,
+			Messages:        msgs,
+			Signals:         computeSignalsFromMessages(s, msgs),
+			DataVersion:     db.CurrentDataVersion(),
+			ReplaceMessages: replaceMessages,
+		})
+		if pw.sess.File.Path != "" {
+			sources[s.ID] = batchSourceFile{
+				path:  pw.sess.File.Path,
+				mtime: pw.sess.File.Mtime,
+			}
+		}
+	}
+	if len(writes) == 0 {
+		return 0, 0, 0
+	}
+
+	result, err := e.db.WriteSessionBatch(writes)
+	if err != nil {
+		log.Printf("write session batch: %v", err)
+		return 0, 0, len(writes)
+	}
+	for _, id := range result.ExcludedIDs {
+		if source, ok := sources[id]; ok && source.path != "" {
+			e.cacheSkip(source.path, source.mtime)
+		}
+	}
+	for _, err := range result.Errors {
+		log.Printf("write session batch: %v", err)
+	}
+	return result.WrittenSessions,
+		result.WrittenMessages,
+		result.FailedSessions
 }
 
 // writeIncremental appends new messages and partially updates
