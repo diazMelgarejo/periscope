@@ -57,3 +57,6 @@ html/
 .github/hooks/
 .superpowers/
 .worktrees/
+
+# Visual verification scratch — per-task screenshot/HTML capture dirs.
+.test-data*/
