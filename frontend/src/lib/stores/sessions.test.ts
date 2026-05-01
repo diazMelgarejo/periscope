@@ -10,6 +10,7 @@ import {
   buildSessionGroups,
   parseFiltersFromParams,
   filtersToParams,
+  splitExcludeProjectParam,
 } from "./sessions.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
@@ -212,6 +213,13 @@ describe("SessionsStore", () => {
         exclude_project: "unknown",
       });
       expect(f.project).toBe("");
+      expect(f.hideUnknownProject).toBe(true);
+    });
+
+    it("should set hideUnknown from CSV exclude_project values", () => {
+      const f = parseFiltersFromParams({
+        exclude_project: "alpha,unknown",
+      });
       expect(f.hideUnknownProject).toBe(true);
     });
 
@@ -713,6 +721,15 @@ describe("SessionsStore", () => {
       expect(sessions.filters.hideUnknownProject).toBe(true);
     });
 
+    it("should split hide-unknown from usage project exclusions", () => {
+      expect(
+        splitExcludeProjectParam("alpha,unknown,beta"),
+      ).toEqual({
+        hideUnknownProject: true,
+        usageExcludedProjects: "alpha,beta",
+      });
+    });
+
     it("should be included in hasActiveFilters", () => {
       sessions.filters.hideUnknownProject = true;
       expect(sessions.hasActiveFilters).toBe(true);
@@ -852,6 +869,22 @@ describe("SessionsStore", () => {
       expect(sessions.filters.machine).toBe("");
       expect(sessions.selectedMachines).toEqual([]);
       expectListSessionsCalledWith({ machine: undefined });
+    });
+  });
+
+  describe("agent filter", () => {
+    it("should clear the filter when the last agent is removed", async () => {
+      sessions.filters.agent = "opencode";
+
+      sessions.toggleAgentFilter("opencode");
+      await vi.waitFor(() => {
+        expect(api.listSessions).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.agent).toBe("");
+      expect(sessions.selectedAgents).toEqual([]);
+      expect(sessions.isAgentSelected("opencode")).toBe(false);
+      expectListSessionsCalledWith({ agent: undefined });
     });
   });
 

@@ -89,17 +89,19 @@ describe("UsageStore filter persistence", () => {
     expect(saved.excludedAgents).toBe("claude");
   });
 
-  it("restores exclude filters from localStorage on load", async () => {
+  it("restores usage filters from localStorage on load", async () => {
     localStorage.setItem(
       "usage-filters",
       JSON.stringify({
         excludedProjects: "saved-proj",
         excludedModels: "opus",
+        selectedModels: "sonnet",
       }),
     );
     const { usage } = await loadStore();
     expect(usage.excludedProjects).toBe("saved-proj");
-    expect(usage.excludedModels).toBe("opus");
+    expect(usage.excludedModels).toBe("");
+    expect(usage.selectedModels).toBe("sonnet");
     expect(usage.excludedAgents).toBe("");
   });
 
@@ -159,6 +161,53 @@ describe("UsageStore group-by linking", () => {
       timeSeries: { groupBy: "agent" },
       attribution: { groupBy: "agent" },
     });
+  });
+});
+
+describe("UsageStore session filter params", () => {
+  beforeEach(() => {
+    installStorage();
+    vi.clearAllMocks();
+  });
+
+  it("passes shared session filters to usage endpoints", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const api = await import("../api/client.js");
+
+    sessions.filters.project = "proj-a";
+    sessions.filters.machine = "host-a,host-b";
+    sessions.filters.agent = "claude,codex";
+    sessions.filters.minUserMessages = 5;
+    sessions.filters.includeOneShot = false;
+    sessions.filters.includeAutomated = true;
+    sessions.filters.recentlyActive = true;
+
+    await usage.fetchAll();
+
+    expect(api.getUsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        project: "proj-a",
+        machine: "host-a,host-b",
+        agent: "claude,codex",
+        min_user_messages: 5,
+        include_one_shot: false,
+        include_automated: true,
+      }),
+    );
+    const params = vi.mocked(api.getUsageSummary).mock.lastCall?.[0];
+    expect(params?.active_since).toEqual(expect.any(String));
+
+    expect(api.getUsageTopSessions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        project: "proj-a",
+        machine: "host-a,host-b",
+        agent: "claude,codex",
+        min_user_messages: 5,
+        include_one_shot: false,
+        include_automated: true,
+      }),
+    );
   });
 });
 
@@ -239,7 +288,7 @@ describe("UsageStore rolling default date range", () => {
 });
 
 describe("buildUsageUrlParams", () => {
-  it("omits from/to when isPinned is false with default window, includes excludes", async () => {
+  it("omits from/to when isPinned is false with default window, includes header filters", async () => {
     const { buildUsageUrlParams } = await loadStore();
     const params = buildUsageUrlParams({
       from: "2026-03-26",
@@ -249,11 +298,11 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "p1",
       excludedAgents: "a1",
       excludedModels: "m1",
+      selectedModels: "m2",
     });
     expect(params).toEqual({
       exclude_project: "p1",
-      exclude_agent: "a1",
-      exclude_model: "m1",
+      model: "m2",
     });
   });
 
@@ -267,6 +316,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedAgents: "",
       excludedModels: "",
+      selectedModels: "",
     });
     expect(params).toEqual({
       from: "2026-01-01",
@@ -284,6 +334,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedAgents: "",
       excludedModels: "",
+      selectedModels: "",
     });
     expect(params).toEqual({});
   });
@@ -298,6 +349,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedAgents: "",
       excludedModels: "",
+      selectedModels: "",
     });
     expect(params).toEqual({});
   });
@@ -312,6 +364,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedAgents: "",
       excludedModels: "",
+      selectedModels: "",
     });
     expect(params).toEqual({ window_days: "7" });
   });
@@ -326,10 +379,34 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedAgents: "",
       excludedModels: "",
+      selectedModels: "",
     });
     expect(params).toEqual({
       from: "2026-01-01",
       to: "2026-01-15",
+    });
+  });
+});
+
+describe("mergeUsageAndSessionUrlParams", () => {
+  it("merges overlapping CSV params instead of overwriting usage filters", async () => {
+    const { mergeUsageAndSessionUrlParams } = await loadStore();
+
+    expect(
+      mergeUsageAndSessionUrlParams(
+        {
+          exclude_project: "alpha,beta",
+          model: "gpt-5.5",
+        },
+        {
+          exclude_project: "unknown,beta",
+          machine: "host-a",
+        },
+      ),
+    ).toEqual({
+      exclude_project: "alpha,beta,unknown",
+      model: "gpt-5.5",
+      machine: "host-a",
     });
   });
 });
