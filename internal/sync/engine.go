@@ -459,13 +459,26 @@ func (e *Engine) classifyOnePath(
 					Agent: parser.AgentCopilot,
 				}, true
 			case 2:
-				if parts[1] != "events.jsonl" {
-					continue
+				if parts[1] == "events.jsonl" {
+					return parser.DiscoveredFile{
+						Path:  path,
+						Agent: parser.AgentCopilot,
+					}, true
 				}
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentCopilot,
-				}, true
+				// workspace.yaml changes should trigger a re-parse
+				// of the sibling events.jsonl.
+				if parts[1] == "workspace.yaml" {
+					eventsPath := filepath.Join(
+						stateDir, parts[0], "events.jsonl",
+					)
+					if _, err := os.Stat(eventsPath); err == nil {
+						return parser.DiscoveredFile{
+							Path:  eventsPath,
+							Agent: parser.AgentCopilot,
+						}, true
+					}
+				}
+				continue
 			default:
 				continue
 			}
@@ -1643,6 +1656,11 @@ func discoveredFileMtime(
 	if err != nil {
 		return 0, err
 	}
+
+	if file.Agent == parser.AgentCopilot {
+		return copilotEffectiveMtime(file.Path, info), nil
+	}
+
 	return info.ModTime().UnixNano(), nil
 }
 
@@ -2590,7 +2608,12 @@ func (e *Engine) shouldSkipOpenCodeByPath(path string) bool {
 func (e *Engine) processCopilot(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
+	// Use effective mtime = max(events.jsonl, workspace.yaml) so
+	// that a new or updated workspace.yaml triggers a re-parse and
+	// the stored mtime stays consistent with what we compare against
+	// on subsequent syncs (preventing oscillation).
+	effectiveMtime := copilotEffectiveMtime(file.Path, info)
+	if e.shouldSkipCopilot(file.Path, info, effectiveMtime) {
 		return processResult{skip: true}
 	}
 
@@ -2604,6 +2627,10 @@ func (e *Engine) processCopilot(
 		return processResult{}
 	}
 
+	if effectiveMtime > sess.File.Mtime {
+		sess.File.Mtime = effectiveMtime
+	}
+
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {
 		sess.File.Hash = hash
@@ -2614,6 +2641,50 @@ func (e *Engine) processCopilot(
 			{Session: *sess, Messages: msgs},
 		},
 	}
+}
+
+// copilotEffectiveMtime returns max(events.jsonl mtime,
+// workspace.yaml mtime). For flat .jsonl sessions (no
+// workspace.yaml sibling) it returns the events.jsonl mtime.
+func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
+	m := info.ModTime().UnixNano()
+	if filepath.Base(eventsPath) != "events.jsonl" {
+		return m
+	}
+	yamlPath := filepath.Join(
+		filepath.Dir(eventsPath), "workspace.yaml",
+	)
+	if yi, err := os.Stat(yamlPath); err == nil {
+		if ym := yi.ModTime().UnixNano(); ym > m {
+			m = ym
+		}
+	}
+	return m
+}
+
+// shouldSkipCopilot is like shouldSkipByPath but uses the
+// pre-computed effectiveMtime (max of events.jsonl and
+// workspace.yaml) for the mtime comparison, keeping the stored
+// value consistent with what we compare against on next sync.
+func (e *Engine) shouldSkipCopilot(
+	path string, info os.FileInfo, effectiveMtime int64,
+) bool {
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+	if storedSize != info.Size() || storedMtime != effectiveMtime {
+		return false
+	}
+	if e.db.GetDataVersionByPath(lookupPath) <
+		db.CurrentDataVersion() {
+		return false
+	}
+	return true
 }
 
 func (e *Engine) processGemini(
