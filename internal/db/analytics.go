@@ -54,6 +54,7 @@ type AnalyticsFilter struct {
 	ExcludeOneShot   bool   // exclude sessions with user_message_count <= 1
 	ExcludeAutomated bool   // exclude automated (roborev) sessions
 	ActiveSince      string // ISO timestamp cutoff
+	Termination      string // "", "clean", or "unclean"
 }
 
 // location loads the timezone or returns UTC on error.
@@ -225,6 +226,11 @@ func (f AnalyticsFilter) buildWhereWithDate(
 		preds = append(preds,
 			"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= ?")
 		args = append(args, f.ActiveSince)
+	}
+
+	if pred, pargs := buildTerminationPredSQLite(f.Termination); pred != "" {
+		preds = append(preds, pred)
+		args = append(args, pargs...)
 	}
 
 	return strings.Join(preds, " AND "), args
@@ -2693,12 +2699,19 @@ func AggregateSignals(
 
 // TopSession holds summary info for a ranked session.
 type TopSession struct {
-	ID           string  `json:"id"`
-	Project      string  `json:"project"`
-	FirstMessage *string `json:"first_message"`
-	MessageCount int     `json:"message_count"`
-	OutputTokens int     `json:"output_tokens"`
-	DurationMin  float64 `json:"duration_min"`
+	ID                string  `json:"id"`
+	Project           string  `json:"project"`
+	FirstMessage      *string `json:"first_message"`
+	MessageCount      int     `json:"message_count"`
+	OutputTokens      int     `json:"output_tokens"`
+	DurationMin       float64 `json:"duration_min"`
+	// StartedAt and EndedAt are included so the frontend can
+	// derive a recency-based status tier — the StatusDot in the
+	// Top Sessions column needs the same time window inputs as
+	// the sidebar's session list.
+	StartedAt         *string `json:"started_at,omitempty"`
+	EndedAt           *string `json:"ended_at,omitempty"`
+	TerminationStatus *string `json:"termination_status,omitempty"`
 }
 
 // TopSessionsResponse wraps the top sessions list.
@@ -2746,7 +2759,8 @@ func (db *DB) GetAnalyticsTopSessions(
 
 	query := `SELECT id, ` + dateCol + `, project,
 		first_message, message_count,
-		total_output_tokens, started_at, ended_at
+		total_output_tokens, started_at, ended_at,
+		termination_status
 		FROM sessions WHERE ` + where +
 		` ORDER BY ` + orderExpr + ` LIMIT 200`
 
@@ -2760,11 +2774,12 @@ func (db *DB) GetAnalyticsTopSessions(
 	var sessions []TopSession
 	for rows.Next() {
 		var id, ts, project string
-		var firstMsg, startedAt, endedAt *string
+		var firstMsg, startedAt, endedAt, termStatus *string
 		var mc, outputTokens int
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
 			&mc, &outputTokens, &startedAt, &endedAt,
+			&termStatus,
 		); err != nil {
 			return TopSessionsResponse{},
 				fmt.Errorf("scanning top session: %w", err)
@@ -2786,12 +2801,15 @@ func (db *DB) GetAnalyticsTopSessions(
 			}
 		}
 		sessions = append(sessions, TopSession{
-			ID:           id,
-			Project:      project,
-			FirstMessage: firstMsg,
-			MessageCount: mc,
-			OutputTokens: outputTokens,
-			DurationMin:  durMin,
+			ID:                id,
+			Project:           project,
+			FirstMessage:      firstMsg,
+			MessageCount:      mc,
+			OutputTokens:      outputTokens,
+			DurationMin:       durMin,
+			StartedAt:         startedAt,
+			EndedAt:           endedAt,
+			TerminationStatus: termStatus,
 		})
 	}
 	if err := rows.Err(); err != nil {

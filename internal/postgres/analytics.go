@@ -175,6 +175,9 @@ func buildAnalyticsWhereWithDate(
 				" >= "+pb.add(f.ActiveSince)+
 				"::timestamptz")
 	}
+	if pred := pgTerminationPred(f.Termination, pb); pred != "" {
+		preds = append(preds, pred)
+	}
 	return strings.Join(preds, " AND ")
 }
 
@@ -2065,7 +2068,9 @@ func (s *Store) GetAnalyticsTopSessions(
 		first_message, message_count,
 		total_output_tokens,
 		EXTRACT(EPOCH FROM ended_at - started_at)
-			AS duration_sec
+			AS duration_sec,
+		started_at, ended_at,
+		termination_status
 		FROM sessions WHERE ` + where +
 		` ORDER BY ` + orderExpr + limitClause
 
@@ -2084,12 +2089,15 @@ func (s *Store) GetAnalyticsTopSessions(
 	for rows.Next() {
 		var id, project string
 		var ts *time.Time
-		var firstMsg *string
+		var startedAt, endedAt *time.Time
+		var firstMsg, termStatus *string
 		var mc, outputTokens int
 		var durationSec *float64
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
 			&mc, &outputTokens, &durationSec,
+			&startedAt, &endedAt,
+			&termStatus,
 		); err != nil {
 			return db.TopSessionsResponse{},
 				fmt.Errorf(
@@ -2109,13 +2117,25 @@ func (s *Store) GetAnalyticsTopSessions(
 		} else if needsGoSort {
 			continue
 		}
+		var startedStr, endedStr *string
+		if startedAt != nil {
+			s := FormatISO8601(*startedAt)
+			startedStr = &s
+		}
+		if endedAt != nil {
+			s := FormatISO8601(*endedAt)
+			endedStr = &s
+		}
 		sessions = append(sessions, db.TopSession{
-			ID:           id,
-			Project:      project,
-			FirstMessage: firstMsg,
-			MessageCount: mc,
-			OutputTokens: outputTokens,
-			DurationMin:  durMin,
+			ID:                id,
+			Project:           project,
+			FirstMessage:      firstMsg,
+			MessageCount:      mc,
+			OutputTokens:      outputTokens,
+			DurationMin:       durMin,
+			StartedAt:         startedStr,
+			EndedAt:           endedStr,
+			TerminationStatus: termStatus,
 		})
 	}
 	if err := rows.Err(); err != nil {

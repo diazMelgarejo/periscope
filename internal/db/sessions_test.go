@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestFindSessionIDsByPartial(t *testing.T) {
@@ -286,5 +287,194 @@ func TestUpsertSessionDoesNotAdvanceDataVersion(t *testing.T) {
 				"(must be preserved across UpsertSession)",
 			got, CurrentDataVersion(),
 		)
+	}
+}
+
+func TestUpsertSessionTerminationStatus(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	clean := "clean"
+	pending := "tool_call_pending"
+
+	tests := []struct {
+		name string
+		val  *string
+	}{
+		{name: "null", val: nil},
+		{name: "clean", val: &clean},
+		{name: "tool_call_pending", val: &pending},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "session_" + tc.name
+			s := Session{
+				ID:                id,
+				Project:           "p",
+				Machine:           "local",
+				Agent:             "claude",
+				MessageCount:      1,
+				UserMessageCount:  1,
+				TerminationStatus: tc.val,
+			}
+			if err := d.UpsertSession(s); err != nil {
+				t.Fatalf("upsert: %v", err)
+			}
+
+			got, err := d.GetSession(ctx, id)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if got == nil {
+				t.Fatal("session not found")
+			}
+
+			if (got.TerminationStatus == nil) != (tc.val == nil) {
+				t.Fatalf(
+					"nil mismatch: got=%v want=%v",
+					got.TerminationStatus, tc.val,
+				)
+			}
+			if got.TerminationStatus != nil && *got.TerminationStatus != *tc.val {
+				t.Fatalf(
+					"value mismatch: got=%q want=%q",
+					*got.TerminationStatus, *tc.val,
+				)
+			}
+		})
+	}
+}
+
+func TestListSessionsTerminationFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	clean := "clean"
+	pending := "tool_call_pending"
+	truncated := "truncated"
+
+	now := time.Now().UTC()
+	mkTS := func(d time.Duration) string {
+		return now.Add(-d).Format("2006-01-02T15:04:05.000Z")
+	}
+
+	insertAt := func(id string, age time.Duration, term *string) {
+		ts := mkTS(age)
+		s := Session{
+			ID:                id,
+			Project:           "p",
+			Machine:           "local",
+			Agent:             "claude",
+			StartedAt:         &ts,
+			EndedAt:           &ts,
+			MessageCount:      1,
+			UserMessageCount:  2,
+			TerminationStatus: term,
+		}
+		if err := d.UpsertSession(s); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	// Active (< 10 min idle): regardless of termination_status,
+	// these are surfaced by ?termination=active.
+	insertAt("active-clean", 1*time.Minute, &clean)
+	insertAt("active-pending", 2*time.Minute, &pending)
+
+	// Stale (10–60 min idle): surfaced by ?termination=stale.
+	insertAt("stale-clean", 30*time.Minute, &clean)
+	insertAt("stale-pending", 40*time.Minute, &pending)
+
+	// Idle > 60 min: surfaced by ?termination=unclean only when
+	// termination_status flags an issue.
+	insertAt("old-clean", 2*time.Hour, &clean)
+	insertAt("old-pending", 2*time.Hour, &pending)
+	insertAt("old-truncated", 3*time.Hour, &truncated)
+	insertAt("old-null", 2*time.Hour, nil)
+
+	collect := func(f SessionFilter) []string {
+		page, err := d.ListSessions(ctx, f)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := make([]string, len(page.Sessions))
+		for i, s := range page.Sessions {
+			ids[i] = s.ID
+		}
+		return ids
+	}
+
+	tests := []struct {
+		name        string
+		termination string
+		wantIDs     []string
+	}{
+		{
+			name:        "all (default)",
+			termination: "",
+			wantIDs: []string{
+				"active-clean", "active-pending",
+				"stale-clean", "stale-pending",
+				"old-clean", "old-pending",
+				"old-truncated", "old-null",
+			},
+		},
+		{
+			name:        "active",
+			termination: "active",
+			wantIDs:     []string{"active-clean", "active-pending"},
+		},
+		{
+			// Yellow only fires for parser-flagged sessions —
+			// stale-clean stays quiet, no false positive for
+			// sessions that ended normally.
+			name:        "stale",
+			termination: "stale",
+			wantIDs:     []string{"stale-pending"},
+		},
+		{
+			name:        "unclean",
+			termination: "unclean",
+			wantIDs:     []string{"old-pending", "old-truncated"},
+		},
+		{
+			// Multi-select: comma-separated values OR together,
+			// so "stale,unclean" surfaces every parser-flagged
+			// session past the active window.
+			name:        "stale or unclean",
+			termination: "stale,unclean",
+			wantIDs:     []string{"stale-pending", "old-pending", "old-truncated"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := collect(SessionFilter{Termination: tc.termination})
+			assertStringSetsEqual(t, got, tc.wantIDs)
+		})
+	}
+}
+
+// assertStringSetsEqual checks that two slices contain the same
+// elements regardless of order.
+func assertStringSetsEqual(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("len mismatch: got=%d want=%d (got=%v want=%v)",
+			len(got), len(want), got, want)
+	}
+	seen := make(map[string]int)
+	for _, s := range want {
+		seen[s]++
+	}
+	for _, s := range got {
+		seen[s]--
+	}
+	for s, n := range seen {
+		if n != 0 {
+			t.Fatalf("set mismatch on %q: leftover=%d (got=%v want=%v)",
+				s, n, got, want)
+		}
 	}
 }

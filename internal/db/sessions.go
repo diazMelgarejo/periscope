@@ -42,7 +42,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, created_at`
+	deleted_at, termination_status, created_at`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -65,7 +65,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, file_path, file_size, created_at`
+	deleted_at, termination_status, file_path, file_size, created_at`
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
@@ -87,7 +87,7 @@ const sessionFullCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, file_path, file_size, file_mtime,
+	deleted_at, termination_status, file_path, file_size, file_mtime,
 	file_inode, file_device,
 	file_hash, local_modified_at, created_at`
 
@@ -128,7 +128,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.DeletedAt, &s.CreatedAt,
+		&s.DeletedAt, &s.TerminationStatus, &s.CreatedAt,
 	)
 	return s, err
 }
@@ -178,15 +178,16 @@ type Session struct {
 	ParserMalformedLines   int      `json:"parser_malformed_lines,omitempty"`
 	IsTruncated            bool     `json:"is_truncated,omitempty"`
 
-	DeletedAt       *string `json:"deleted_at,omitempty"`
-	FilePath        *string `json:"file_path,omitempty"`
-	FileSize        *int64  `json:"file_size,omitempty"`
-	FileMtime       *int64  `json:"file_mtime,omitempty"`
-	FileInode       *int64  `json:"file_inode,omitempty"`
-	FileDevice      *int64  `json:"file_device,omitempty"`
-	FileHash        *string `json:"file_hash,omitempty"`
-	LocalModifiedAt *string `json:"local_modified_at,omitempty"`
-	CreatedAt       string  `json:"created_at"`
+	DeletedAt         *string `json:"deleted_at,omitempty"`
+	TerminationStatus *string `json:"termination_status,omitempty"`
+	FilePath          *string `json:"file_path,omitempty"`
+	FileSize          *int64  `json:"file_size,omitempty"`
+	FileMtime         *int64  `json:"file_mtime,omitempty"`
+	FileInode         *int64  `json:"file_inode,omitempty"`
+	FileDevice        *int64  `json:"file_device,omitempty"`
+	FileHash          *string `json:"file_hash,omitempty"`
+	LocalModifiedAt   *string `json:"local_modified_at,omitempty"`
+	CreatedAt         string  `json:"created_at"`
 }
 
 // SessionCursor is the opaque pagination token.
@@ -287,6 +288,76 @@ type SessionFilter struct {
 	MinToolFailures  *int     // minimum tool_failure_signal_count
 	Cursor           string   // opaque cursor from previous page
 	Limit            int
+	// Termination filters by termination_status:
+	//   "" or "all"  → no filter (default)
+	//   "clean"      → only sessions with status = 'clean'
+	//   "unclean"    → only sessions with status IN
+	//                  ('tool_call_pending', 'truncated')
+	Termination string
+}
+
+// activeWindow is the freshness window for "active" sessions
+// (last activity within this duration).
+const activeWindow = 10 * time.Minute
+
+// staleWindow is the upper bound for "stale" sessions. Past this
+// idle duration with an orphan tool call, the session is "unclean".
+const staleWindow = 60 * time.Minute
+
+// activityExprSQLite computes seconds-since-epoch of the most
+// recent activity timestamp. Used by both sessions and analytics
+// filters when classifying by status.
+const activityExprSQLite = "CAST(strftime('%s', " +
+	"COALESCE(ended_at, started_at, created_at)) AS INTEGER)"
+
+// buildTerminationPredSQLite returns a WHERE fragment and args for
+// the multi-state termination filter (active / stale / unclean).
+// The status value may be comma-separated to OR multiple states
+// (e.g. "stale,unclean"). Returns ("", nil) when empty or "all".
+//
+// Stale and unclean both require a parser red flag
+// (tool_call_pending or truncated). Sessions classified as clean
+// or with NULL termination_status never appear under those
+// filters — the parser-side classifier is the only positive
+// signal that something is wrong. Active is purely time-based:
+// any session written to in the last activeWindow qualifies.
+func buildTerminationPredSQLite(status string) (string, []any) {
+	if status == "" || status == "all" {
+		return "", nil
+	}
+	now := time.Now().Unix()
+	activeCutoff := now - int64(activeWindow.Seconds())
+	staleCutoff := now - int64(staleWindow.Seconds())
+	const flagged = "termination_status IN ('tool_call_pending', 'truncated')"
+
+	parts := strings.Split(status, ",")
+	preds := make([]string, 0, len(parts))
+	args := make([]any, 0, len(parts)*2)
+	for _, p := range parts {
+		switch strings.TrimSpace(p) {
+		case "active":
+			preds = append(preds, activityExprSQLite+" > ?")
+			args = append(args, activeCutoff)
+		case "stale":
+			preds = append(preds, "("+activityExprSQLite+" > ? AND "+
+				activityExprSQLite+" <= ? AND "+flagged+")")
+			args = append(args, staleCutoff, activeCutoff)
+		case "unclean":
+			preds = append(preds, "("+activityExprSQLite+" <= ? AND "+flagged+")")
+			args = append(args, staleCutoff)
+		case "clean":
+			preds = append(preds, "termination_status = 'clean'")
+		case "awaiting_user":
+			preds = append(preds, "termination_status = 'awaiting_user'")
+		}
+	}
+	if len(preds) == 0 {
+		return "", nil
+	}
+	if len(preds) == 1 {
+		return preds[0], args
+	}
+	return "(" + strings.Join(preds, " OR ") + ")", args
 }
 
 // SessionPage is a page of session results.
@@ -394,6 +465,11 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		filterPreds = append(filterPreds, "user_message_count >= ?")
 		filterArgs = append(filterArgs, f.MinUserMessages)
 	}
+	if pred, args := buildTerminationPredSQLite(f.Termination); pred != "" {
+		filterPreds = append(filterPreds, pred)
+		filterArgs = append(filterArgs, args...)
+	}
+	// "" and "all" add no predicate.
 
 	// ExcludeOneShot is handled separately from filterPreds
 	// when IncludeChildren is true. Children (subagents, forks)
@@ -630,7 +706,7 @@ func (db *DB) GetSessionFull(
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.DeletedAt, &s.FilePath, &s.FileSize,
+		&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 		&s.FileMtime, &s.FileInode, &s.FileDevice,
 		&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 	)
@@ -675,12 +751,13 @@ const upsertSessionSQL = `
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
 			is_automated,
+			termination_status,
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
 			is_truncated,
 			file_path, file_size, file_mtime,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -697,6 +774,7 @@ const upsertSessionSQL = `
 			has_total_output_tokens = excluded.has_total_output_tokens,
 			has_peak_context_tokens = excluded.has_peak_context_tokens,
 			is_automated = excluded.is_automated,
+			termination_status = excluded.termination_status,
 			cwd = excluded.cwd,
 			git_branch = excluded.git_branch,
 			source_session_id = excluded.source_session_id,
@@ -725,6 +803,7 @@ func upsertSessionArgs(s Session) []any {
 		s.TotalOutputTokens, s.PeakContextTokens,
 		s.HasTotalOutputTokens, s.HasPeakContextTokens,
 		sessionIsAutomated(s),
+		s.TerminationStatus,
 		s.Cwd, s.GitBranch, s.SourceSessionID,
 		s.SourceVersion, s.ParserMalformedLines,
 		s.IsTruncated,
@@ -1104,6 +1183,17 @@ func (db *DB) GetSessionForIncremental(
 // a row whose first parse predates a new pattern would stay
 // is_automated=0 indefinitely (UpsertSession sets the flag once
 // at insert; the incremental path never re-evaluates it).
+//
+// termination_status is cleared to NULL on every incremental
+// write. The classifier needs the full message slice to reach the
+// right verdict (orphan tool calls, awaiting_user, etc.) and the
+// incremental path only sees the new tail. Leaving the previous
+// classification in place would surface stale "tool_call_pending"
+// or "awaiting_user" indicators in the UI for up to 15 minutes
+// (the periodic full-resync interval) after the user appended a
+// resolving result or sent a new message. Clearing makes the
+// session render with the time-based StatusDot tier (working /
+// idle / quiet) until the next full sync reclassifies.
 func (db *DB) UpdateSessionIncremental(
 	id string,
 	endedAt *string,
@@ -1143,7 +1233,8 @@ func (db *DB) UpdateSessionIncremental(
 			total_output_tokens = ?,
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
-			has_peak_context_tokens = ?
+			has_peak_context_tokens = ?,
+			termination_status = NULL
 		WHERE id = ?`,
 		endedAt, msgCount, userMsgCount, isAutomated,
 		fileSize, fileMtime,
@@ -1520,7 +1611,7 @@ func (db *DB) FindPruneCandidates(
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.ParserMalformedLines, &s.IsTruncated,
-			&s.DeletedAt, &s.FilePath, &s.FileSize, &s.CreatedAt,
+			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize, &s.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning prune candidate: %w", err)
@@ -1796,7 +1887,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.ParserMalformedLines, &s.IsTruncated,
-			&s.DeletedAt, &s.FilePath, &s.FileSize,
+			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 		)

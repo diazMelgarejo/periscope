@@ -48,7 +48,7 @@ const pgSessionCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at`
+	deleted_at, termination_status`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
 type paramBuilder struct {
@@ -60,6 +60,69 @@ func (pb *paramBuilder) add(v any) string {
 	pb.n++
 	pb.args = append(pb.args, v)
 	return fmt.Sprintf("$%d", pb.n)
+}
+
+// pgActivityWindows holds the cutoff durations used by
+// pgTerminationPred. Kept in sync with the SQLite-side constants
+// in internal/db/sessions.go so both stores classify a session
+// the same way at the same wall-clock time.
+const (
+	pgActiveWindow = 10 * time.Minute
+	pgStaleWindow  = 60 * time.Minute
+)
+
+// pgActivityExpr returns the COALESCEd activity timestamp
+// expression used to compute a session's effective recency.
+const pgActivityExpr = "COALESCE(ended_at, started_at, created_at)"
+
+// pgTerminationPred returns a WHERE fragment for the multi-state
+// termination filter (active / stale / unclean). The status value
+// may be comma-separated to OR multiple states. Returns "" when
+// status is empty or "all".
+//
+// Stale and unclean both require a parser red flag — sessions with
+// termination_status NULL or 'clean' never appear under those
+// filters, so a short-lived agent that completes normally never
+// generates a yellow false-positive once it ages past 10 minutes.
+func pgTerminationPred(status string, pb *paramBuilder) string {
+	if status == "" || status == "all" {
+		return ""
+	}
+	now := time.Now().UTC()
+	activeCutoff := now.Add(-pgActiveWindow)
+	staleCutoff := now.Add(-pgStaleWindow)
+	const flagged = "termination_status IN ('tool_call_pending', 'truncated')"
+
+	parts := strings.Split(status, ",")
+	preds := make([]string, 0, len(parts))
+	for _, p := range parts {
+		switch strings.TrimSpace(p) {
+		case "active":
+			preds = append(preds,
+				pgActivityExpr+" > "+pb.add(activeCutoff))
+		case "stale":
+			preds = append(preds, "("+
+				pgActivityExpr+" > "+pb.add(staleCutoff)+
+				" AND "+pgActivityExpr+" <= "+pb.add(activeCutoff)+
+				" AND "+flagged+")")
+		case "unclean":
+			preds = append(preds, "("+
+				pgActivityExpr+" <= "+pb.add(staleCutoff)+
+				" AND "+flagged+")")
+		case "clean":
+			preds = append(preds, "termination_status = 'clean'")
+		case "awaiting_user":
+			preds = append(preds,
+				"termination_status = 'awaiting_user'")
+		}
+	}
+	if len(preds) == 0 {
+		return ""
+	}
+	if len(preds) == 1 {
+		return preds[0]
+	}
+	return "(" + strings.Join(preds, " OR ") + ")"
 }
 
 // scanPGSession scans a row with pgSessionCols into a
@@ -92,7 +155,7 @@ func scanPGSession(
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&deletedAt,
+		&deletedAt, &s.TerminationStatus,
 	)
 	if err != nil {
 		return s, err
@@ -230,6 +293,10 @@ func buildPGSessionFilter(
 			"user_message_count >= "+
 				pb.add(f.MinUserMessages))
 	}
+	if pred := pgTerminationPred(f.Termination, pb); pred != "" {
+		filterPreds = append(filterPreds, pred)
+	}
+	// "" and "all" add no predicate.
 
 	oneShotPred := ""
 	if f.ExcludeOneShot {
