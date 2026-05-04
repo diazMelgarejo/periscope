@@ -20,6 +20,16 @@ powershell -ExecutionPolicy ByPass -c "irm https://agentsview.io/install.ps1 | i
 Or download the **desktop app** (macOS / Windows) from
 [GitHub Releases](https://github.com/wesm/agentsview/releases).
 
+Or run the published Docker image:
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -v agentsview-data:/data \
+  -v "$HOME/.claude/projects:/agents/claude:ro" \
+  -e CLAUDE_PROJECTS_DIR=/agents/claude \
+  ghcr.io/wesm/agentsview:latest
+```
+
 ## Quick Start
 
 ```bash
@@ -30,6 +40,41 @@ agentsview usage daily     # print daily cost summary
 On first run, agentsview discovers sessions from every supported agent on your
 machine, syncs them into a local SQLite database, and opens a web UI at
 `http://127.0.0.1:8080`.
+
+## Docker
+
+The container image defaults to local `agentsview serve`. Set `PG_SERVE=1` to
+switch the startup command to `agentsview pg serve` instead.
+
+`docker-compose.prod.yaml` is included as a production example:
+
+```bash
+docker compose -f docker-compose.prod.yaml up -d
+```
+
+The included compose file persists the agentsview data directory in a named
+volume and mounts Claude, Codex, and OpenCode session roots read-only. The
+container runs as root, so prefer a named volume for `/data` over a host bind
+mount; if you do bind-mount, pre-create the directory with the desired ownership
+to avoid root-owned files in your home directory.
+
+The examples publish the UI on loopback only (`127.0.0.1`). If you need to
+expose it beyond localhost, enable `--require-auth` and publish the port
+intentionally.
+
+Important: a containerized agentsview instance can only discover agent sessions
+from directories you explicitly mount into the container. If you do not mount an
+agent's session directory and point the matching env var at it, that agent will
+not appear in the UI.
+
+Example PostgreSQL-backed startup:
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e PG_SERVE=1 \
+  -e AGENTSVIEW_PG_URL='postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require' \
+  ghcr.io/wesm/agentsview:latest
+```
 
 ## Token Usage and Cost Tracking
 
