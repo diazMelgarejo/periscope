@@ -32,6 +32,7 @@ const (
 	periodicSyncInterval  = 15 * time.Minute
 	unwatchedPollInterval = 2 * time.Minute
 	watcherDebounce       = 500 * time.Millisecond
+	recursiveWatchBudget  = 8192
 )
 
 func main() {
@@ -142,9 +143,6 @@ func runServe(cfg config.Config) {
 			return
 		}
 
-		stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
-		defer stopWatcher()
-
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
 		// during a resync), walking every row to recompute
@@ -164,9 +162,6 @@ func runServe(cfg config.Config) {
 		}()
 
 		go startPeriodicSync(engine, database)
-		if len(unwatchedDirs) > 0 {
-			go startUnwatchedPoll(engine)
-		}
 	}
 
 	// Seed model_pricing after any resync swap so the new DB
@@ -248,6 +243,14 @@ func runServe(cfg config.Config) {
 		)
 	}
 	fmt.Printf("Database: %s\n", cfg.DBPath)
+
+	if engine != nil {
+		stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
+		defer stopWatcher()
+		if len(unwatchedDirs) > 0 {
+			go startUnwatchedPoll(engine)
+		}
+	}
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)
@@ -498,6 +501,7 @@ func startFileWatcher(
 
 	var totalWatched int
 	var shallowWatched int
+	remaining := recursiveWatchBudget
 	for _, r := range roots {
 		if r.shallow {
 			if watcher.WatchShallow(r.root) {
@@ -508,14 +512,19 @@ func startFileWatcher(
 			}
 			continue
 		}
-		watched, uw, _ := watcher.WatchRecursive(r.root)
-		totalWatched += watched
-		if uw > 0 {
+		result := watcher.WatchRecursiveBudgeted(r.root, remaining)
+		totalWatched += result.Watched
+		remaining -= result.Watched
+		if result.Unwatched > 0 || result.BudgetExhausted ||
+			result.ResourceExhausted || result.Err != nil {
 			unwatchedDirs = append(unwatchedDirs, r.dir)
 			log.Printf(
 				"Couldn't watch %d directories under %s, will poll every %s",
-				uw, r.dir, unwatchedPollInterval,
+				result.Unwatched, r.dir, unwatchedPollInterval,
 			)
+			if result.Err != nil {
+				log.Printf("watching %s: %v", r.dir, result.Err)
+			}
 		}
 	}
 
@@ -528,6 +537,12 @@ func startFileWatcher(
 		fmt.Printf(
 			"Watching %d directories for changes (%s)\n",
 			totalWatched, time.Since(t).Round(time.Millisecond),
+		)
+	}
+	if len(unwatchedDirs) > 0 {
+		fmt.Printf(
+			"Polling %d roots every %s for changes\n",
+			len(unwatchedDirs), unwatchedPollInterval,
 		)
 	}
 	watcher.Start()
