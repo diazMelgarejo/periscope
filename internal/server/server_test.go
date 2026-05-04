@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net"
@@ -2463,6 +2464,137 @@ func TestUploadSession_Errors(t *testing.T) {
 				tt.filename, tt.content, tt.query)
 			assertStatus(t, w, http.StatusBadRequest)
 		})
+	}
+}
+
+func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, te *testEnv, id string)
+	}{
+		{
+			name: "excluded",
+			setup: func(t *testing.T, te *testEnv, id string) {
+				t.Helper()
+				require.NoError(t, te.db.UpsertSession(db.Session{
+					ID: id, Project: "myproj", Machine: "remote", Agent: "claude",
+				}), "seed session")
+				require.NoError(t, te.db.DeleteSession(id), "DeleteSession")
+			},
+		},
+		{
+			name: "trashed",
+			setup: func(t *testing.T, te *testEnv, id string) {
+				t.Helper()
+				require.NoError(t, te.db.UpsertSession(db.Session{
+					ID: id, Project: "myproj", Machine: "remote", Agent: "claude",
+				}), "seed session")
+				require.NoError(t, te.db.SoftDeleteSession(id), "SoftDeleteSession")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := setup(t)
+			const id = "upload-conflict"
+			tt.setup(t, te, id)
+
+			content := testjsonl.NewSessionBuilder().
+				AddClaudeUser(tsEarly, "Hello upload").
+				AddClaudeAssistant(tsEarlyS5, "Done.").
+				String()
+			w := te.upload(t, id+".jsonl", content, "project=myproj&machine=remote")
+			assertStatus(t, w, http.StatusConflict)
+			assertErrorResponse(t, w, "session upload rejected: session is excluded or trashed")
+			destPath := filepath.Join(
+				te.dataDir, "uploads", "myproj", id+".jsonl",
+			)
+			if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected upload file exists at %s: %v", destPath, err)
+			}
+		})
+	}
+}
+
+func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
+	te := setup(t)
+
+	const filename = "upload-multi-conflict.jsonl"
+	const mainID = "upload-multi-conflict"
+	const forkID = "upload-multi-conflict-i"
+
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: forkID, Project: "myproj", Machine: "remote", Agent: "claude",
+	}), "seed fork session")
+	require.NoError(t, te.db.DeleteSession(forkID), "DeleteSession")
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID(tsEarly, "q1", "a", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "a1", "b", "a").
+		AddClaudeUserWithUUID(tsEarlyS5, "q2", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:06Z", "a2", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:07Z", "q3", "e", "d").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:08Z", "a3", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:09Z", "q4", "g", "f").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:10Z", "a4", "h", "g").
+		AddClaudeUserWithUUID("2024-01-01T10:00:11Z", "q5", "k", "h").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:12Z", "a5", "l", "k").
+		AddClaudeUserWithUUID("2024-01-01T10:00:13Z", "fork q", "i", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:14Z", "fork a", "j", "i").
+		String()
+
+	w := te.upload(t, filename, content, "project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusConflict)
+	assertErrorResponse(t, w, "session upload rejected: session is excluded or trashed")
+
+	main, err := te.db.GetSessionFull(context.Background(), mainID)
+	require.NoError(t, err, "GetSessionFull main")
+	if main != nil {
+		t.Fatalf("main session was partially written: %+v", main)
+	}
+	destPath := filepath.Join(te.dataDir, "uploads", "myproj", filename)
+	if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected upload file exists at %s: %v", destPath, err)
+	}
+}
+
+func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
+	te := setup(t)
+
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "original upload").
+		AddClaudeAssistant(tsEarlyS5, "original reply").
+		String()
+	w := te.upload(t, "upload-pinned.jsonl", initial,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	msgs, err := te.db.GetAllMessages(context.Background(), "upload-pinned")
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, msgs, 2, "initial messages")
+	note := "keep this"
+	_, err = te.db.PinMessage("upload-pinned", msgs[0].ID, &note)
+	require.NoError(t, err, "PinMessage")
+
+	updated := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "updated upload").
+		AddClaudeAssistant(tsEarlyS5, "updated reply").
+		String()
+	w = te.upload(t, "upload-pinned.jsonl", updated,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	pins, err := te.db.ListPinnedMessages(
+		context.Background(), "upload-pinned", "",
+	)
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "pins after re-upload")
+	if pins[0].Ordinal != 0 {
+		t.Fatalf("pin ordinal = %d, want 0", pins[0].Ordinal)
+	}
+	if pins[0].Note == nil || *pins[0].Note != note {
+		t.Fatalf("pin note = %v, want %q", pins[0].Note, note)
 	}
 }
 

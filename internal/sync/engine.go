@@ -34,6 +34,11 @@ const (
 
 var errSessionPreserved = errors.New("session preserved")
 
+func isIntentionalSessionSkip(err error) bool {
+	return errors.Is(err, db.ErrSessionExcluded) ||
+		errors.Is(err, db.ErrSessionTrashed)
+}
+
 // Emitter is notified after a sync pass writes data. Implementations
 // must be thread-safe; Emit is called from whatever goroutine runs
 // the sync pass (e.g., the file watcher, a periodic timer, or a
@@ -1025,6 +1030,15 @@ func (e *Engine) ResyncAll(
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
+	trashedCopied := 0
+	if n, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
+		log.Printf("resync: pre-sync copy trashed sessions: %v", err)
+		// Non-fatal: worst case, trashed sessions are reparsed
+		// and then re-marked as trashed by metadata copy.
+	} else if n > 0 {
+		trashedCopied = n
+		log.Printf("resync: pre-sync copied %d trashed sessions", n)
+	}
 
 	// The temp DB is not swapped into production until the end,
 	// so avoid per-row FTS trigger work during the bulk load and
@@ -1081,15 +1095,15 @@ func (e *Engine) ResyncAll(
 	emptyDiscovery := stats.filesDiscovered == 0 &&
 		stats.filesOK == 0 &&
 		oldFileSessions > 0
-	openCodeArchiveOnly := stats.Synced == 0 &&
+	preservedOnly := stats.Synced == 0 &&
 		stats.TotalSessions > 0 &&
 		stats.Failed == 0 &&
-		oldFileSessions == 0
+		(oldFileSessions == 0 || trashedCopied > 0)
 	abortSwap := stats.Aborted ||
 		emptyDiscovery ||
 		(stats.Synced == 0 &&
 			stats.TotalSessions > 0 &&
-			!openCodeArchiveOnly) ||
+			!preservedOnly) ||
 		(stats.Failed > 0 && stats.Failed > stats.filesOK)
 	if abortSwap {
 		log.Printf(
@@ -1492,7 +1506,7 @@ func (e *Engine) syncAllLocked(
 				switch err := e.writeSessionFull(pw); {
 				case err == nil:
 					ocWritten++
-				case errors.Is(err, db.ErrSessionExcluded),
+				case isIntentionalSessionSkip(err),
 					errors.Is(err, errSessionPreserved):
 					// Intentional skip, not a failure.
 				default:
@@ -1544,7 +1558,7 @@ func (e *Engine) syncAllLocked(
 				switch err := e.writeSessionFull(pw); {
 				case err == nil:
 					warpWritten++
-				case errors.Is(err, db.ErrSessionExcluded),
+				case isIntentionalSessionSkip(err),
 					errors.Is(err, errSessionPreserved):
 					// Intentional skip, not a failure.
 				default:
@@ -3319,7 +3333,7 @@ func (e *Engine) writeBatch(
 		// are written first since the session already
 		// exists.
 		if err := e.db.UpsertSession(s); err != nil {
-			if errors.Is(err, db.ErrSessionExcluded) {
+			if isIntentionalSessionSkip(err) {
 				if pw.sess.File.Path != "" {
 					e.cacheSkip(
 						pw.sess.File.Path,
@@ -3561,9 +3575,9 @@ func (e *Engine) writeMessages(
 // delete+reinsert of its messages. Used by explicit
 // single-session re-syncs where existing content may have
 // changed (not just appended).
-// writeSessionFull returns nil on success,
-// db.ErrSessionExcluded for intentional skips, or
-// another error for real failures.
+// writeSessionFull returns nil on success, a session skip
+// sentinel for intentional skips, or another error for real
+// failures.
 func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	msgs := toDBMessages(pw, e.blockedResultCategories)
 	s := toDBSession(pw)
@@ -3578,11 +3592,11 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 		return errSessionPreserved
 	}
 	if err := e.db.UpsertSession(s); err != nil {
-		if errors.Is(err, db.ErrSessionExcluded) {
+		if isIntentionalSessionSkip(err) {
 			if pw.sess.File.Path != "" {
 				e.cacheSkip(pw.sess.File.Path, pw.sess.File.Mtime)
 			}
-			return db.ErrSessionExcluded
+			return err
 		}
 		log.Printf("upsert session %s: %v", s.ID, err)
 		return err
@@ -4130,7 +4144,7 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		if err := e.writeSessionFull(
 			pendingWrite{sess: pr.Session, msgs: pr.Messages},
 		); err != nil &&
-			!errors.Is(err, db.ErrSessionExcluded) &&
+			!isIntentionalSessionSkip(err) &&
 			!errors.Is(err, errSessionPreserved) {
 			return fmt.Errorf("write session %s: %w",
 				pr.Session.ID, err)
@@ -4178,7 +4192,7 @@ func (e *Engine) syncSingleOpenCode(
 		if err := e.writeSessionFull(
 			pendingWrite{sess: *sess, msgs: msgs},
 		); err != nil &&
-			!errors.Is(err, db.ErrSessionExcluded) &&
+			!isIntentionalSessionSkip(err) &&
 			!errors.Is(err, errSessionPreserved) {
 			return fmt.Errorf("write session %s: %w",
 				sess.ID, err)
@@ -4343,7 +4357,7 @@ func (e *Engine) syncSingleWarp(
 		}
 		if err := e.writeSessionFull(
 			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+		); err != nil && !isIntentionalSessionSkip(err) {
 			return fmt.Errorf("write session %s: %w",
 				sess.ID, err)
 		}

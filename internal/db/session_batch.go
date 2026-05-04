@@ -72,7 +72,8 @@ func (db *DB) WriteSessionBatch(
 			}
 			result.WrittenSessions++
 			result.WrittenMessages += messagesWritten
-		case errors.Is(err, ErrSessionExcluded):
+		case errors.Is(err, ErrSessionExcluded),
+			errors.Is(err, ErrSessionTrashed):
 			if rerr := rollbackSavepoint(tx, savepoint); rerr != nil {
 				return result, rerr
 			}
@@ -87,6 +88,64 @@ func (db *DB) WriteSessionBatch(
 			}
 			result.FailedSessions++
 			result.Errors = append(result.Errors, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("committing batch tx: %w", err)
+	}
+	return result, nil
+}
+
+// WriteSessionBatchAtomic writes all sessions in one
+// transaction. Any rejected or failed row rolls back the whole
+// batch.
+func (db *DB) WriteSessionBatchAtomic(
+	writes []SessionBatchWrite,
+	beforeCommit ...func() error,
+) (SessionBatchResult, error) {
+	var result SessionBatchResult
+	if len(writes) == 0 {
+		return result, nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return result, fmt.Errorf("beginning batch tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, write := range writes {
+		messagesWritten, err := writeOneSessionBatchTx(tx, write)
+		if err != nil {
+			result.WrittenSessions = 0
+			result.WrittenMessages = 0
+			switch {
+			case errors.Is(err, ErrSessionExcluded),
+				errors.Is(err, ErrSessionTrashed):
+				result.ExcludedSessions++
+				result.ExcludedIDs = append(
+					result.ExcludedIDs,
+					write.Session.ID,
+				)
+			default:
+				result.FailedSessions++
+				result.Errors = append(result.Errors, err)
+			}
+			return result, err
+		}
+		result.WrittenSessions++
+		result.WrittenMessages += messagesWritten
+	}
+
+	if len(beforeCommit) > 0 && beforeCommit[0] != nil {
+		if err := beforeCommit[0](); err != nil {
+			result.WrittenSessions = 0
+			result.WrittenMessages = 0
+			return result, err
 		}
 	}
 
@@ -128,6 +187,20 @@ func writeOneSessionBatchTx(
 	if excluded == 1 {
 		return 0, ErrSessionExcluded
 	}
+	var trashed int
+	err = tx.QueryRow(
+		"SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL",
+		write.Session.ID,
+	).Scan(&trashed)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf(
+			"checking trash for %s: %w",
+			write.Session.ID, err,
+		)
+	}
+	if trashed == 1 {
+		return 0, ErrSessionTrashed
+	}
 
 	if _, err := tx.Exec(
 		upsertSessionSQL,
@@ -140,7 +213,12 @@ func writeOneSessionBatchTx(
 	}
 
 	msgs := write.Messages
+	var pins []savedPin
 	if write.ReplaceMessages {
+		pins, err = savePinsTx(tx, write.Session.ID)
+		if err != nil {
+			return 0, err
+		}
 		if err := deleteSessionMessagesTx(tx, write.Session.ID); err != nil {
 			return 0, err
 		}
@@ -163,6 +241,11 @@ func writeOneSessionBatchTx(
 		}
 		events := resolveToolResultEvents(msgs)
 		if err := insertToolResultEventsTx(tx, events); err != nil {
+			return 0, err
+		}
+	}
+	if write.ReplaceMessages {
+		if err := restorePinsTx(tx, write.Session.ID, pins); err != nil {
 			return 0, err
 		}
 	}
