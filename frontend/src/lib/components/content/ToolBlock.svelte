@@ -121,6 +121,49 @@
   });
 
   let previewLine = $derived.by(() => {
+    // Tool-specific summaries take precedence over the first line of
+    // content, which for these tools is a generic header (e.g.
+    // "[Todo List]") that hides the meaningful info.
+    const toolName = toolCall?.tool_name;
+    if (toolName === "TodoWrite") {
+      const todos = inputParams?.todos;
+      if (Array.isArray(todos) && todos.length) {
+        const target =
+          todos.find((t) => t?.status === "in_progress") ??
+          todos[todos.length - 1];
+        const text = target?.content ? String(target.content) : "";
+        if (text) return `→ ${text}`.slice(0, 100);
+      }
+    } else if (toolName === "TaskCreate" && inputParams?.subject) {
+      return String(inputParams.subject).slice(0, 100);
+    } else if (toolName === "TaskUpdate") {
+      const parts: string[] = [];
+      if (inputParams?.taskId != null) parts.push(`#${inputParams.taskId}`);
+      if (inputParams?.status) parts.push(String(inputParams.status));
+      if (inputParams?.subject) parts.push(String(inputParams.subject));
+      if (parts.length) return parts.join(" · ").slice(0, 100);
+    } else if (toolName === "Skill" || toolName === "skill") {
+      const skill = inputParams?.skill ?? inputParams?.name;
+      if (skill) return String(skill).slice(0, 100);
+    } else if (toolName === "ToolSearch") {
+      const query = inputParams?.query;
+      if (query) {
+        const firstLine = String(query).split("\n")[0] ?? "";
+        return firstLine.slice(0, 100);
+      }
+    } else if (
+      toolName === "Task" ||
+      toolName === "Agent" ||
+      toolCall?.category === "Task" ||
+      (toolName?.includes("subagent") ?? false)
+    ) {
+      const desc = inputParams?.description ?? inputParams?.prompt;
+      if (desc) {
+        const firstLine = String(desc).split("\n")[0] ?? "";
+        return firstLine.slice(0, 100);
+      }
+    }
+
     const line = content.split("\n")[0]?.slice(0, 100) ?? "";
     if (line) return line;
     // For Bash tools, surface the command in the collapsed header so
