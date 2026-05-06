@@ -1396,6 +1396,134 @@ func TestSyncSubagentSetsParentSessionID(t *testing.T) {
 	}
 }
 
+func TestSyncClaudeToolResultAgentIDLinksSubagentToolCall(t *testing.T) {
+	env := setupTestEnv(t)
+
+	parentContent := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"Build the feature"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"u2","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_agent_result","name":"Agent","input":{"description":"inspect schema","subagent_type":"Explore","prompt":"inspect the schema"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:05Z","uuid":"u3","parentUuid":"u2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_agent_result","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"abc123def4567890"}}`,
+	}, "\n")
+
+	env.writeClaudeSession(
+		t, "test-proj", "parent-agentid.jsonl", parentContent,
+	)
+
+	subContent := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			tsEarly, "Do subtask", "parent-agentid",
+		).
+		AddClaudeAssistant(tsEarlyS5, "Subtask done.").
+		String()
+
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"test-proj", "parent-agentid",
+			"subagents", "agent-abc123def4567890.jsonl",
+		),
+		subContent,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2, Skipped: 0})
+
+	var got string
+	err := env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-agentid", "toolu_agent_result",
+	).Scan(&got)
+	if err != nil {
+		t.Fatalf("query linked subagent tool call: %v", err)
+	}
+	if got != "agent-abc123def4567890" {
+		t.Errorf(
+			"subagent_session_id = %q, want %q",
+			got, "agent-abc123def4567890",
+		)
+	}
+}
+
+func TestSyncClaudeSameMessageIDAgentChunksLinkAllSubagents(t *testing.T) {
+	env := setupTestEnv(t)
+
+	parentContent := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"summarize with subagents"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_same","content":[{"type":"text","text":"Launching agents."}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_same","content":[{"type":"tool_use","id":"toolu_first","name":"Agent","input":{"description":"first","subagent_type":"Explore","prompt":"first"}}],"usage":{"input_tokens":1,"output_tokens":2},"stop_reason":"tool_use"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a3","parentUuid":"a2","message":{"id":"msg_same","content":[{"type":"tool_use","id":"toolu_second","name":"Agent","input":{"description":"second","subagent_type":"Explore","prompt":"second"}}],"usage":{"input_tokens":1,"output_tokens":3},"stop_reason":"tool_use"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","uuid":"a4","parentUuid":"a3","message":{"id":"msg_same","content":[{"type":"tool_use","id":"toolu_third","name":"Agent","input":{"description":"third","subagent_type":"Explore","prompt":"third"}}],"usage":{"input_tokens":1,"output_tokens":4},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:05Z","uuid":"r1","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_first","content":"done first"}]},"toolUseResult":{"status":"completed","agentId":"childfirst"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:06Z","uuid":"r2","parentUuid":"a3","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_second","content":"done second"}]},"toolUseResult":{"status":"completed","agentId":"childsecond"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:07Z","uuid":"r3","parentUuid":"a4","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_third","content":"done third"}]},"toolUseResult":{"status":"completed","agentId":"childthird"}}`,
+	}, "\n")
+
+	env.writeClaudeSession(
+		t, "test-proj", "parent-same-message.jsonl", parentContent,
+	)
+
+	for _, child := range []string{"childfirst", "childsecond", "childthird"} {
+		subContent := testjsonl.NewSessionBuilder().
+			AddClaudeUserWithSessionID(
+				tsEarly, "Do "+child, "parent-same-message",
+			).
+			AddClaudeAssistant(tsEarlyS5, child+" done.").
+			String()
+		env.writeSession(
+			t, env.claudeDir,
+			filepath.Join(
+				"test-proj", "parent-same-message",
+				"subagents", "agent-"+child+".jsonl",
+			),
+			subContent,
+		)
+	}
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 4, Synced: 4, Skipped: 0})
+
+	rows, err := env.db.Reader().Query(`
+		SELECT tool_use_id, subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ?
+		ORDER BY tool_use_id`,
+		"parent-same-message",
+	)
+	if err != nil {
+		t.Fatalf("query linked subagent tool calls: %v", err)
+	}
+	defer rows.Close()
+
+	got := map[string]string{}
+	for rows.Next() {
+		var toolUseID, subagentSessionID string
+		if err := rows.Scan(&toolUseID, &subagentSessionID); err != nil {
+			t.Fatalf("scan linked subagent tool call: %v", err)
+		}
+		got[toolUseID] = subagentSessionID
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate linked subagent tool calls: %v", err)
+	}
+
+	want := map[string]string{
+		"toolu_first":  "agent-childfirst",
+		"toolu_second": "agent-childsecond",
+		"toolu_third":  "agent-childthird",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("linked tool calls = %v, want %v", got, want)
+	}
+	for toolUseID, wantSessionID := range want {
+		if got[toolUseID] != wantSessionID {
+			t.Errorf(
+				"%s subagent_session_id = %q, want %q",
+				toolUseID, got[toolUseID], wantSessionID,
+			)
+		}
+	}
+}
+
 func TestSyncPathsClaudeSubagent(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -5552,6 +5680,193 @@ func TestIncrementalSync_ClaudeFileReplaced(t *testing.T) {
 	if full.FileSize == nil || *full.FileSize != newInfo.Size() {
 		t.Errorf("file_size = %v, want %d (full-parse size)",
 			full.FileSize, newInfo.Size())
+	}
+}
+
+// TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse covers
+// the cross-sync split case: the first sync stores a partial assistant
+// snapshot (one of several streaming snapshots) and the next sync
+// appends a later snapshot of the SAME response (same message.id).
+// The engine must detect the shared id and fall back to a full parse
+// so the chunk merge collapses both snapshots into one assistant
+// message instead of two.
+func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) {
+	env := setupTestEnv(t)
+
+	first, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": tsZeroS5,
+		"uuid":      "a1",
+		"message": map[string]any{
+			"id":    "msg_split",
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 1,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello"},
+			},
+			"stop_reason": "tool_use",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal first snapshot: %v", err)
+	}
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsZero),
+		string(first),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "split-stream.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionMessageCount(t, env.db, "split-stream", 2)
+
+	// Append a continuation snapshot with the same message.id —
+	// this is the second half of the same streaming response.
+	second, err := json.Marshal(map[string]any{
+		"type":       "assistant",
+		"timestamp":  tsEarly,
+		"uuid":       "a2",
+		"parentUuid": "a1",
+		"message": map[string]any{
+			"id":    "msg_split",
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 2,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello world"},
+			},
+			"stop_reason": "end_turn",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal second snapshot: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	if _, err := f.WriteString(string(second) + "\n"); err != nil {
+		f.Close()
+		t.Fatalf("append: %v", err)
+	}
+	f.Close()
+
+	env.engine.SyncPaths([]string{path})
+
+	// After the full-parse fallback, the two same-message.id
+	// snapshots are merged into ONE assistant message — total
+	// message count stays at 2 (user + merged assistant).
+	assertSessionMessageCount(t, env.db, "split-stream", 2)
+
+	msgs := fetchMessages(t, env.db, "split-stream")
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	if string(msgs[1].Role) != "assistant" {
+		t.Fatalf("msgs[1].Role = %q, want assistant", msgs[1].Role)
+	}
+	// The partial snapshot ("Hello") must be REPLACED by the final
+	// snapshot ("Hello world"), not concatenated as additive content.
+	if msgs[1].Content != "Hello world" {
+		t.Errorf(
+			"msgs[1].Content = %q, want exactly %q",
+			msgs[1].Content, "Hello world",
+		)
+	}
+}
+
+// TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall covers
+// the cross-sync subagent linkage case: the first sync stores an
+// assistant tool_use row with no subagent_session_id, and a later sync
+// appends a tool_result whose toolUseResult.agentId should populate the
+// already-stored tool_call. The parser signals
+// IsIncrementalFullParseFallback, so the full-parse fallback must run
+// with forceReplace=true; otherwise the append-only write path skips
+// the existing row and the linkage is silently dropped.
+func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T) {
+	env := setupTestEnv(t)
+
+	parentInitial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_one","content":[{"type":"tool_use","id":"toolu_late","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+	)
+
+	path := env.writeClaudeSession(
+		t, "proj-late-link", "parent-late-link.jsonl", parentInitial,
+	)
+
+	subContent := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			tsEarly, "do thing", "parent-late-link",
+		).
+		AddClaudeAssistant(tsEarlyS5, "done").
+		String()
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-late-link", "parent-late-link",
+			"subagents", "agent-childlate.jsonl",
+		),
+		subContent,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	// Linkage starts empty (the toolUseResult hasn't appeared yet).
+	var got sql.NullString
+	if err := env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-late-link", "toolu_late",
+	).Scan(&got); err != nil {
+		t.Fatalf("query before append: %v", err)
+	}
+	if got.Valid && got.String != "" {
+		t.Fatalf(
+			"subagent_session_id = %q before tool_result, want empty",
+			got.String,
+		)
+	}
+
+	// Append a tool_result with toolUseResult.agentId pointing at
+	// the existing subagent session. Incremental parse will return
+	// ErrClaudeIncrementalNeedsFullParse so the engine must full-
+	// parse with forceReplace to update the stored tool_call row.
+	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_late","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"childlate"}}`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	if _, err := f.WriteString(toolResult + "\n"); err != nil {
+		f.Close()
+		t.Fatalf("append: %v", err)
+	}
+	f.Close()
+
+	env.engine.SyncPaths([]string{path})
+
+	if err := env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-late-link", "toolu_late",
+	).Scan(&got); err != nil {
+		t.Fatalf("query after append: %v", err)
+	}
+	if got.String != "agent-childlate" {
+		t.Errorf(
+			"subagent_session_id = %q, want %q",
+			got.String, "agent-childlate",
+		)
 	}
 }
 
