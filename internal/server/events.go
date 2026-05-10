@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/wesm/agentsview/internal/sessionwatch"
-	syncpkg "github.com/wesm/agentsview/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/sessionwatch"
+	syncpkg "github.com/latentsignal-org/periscope/internal/sync"
 )
 
 // sessionMonitor returns a channel that ticks whenever the

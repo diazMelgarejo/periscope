@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 type exportMarkdownOptions struct {

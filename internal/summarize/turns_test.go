@@ -3,7 +3,7 @@ package summarize
 import (
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // TestBuildTurnsGroupsByUserMessage asserts the turn boundaries

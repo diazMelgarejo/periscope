@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/timeutil"
 )
 
 // defaultDateRange returns (from, to) defaulting to the last

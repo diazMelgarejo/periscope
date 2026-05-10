@@ -7,7 +7,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/config"
+	"github.com/latentsignal-org/periscope/internal/config"
 )
 
 // TestLoadPricingMapAppliesCustomWhenTableMissing covers the fresh-PG

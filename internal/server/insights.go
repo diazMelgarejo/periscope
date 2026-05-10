@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/insight"
-	"github.com/wesm/agentsview/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/insight"
+	"github.com/latentsignal-org/periscope/internal/timeutil"
 )
 
 var validInsightTypes = map[string]bool{

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wesm/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 // buildResolveScript generates a shell script that echoes each

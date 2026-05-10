@@ -8,8 +8,8 @@ import (
 	"io"
 
 	"github.com/spf13/cobra"
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 func newSessionListCommand() *cobra.Command {

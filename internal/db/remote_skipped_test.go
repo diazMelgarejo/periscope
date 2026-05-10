@@ -4,7 +4,7 @@ import (
 	"maps"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
 )
 
 func TestRemoteSkippedFiles_InitiallyEmpty(t *testing.T) {

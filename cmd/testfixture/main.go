@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 type sessionSpec struct {

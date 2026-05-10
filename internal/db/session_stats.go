@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
-	"github.com/wesm/agentsview/internal/db/git"
+	"github.com/latentsignal-org/periscope/internal/db/git"
 )
 
 // StatsFilter mirrors the service-layer StatsFilter but lives in db

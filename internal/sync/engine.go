@@ -14,10 +14,10 @@ import (
 	gosync "sync"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/signals"
-	"github.com/wesm/agentsview/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/timeutil"
 )
 
 const (
@@ -3779,7 +3779,9 @@ func (e *Engine) writeIncremental(
 		msgCount, userMsgCount,
 		inc.fileSize, inc.fileMtime,
 		inc.totalOutputTokens, inc.peakContextTokens,
+		0,    // modelContextWindowTokens — periscope field; populated via full upsert, not incremental
 		inc.hasTotalOutputTokens, inc.hasPeakContextTokens,
+		false, // hasModelContextWindowTokens — periscope field; not tracked in incremental path
 	); err != nil {
 		return fmt.Errorf(
 			"incremental update %s: %w",

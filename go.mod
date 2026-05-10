@@ -1,4 +1,4 @@
-module github.com/wesm/agentsview
+module github.com/latentsignal-org/periscope
 
 go 1.26.2
 

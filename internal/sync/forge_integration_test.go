@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/wesm/agentsview/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/sync"
 )
 
 type forgeTestDB struct {

@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func TestHandleSearchSession(t *testing.T) {

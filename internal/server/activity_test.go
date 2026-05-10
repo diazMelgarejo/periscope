@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func TestGetSessionActivity(t *testing.T) {

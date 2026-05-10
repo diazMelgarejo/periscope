@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // TestPrintStatsHuman_Populated exercises the happy path with

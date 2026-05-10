@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/insight"
-	"github.com/wesm/agentsview/internal/server"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/insight"
+	"github.com/latentsignal-org/periscope/internal/server"
 )
 
 type listInsightsResponse struct {

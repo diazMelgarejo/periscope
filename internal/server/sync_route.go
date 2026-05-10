@@ -8,8 +8,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 func (s *Server) handleSyncSession(

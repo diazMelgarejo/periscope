@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func TestSSHSyncEndToEnd(t *testing.T) {

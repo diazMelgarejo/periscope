@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // Store wraps a PostgreSQL connection for read-only session

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/llm"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/llm"
 )
 
 // Store is the subset of db.Store the worker needs.

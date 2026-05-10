@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/config"
+	"github.com/latentsignal-org/periscope/internal/config"
 )
 
 func TestBrowserURLUsesPublicURL(t *testing.T) {
