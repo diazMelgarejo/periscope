@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/server"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/server"
 )
 
 type serveRuntimeOptions struct {

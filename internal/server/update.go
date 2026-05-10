@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/wesm/agentsview/internal/update"
+	"github.com/latentsignal-org/periscope/internal/update"
 )
 
 // UpdateCheckFunc is the signature for functions that check for

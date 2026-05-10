@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wesm/agentsview/internal/config"
+	"github.com/latentsignal-org/periscope/internal/config"
 )
 
 const managedCaddyStartGrace = 300 * time.Millisecond

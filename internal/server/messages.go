@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	dbpkg "github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/service"
+	dbpkg "github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 func (s *Server) handleGetMessages(

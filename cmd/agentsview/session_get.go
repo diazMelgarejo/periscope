@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 func newSessionGetCommand() *cobra.Command {

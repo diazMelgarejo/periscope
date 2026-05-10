@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func TestTrendsTermsEndpoint(t *testing.T) {

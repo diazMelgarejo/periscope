@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // testSession returns a *db.Session with sensible defaults.

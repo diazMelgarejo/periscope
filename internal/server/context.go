@@ -12,9 +12,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/guidance"
-	"github.com/wesm/agentsview/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/guidance"
+	"github.com/latentsignal-org/periscope/internal/signals"
 )
 
 // toolBlockRE strips inline tool-call markup like

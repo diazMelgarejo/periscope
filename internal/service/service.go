@@ -7,7 +7,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // SessionService is the canonical per-session operation interface.

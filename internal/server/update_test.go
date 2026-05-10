@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/server"
-	"github.com/wesm/agentsview/internal/update"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/server"
+	"github.com/latentsignal-org/periscope/internal/update"
 )
 
 func stubChecker(

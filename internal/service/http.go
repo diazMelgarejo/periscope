@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // errHTTPNotFound is returned by getJSON for 404 responses so callers

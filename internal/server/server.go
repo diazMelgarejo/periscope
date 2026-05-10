@@ -14,14 +14,14 @@ import (
 	gosync "sync"
 	"time"
 
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/insight"
-	"github.com/wesm/agentsview/internal/llm"
-	"github.com/wesm/agentsview/internal/service"
-	"github.com/wesm/agentsview/internal/summarize"
-	"github.com/wesm/agentsview/internal/sync"
-	"github.com/wesm/agentsview/internal/web"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/insight"
+	"github.com/latentsignal-org/periscope/internal/llm"
+	"github.com/latentsignal-org/periscope/internal/service"
+	"github.com/latentsignal-org/periscope/internal/summarize"
+	"github.com/latentsignal-org/periscope/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/web"
 )
 
 // VersionInfo holds build-time version metadata.

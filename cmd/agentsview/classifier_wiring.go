@@ -3,8 +3,8 @@
 package main
 
 import (
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // applyClassifierConfig installs user-defined classifier

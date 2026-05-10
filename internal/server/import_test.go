@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/importer"
+	"github.com/latentsignal-org/periscope/internal/importer"
 )
 
 func TestHandleImportClaudeAI(t *testing.T) {

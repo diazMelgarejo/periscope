@@ -18,9 +18,9 @@ import (
 
 	"github.com/google/shlex"
 	"github.com/tidwall/gjson"
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 // resumeRequest is the JSON body for POST /api/v1/sessions/{id}/resume.

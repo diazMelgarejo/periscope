@@ -7,7 +7,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // writeJSON writes v as JSON with the given HTTP status code.

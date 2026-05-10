@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/wesm/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 func runGeminiParserTest(t *testing.T, content string) (*ParsedSession, []ParsedMessage) {

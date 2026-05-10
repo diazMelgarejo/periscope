@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func TestHandlers_Internal_DeadlineExceeded(t *testing.T) {

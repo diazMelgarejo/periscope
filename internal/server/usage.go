@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/timeutil"
 )
 
 // ProjectTotal holds range-wide token and cost totals per project.

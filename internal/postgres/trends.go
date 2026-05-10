@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func (s *Store) GetTrendsTerms(

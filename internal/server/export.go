@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 // getSessionWithMessages fetches a session and its messages by ID,
@@ -539,7 +539,7 @@ footer a:hover { text-decoration: underline; }
 <div class="message {{.RoleClass}}{{.ExtraClass}}"><div class="message-header"><span class="message-role">{{.Role}}</span><span class="message-time">{{.Timestamp}}</span></div><div class="message-content">{{.ContentHTML}}</div></div>
 {{- end}}
 </div></main>
-<footer>Exported from <a href="https://github.com/wesm/agentsview">agentsview</a></footer>
+<footer>Exported from <a href="https://github.com/latentsignal-org/periscope">agentsview</a></footer>
 </body></html>`
 
 func generateExportHTML(

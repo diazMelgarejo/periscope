@@ -3,8 +3,8 @@ package sync
 import (
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/signals"
 )
 
 // computeSignalsFromMessages produces a SessionSignalUpdate from

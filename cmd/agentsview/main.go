@@ -14,14 +14,14 @@ import (
 	_ "time/tzdata"
 
 	"github.com/spf13/cobra"
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/llm"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/server"
-	"github.com/wesm/agentsview/internal/signals"
-	"github.com/wesm/agentsview/internal/summarize"
-	"github.com/wesm/agentsview/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/llm"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/server"
+	"github.com/latentsignal-org/periscope/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/summarize"
+	"github.com/latentsignal-org/periscope/internal/sync"
 )
 
 var (

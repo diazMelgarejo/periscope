@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/update"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/update"
 )
 
 type UpdateConfig struct {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wesm/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 const (

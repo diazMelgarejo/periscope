@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 const lastPushBoundaryStateKey = "last_push_boundary_state"

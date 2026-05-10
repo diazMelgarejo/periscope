@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/llm"
-	"github.com/wesm/agentsview/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/llm"
+	"github.com/latentsignal-org/periscope/internal/signals"
 )
 
 type stubGuidanceClient struct {

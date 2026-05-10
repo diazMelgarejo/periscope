@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/sync"
 )
 
 func TestMustLoadConfig(t *testing.T) {

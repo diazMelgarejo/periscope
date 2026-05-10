@@ -9,11 +9,11 @@ import (
 	"log"
 	"os"
 
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/ssh"
-	"github.com/wesm/agentsview/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/ssh"
+	"github.com/latentsignal-org/periscope/internal/sync"
 )
 
 // SyncConfig holds parsed CLI options for the sync command.
