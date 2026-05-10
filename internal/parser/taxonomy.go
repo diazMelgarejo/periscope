@@ -116,11 +116,22 @@ func NormalizeToolCategory(rawName string) string {
 	case "subagents", "agents_list", "session_status":
 		return "Task"
 
+	// Forge tools
+	case "fs_search":
+		return "Grep"
+	case "patch", "multi_patch", "undo", "remove":
+		return "Edit"
+	case "fetch":
+		return "Read"
+	case "todo_write", "todo_read":
+		return "Tool"
+	case "parallel":
+		return "Task"
+
 	// Hermes Agent tools (excluding names already handled above:
 	// read_file→Read, write_file→Write, search_files→Grep,
-	// edit_file→Edit, run_command/execute_command→Bash)
-	case "patch":
-		return "Edit"
+	// edit_file→Edit, run_command/execute_command→Bash,
+	// patch→Edit)
 	case "terminal":
 		return "Bash"
 	case "browser_navigate", "browser_snapshot", "browser_click",
@@ -139,11 +150,23 @@ func NormalizeToolCategory(rawName string) string {
 		"text_to_speech", "cronjob":
 		return "Tool"
 
-	// Zencoder tools (not already covered above)
-	case "WebFetch":
+	// Piebald / Piebald-hosted built-in tools (not already covered above).
+	case "ReadFile":
 		return "Read"
-	case "TodoWrite":
+	case "WriteFile":
+		return "Write"
+	case "EditFile":
+		return "Edit"
+	case "RunTerminalCommand":
+		return "Bash"
+	case "LaunchSubagent":
+		return "Task"
+	case "WebFetch", "WebSearch":
 		return "Tool"
+	case "TodoWrite", "AskUserQuestion", "ProposePlanToUser":
+		return "Tool"
+
+	// Zencoder tools (not already covered above).
 	case "subagent__ZencoderSubagent":
 		return "Task"
 	case "zencoder-rag-mcp__web_search":

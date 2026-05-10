@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/pflag"
@@ -46,7 +48,7 @@ func setupTestEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	t.Setenv("AGENT_VIEWER_DATA_DIR", dir)
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	return dir
 }
 
@@ -591,7 +593,7 @@ func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
 
 	// With env override, should return the override
 	custom := t.TempDir()
-	t.Setenv("AGENT_VIEWER_DATA_DIR", custom)
+	t.Setenv("AGENTSVIEW_DATA_DIR", custom)
 	dir, err = ResolveDataDir()
 	if err != nil {
 		t.Fatal(err)
@@ -599,6 +601,37 @@ func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
 	if dir != custom {
 		t.Errorf("ResolveDataDir = %q, want %q", dir, custom)
 	}
+}
+
+// TestDataDir_LegacyEnvFallback verifies that the legacy AGENT_VIEWER_DATA_DIR
+// env var still takes effect when the canonical AGENTSVIEW_DATA_DIR is unset,
+// and that the canonical name wins when both are set.
+func TestDataDir_LegacyEnvFallback(t *testing.T) {
+	t.Run("legacy used when canonical unset", func(t *testing.T) {
+		legacy := t.TempDir()
+		t.Setenv("AGENT_VIEWER_DATA_DIR", legacy)
+		dir, err := ResolveDataDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dir != legacy {
+			t.Errorf("ResolveDataDir = %q, want %q", dir, legacy)
+		}
+	})
+
+	t.Run("canonical wins over legacy", func(t *testing.T) {
+		legacy := t.TempDir()
+		canonical := t.TempDir()
+		t.Setenv("AGENT_VIEWER_DATA_DIR", legacy)
+		t.Setenv("AGENTSVIEW_DATA_DIR", canonical)
+		dir, err := ResolveDataDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dir != canonical {
+			t.Errorf("ResolveDataDir = %q, want %q (canonical should win)", dir, canonical)
+		}
+	})
 }
 
 func TestEnvOverridesConfigFile(t *testing.T) {
@@ -749,6 +782,52 @@ func TestLoadFile_ResultContentBlockedCategories(t *testing.T) {
 						i, v, tt.want[i],
 					)
 				}
+			}
+		})
+	}
+}
+
+func TestLoadFile_EventsCoalesceInterval(t *testing.T) {
+	tests := []struct {
+		name   string
+		config map[string]any
+		want   time.Duration
+	}{
+		{
+			"NoConfigFileUsesDefault",
+			map[string]any{},
+			10 * time.Second,
+		},
+		{
+			"ConfigFileOverrides",
+			map[string]any{
+				"events_coalesce_interval": "5s",
+			},
+			5 * time.Second,
+		},
+		{
+			"ConfigFileExplicitZeroDisables",
+			map[string]any{
+				"events_coalesce_interval": "0s",
+			},
+			0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			writeConfig(t, dir, tt.config)
+
+			cfg, err := LoadMinimal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.EventsCoalesceInterval != tt.want {
+				t.Errorf(
+					"EventsCoalesceInterval = %v, want %v",
+					cfg.EventsCoalesceInterval, tt.want,
+				)
 			}
 		})
 	}
@@ -1022,5 +1101,118 @@ func TestResolvePG_AllowsBothFilterLists(t *testing.T) {
 			"ResolvePG should not reject filter conflicts: %v",
 			err,
 		)
+	}
+}
+
+func TestAutomatedPrefixesRoundTrip(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeConfig(t, dir, map[string]any{
+		"automated": map[string]any{
+			"prefixes": []string{
+				"You are analyzing an essay",
+				"You are grading quotes",
+				"  ",                         // whitespace preserved here; normalization is db-side
+				"You are analyzing an essay", // duplicate preserved here too
+			},
+		},
+	})
+	cfg, err := loadConfigFromPFlags(t)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	got := cfg.Automated.Prefixes
+	want := []string{
+		"You are analyzing an essay",
+		"You are grading quotes",
+		"  ",
+		"You are analyzing an essay",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("prefixes = %q, want %q", got, want)
+	}
+}
+
+func TestAutomatedPrefixesAbsentIsNil(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeConfig(t, dir, map[string]any{
+		"public_url": "http://example.com",
+	})
+	cfg, err := loadConfigFromPFlags(t)
+	if err != nil {
+		t.Fatalf("loading config: %v", err)
+	}
+	if cfg.Automated.Prefixes != nil {
+		t.Errorf("expected nil, got %v", cfg.Automated.Prefixes)
+	}
+}
+
+func TestLoadFile_CustomModelPricing(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]any
+		want map[string]CustomModelRate
+	}{
+		{
+			name: "basic rates",
+			data: map[string]any{
+				"custom_model_pricing": map[string]CustomModelRate{
+					"acme-ultra-2.1": {Input: 2.0, Output: 8.0},
+				},
+			},
+			want: map[string]CustomModelRate{
+				"acme-ultra-2.1": {Input: 2.0, Output: 8.0},
+			},
+		},
+		{
+			name: "multiple models with cache rates",
+			data: map[string]any{
+				"custom_model_pricing": map[string]CustomModelRate{
+					"acme-ultra-2.1": {Input: 2.0, Output: 8.0, CacheCreation: 2.5, CacheRead: 0.2},
+					"acme-fast-2.1":  {Input: 0.8, Output: 4.0},
+				},
+			},
+			want: map[string]CustomModelRate{
+				"acme-ultra-2.1": {Input: 2.0, Output: 8.0, CacheCreation: 2.5, CacheRead: 0.2},
+				"acme-fast-2.1":  {Input: 0.8, Output: 4.0},
+			},
+		},
+		{
+			name: "empty map omitted",
+			data: map[string]any{},
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			writeConfig(t, dir, tt.data)
+
+			cfg, err := LoadMinimal()
+			if err != nil {
+				t.Fatalf("LoadMinimal: %v", err)
+			}
+
+			if len(tt.want) == 0 {
+				if len(cfg.CustomModelPricing) != 0 {
+					t.Fatalf("expected nil/empty, got %v", cfg.CustomModelPricing)
+				}
+				return
+			}
+
+			if len(cfg.CustomModelPricing) != len(tt.want) {
+				t.Fatalf("got %d entries, want %d", len(cfg.CustomModelPricing), len(tt.want))
+			}
+			for model, wantRate := range tt.want {
+				got, ok := cfg.CustomModelPricing[model]
+				if !ok {
+					t.Errorf("missing model %q", model)
+					continue
+				}
+				if got != wantRate {
+					t.Errorf("model %q = %+v, want %+v", model, got, wantRate)
+				}
+			}
+		})
 	}
 }

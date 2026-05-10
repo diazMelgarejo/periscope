@@ -16,6 +16,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/parser"
 )
 
@@ -26,15 +27,85 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 14: persist session-level model context window
-// metadata so recorded capacity survives resyncs and can
-// drive occupancy calculations.
-const dataVersion = 14
+// Bumped to 27: Piebald parser now persists normalized per-message
+// token_usage JSON. Existing Piebald rows need re-parsing so Usage
+// reports can include older Piebald sessions.
+//
+// (26: Claude parser now (a) links Task / Agent tool
+// calls to child subagent sessions via toolUseResult.agentId
+// when queue/progress mappings are absent, populating
+// tool_calls.subagent_session_id, and (b) merges additive
+// same-message.id assistant chunks instead of keeping only the
+// last entry, preserving sibling tool_use blocks and
+// progressively-built text. Existing rows need re-parsing so
+// these linkages and merged content show up.)
+//
+// (25: Codex parser now also links codex_app subagents
+// via collab_agent_spawn_end event_msgs, wait_agent function
+// calls, and agent_path subagent notifications. Existing rows
+// need re-parsing so codex_app subagent linkage works.)
+//
+// (24: Codex parser now annotates spawn_agent tool calls
+// with subagent_session_id once the spawned agent id is known.
+// Existing rows need re-parsing so inline subagent expansion can
+// resolve child sessions from persisted tool call metadata.)
+//
+// (23: split termination_status into awaiting_user vs
+// clean (Claude end_turn / Codex task_complete vs other clean
+// stops); Codex parser now classifies based on task lifecycle
+// events. Existing rows need re-parsing so the new awaiting_user
+// value populates correctly.)
+//
+// (22: added termination_status column to sessions; existing
+// rows need re-parsing so the Claude classifier can populate
+// the new column.)
+//
+// (21: Copilot parser now reads workspace.yaml to use the
+// LLM-generated session name as first_message. Existing
+// directory-format sessions where workspace.yaml.mtime <=
+// events.jsonl.mtime would be permanently skipped without this
+// bump, leaving first_message as the raw first user message.)
+//
+// (20: Claude parser now surfaces queued_command attachment
+// entries (user messages typed mid-tool-call) as real user
+// messages with source_subtype="queued_command".)
+//
+// (19: Copilot parser now filters synthetic skill context
+// user messages.)
+//
+// (18: Claude parser now skips /clear and /effort
+// command envelopes when computing first_message, so sessions
+// that opened with one of those commands show the next real
+// user message in the sidebar instead of the command text.
+// Re-parsing rewrites first_message with the new logic.)
+//
+// (17: Codex <skill> template filtering.)
+// (16: <turn_aborted> system messages.)
+const dataVersion = 27
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
+// ClassifierHashKey is the shared SQLite stats / PG sync_metadata key
+// under which the current is_automated classifier hash is stored.
+// Exported so the postgres package and the classifier rebuild CLI
+// reference one definition instead of repeating the literal.
+const ClassifierHashKey = "is_automated_classifier_hash"
+
 //go:embed schema.sql
 var schemaSQL string
+
+// messagesADTriggerDDL is the AFTER DELETE trigger that mirrors row
+// removals into the FTS5 shadow tables. ReplaceSessionMessages drops
+// this trigger inside its transaction (replacing N per-row FTS deletes
+// with a single bulk INSERT...SELECT) and then re-runs this DDL to
+// restore it before commit. Keeping the statement in one place keeps
+// the two installation sites byte-identical.
+const messagesADTriggerDDL = `
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+        VALUES('delete', old.id, old.content);
+END;
+`
 
 const schemaFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -47,12 +118,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
-
-CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-END;
-
+` + messagesADTriggerDDL + `
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
         VALUES('delete', old.id, old.content);
@@ -74,6 +140,8 @@ type DB struct {
 
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
+
+	customPricing map[string]config.CustomModelRate
 }
 
 // getReader returns the current read-only connection pool.
@@ -89,6 +157,10 @@ func (db *DB) Path() string {
 
 // ReadOnly returns false for the local SQLite store.
 func (db *DB) ReadOnly() bool { return false }
+
+func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
+	db.customPricing = p
+}
 
 // SetCursorSecret updates the secret key used for cursor signing.
 func (db *DB) SetCursorSecret(secret []byte) {
@@ -352,20 +424,12 @@ func (db *DB) migrateColumns() error {
 			"ALTER TABLE sessions ADD COLUMN peak_context_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
-			"sessions", "model_context_window_tokens",
-			"ALTER TABLE sessions ADD COLUMN model_context_window_tokens INTEGER NOT NULL DEFAULT 0",
-		},
-		{
 			"sessions", "has_total_output_tokens",
 			"ALTER TABLE sessions ADD COLUMN has_total_output_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
 			"sessions", "has_peak_context_tokens",
 			"ALTER TABLE sessions ADD COLUMN has_peak_context_tokens INTEGER NOT NULL DEFAULT 0",
-		},
-		{
-			"sessions", "has_model_context_window_tokens",
-			"ALTER TABLE sessions ADD COLUMN has_model_context_window_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
 			"sessions", "local_modified_at",
@@ -467,6 +531,22 @@ func (db *DB) migrateColumns() error {
 			"sessions", "is_truncated",
 			"ALTER TABLE sessions ADD COLUMN is_truncated INTEGER NOT NULL DEFAULT 0",
 		},
+		{
+			"sessions", "file_inode",
+			"ALTER TABLE sessions ADD COLUMN file_inode INTEGER",
+		},
+		{
+			"sessions", "file_device",
+			"ALTER TABLE sessions ADD COLUMN file_device INTEGER",
+		},
+		{
+			"messages", "thinking_text",
+			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "termination_status",
+			"ALTER TABLE sessions ADD COLUMN termination_status TEXT",
+		},
 	}
 
 	for _, m := range migrations {
@@ -502,6 +582,15 @@ func (db *DB) migrateColumns() error {
 		return err
 	}
 
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
+		 ON sessions(termination_status)`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating idx_sessions_termination_status: %w", err,
+		)
+	}
+
 	if _, err := w.Exec(`
 		CREATE TABLE IF NOT EXISTS remote_skipped_files (
 			host       TEXT NOT NULL,
@@ -512,40 +601,6 @@ func (db *DB) migrateColumns() error {
 	); err != nil {
 		return fmt.Errorf(
 			"creating remote_skipped_files: %w", err,
-		)
-	}
-
-	if _, err := w.Exec(`
-		CREATE TABLE IF NOT EXISTS context_turn_summaries (
-			id              INTEGER PRIMARY KEY,
-			session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-			turn_index      INTEGER NOT NULL,
-			start_ordinal   INTEGER NOT NULL,
-			end_ordinal     INTEGER NOT NULL,
-			content_hash    TEXT NOT NULL,
-			summary         TEXT NOT NULL,
-			intent          TEXT NOT NULL DEFAULT '',
-			outcome         TEXT NOT NULL DEFAULT '',
-			topic           TEXT NOT NULL DEFAULT '',
-			files_touched   TEXT NOT NULL DEFAULT '[]',
-			tags            TEXT NOT NULL DEFAULT '[]',
-			model           TEXT NOT NULL DEFAULT '',
-			prompt_version  INTEGER NOT NULL DEFAULT 1,
-			created_at      TEXT NOT NULL
-				DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-			UNIQUE(session_id, turn_index, content_hash)
-		)`,
-	); err != nil {
-		return fmt.Errorf(
-			"creating context_turn_summaries: %w", err,
-		)
-	}
-	if _, err := w.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_context_turn_summaries_session
-			ON context_turn_summaries(session_id, turn_index)`,
-	); err != nil {
-		return fmt.Errorf(
-			"creating context_turn_summaries index: %w", err,
 		)
 	}
 
@@ -586,31 +641,30 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 	return nil
 }
 
-// backfillIsAutomatedLocked recomputes is_automated for all
-// sessions, correcting both false negatives (new patterns) and
-// stale false positives (patterns tightened since last run).
-// Guarded by a stats marker so it only runs once per pattern
-// version.
+// backfillIsAutomatedLocked verifies is_automated for all
+// sessions, correcting both false negatives (new patterns or
+// stale imported rows) and stale false positives (patterns
+// tightened since last run). The stored classifier hash records
+// which classifier wrote the current audit, but it is not a
+// complete integrity marker: rows can be copied from older DBs
+// or stale remote machines after the hash was stamped.
 func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
-	const marker = "is_automated_backfill_v2"
-	var done int
-	if err := w.QueryRow(
-		`SELECT count(*) FROM stats
-		 WHERE key = ? AND value != 0`, marker,
-	).Scan(&done); err != nil {
+	current := ClassifierHash()
+	var stored string
+	err := w.QueryRow(
+		`SELECT value FROM stats WHERE key = ?`,
+		ClassifierHashKey,
+	).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf(
-			"probing automated backfill marker: %w", err,
+			"probing classifier hash: %w", err,
 		)
-	}
-	if done > 0 {
-		return nil
 	}
 
 	rows, err := w.Query(
 		`SELECT id, first_message, user_message_count,
 			is_automated
-		 FROM sessions
-		 WHERE first_message IS NOT NULL`,
+		 FROM sessions`,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -621,20 +675,24 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 
 	var setIDs, clearIDs []string
 	for rows.Next() {
-		var id, fm string
+		var id string
+		var fm sql.NullString
 		var umc int
-		var current bool
+		var rowAutomated bool
 		if err := rows.Scan(
-			&id, &fm, &umc, &current,
+			&id, &fm, &umc, &rowAutomated,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning backfill candidate: %w", err,
 			)
 		}
-		want := umc <= 1 && IsAutomatedSession(fm)
-		if want && !current {
+		want := false
+		if fm.Valid {
+			want = umc <= 1 && IsAutomatedSession(fm.String)
+		}
+		if want && !rowAutomated {
 			setIDs = append(setIDs, id)
-		} else if !want && current {
+		} else if !want && rowAutomated {
 			clearIDs = append(clearIDs, id)
 		}
 	}
@@ -661,12 +719,41 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 		)
 	}
 
-	_, err = w.Exec(
-		`INSERT INTO stats (key, value) VALUES (?, 1)
+	// stats.value is INTEGER affinity; SQLite stores hex text
+	// here verbatim. Switching to STRICT tables would require
+	// moving this row to a TEXT-typed table.
+	if _, err := w.Exec(
+		`INSERT INTO stats (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		marker,
-	)
-	return err
+		ClassifierHashKey, current,
+	); err != nil {
+		return fmt.Errorf(
+			"storing classifier hash: %w", err,
+		)
+	}
+	return nil
+}
+
+// ForceBackfillIsAutomated reclassifies is_automated across
+// every session, ignoring any cached classifier hash. ResyncAll
+// calls this after CopyOrphanedDataFrom because orphan-copied
+// rows carry is_automated values computed against the *old* DB's
+// classifier set; the temp DB's at-Open backfill already ran on
+// an empty table and stamped the current hash, so without this
+// call those rows would be permanently stuck with stale flags.
+func (db *DB) ForceBackfillIsAutomated() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	w := db.getWriter()
+	if _, err := w.Exec(
+		`DELETE FROM stats WHERE key = ?`,
+		ClassifierHashKey,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing classifier hash: %w", err,
+		)
+	}
+	return db.backfillIsAutomatedLocked(w)
 }
 
 func batchUpdateAutomated(
@@ -684,7 +771,9 @@ func batchUpdateAutomated(
 			phs[j] = "?"
 		}
 		_, err := w.Exec(
-			"UPDATE sessions SET is_automated = ?"+
+			"UPDATE sessions"+
+				" SET is_automated = ?,"+
+				"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
 				" WHERE id IN ("+
 				strings.Join(phs, ",")+
 				")",

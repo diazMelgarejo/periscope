@@ -7,6 +7,7 @@
   import { createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
   import MessageContent from "./MessageContent.svelte";
   import CompactBoundaryDivider from "./CompactBoundaryDivider.svelte";
+  import SystemBoundaryCard from "../system/SystemBoundaryCard.svelte";
   import ToolCallGroup from "./ToolCallGroup.svelte";
   import type { Message } from "../../api/types.js";
   import {
@@ -158,7 +159,7 @@
   // Recompute visible timestamp when minimap opens or
   // message content changes (e.g. SSE reload).
   $effect(() => {
-    if (ui.activityMinimapOpen) {
+    if (ui.vitalsOpen) {
       // Track message array so the effect re-runs after
       // content changes while the minimap is open.
       void messages.messages.length;
@@ -190,7 +191,7 @@
         }
       }
 
-      if (ui.activityMinimapOpen) {
+      if (ui.vitalsOpen) {
         publishVisibleTimestamp();
       }
     });
@@ -381,6 +382,12 @@
               />
             {:else if item.message.is_compact_boundary}
               <CompactBoundaryDivider message={item.message} />
+            {:else if item.message.is_system && item.message.source_subtype && item.message.source_subtype !== 'compact_boundary'}
+              <SystemBoundaryCard
+                subtype={item.message.source_subtype}
+                content={item.message.content}
+                timestamp={item.message.timestamp}
+              />
             {:else}
               <MessageContent
                 message={item.message}

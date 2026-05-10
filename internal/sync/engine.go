@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -23,6 +24,20 @@ const (
 	batchSize  = 100
 	maxWorkers = 8
 )
+
+type syncWriteMode int
+
+const (
+	syncWriteDefault syncWriteMode = iota
+	syncWriteBulk
+)
+
+var errSessionPreserved = errors.New("session preserved")
+
+func isIntentionalSessionSkip(err error) bool {
+	return errors.Is(err, db.ErrSessionExcluded) ||
+		errors.Is(err, db.ErrSessionTrashed)
+}
 
 // Emitter is notified after a sync pass writes data. Implementations
 // must be thread-safe; Emit is called from whatever goroutine runs
@@ -63,6 +78,7 @@ type EngineConfig struct {
 // Engine orchestrates session file discovery and sync.
 type Engine struct {
 	db                      *db.DB
+	openCodeArchiveStore    db.Store
 	agentDirs               map[parser.AgentType][]string
 	machine                 string
 	blockedResultCategories map[string]bool
@@ -256,7 +272,8 @@ func (e *Engine) SyncPaths(paths []string) {
 
 	results := e.startWorkers(context.Background(), files)
 	stats = e.collectAndBatch(
-		context.Background(), results, len(files), nil,
+		context.Background(), results, len(files), len(files), nil,
+		syncWriteDefault,
 	)
 	e.persistSkipCache()
 
@@ -279,11 +296,17 @@ func (e *Engine) classifyPaths(
 	paths []string,
 ) []parser.DiscoveredFile {
 	geminiProjectsByDir := make(map[string]map[string]string)
+	seen := make(map[string]struct{}, len(paths))
 	var files []parser.DiscoveredFile
 	for _, p := range paths {
 		if df, ok := e.classifyOnePath(
 			p, geminiProjectsByDir,
 		); ok {
+			key := string(df.Agent) + "\x00" + df.Path
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
 			files = append(files, df)
 		}
 	}
@@ -326,6 +349,21 @@ func (e *Engine) classifyOnePath(
 	geminiProjectsByDir map[string]map[string]string,
 ) (parser.DiscoveredFile, bool) {
 	sep := string(filepath.Separator)
+	pathExists := true
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			pathExists = false
+		}
+	}
+
+	if df, ok := e.classifyOpenCodePath(
+		path, pathExists,
+	); ok {
+		return df, true
+	}
+	if !pathExists {
+		return parser.DiscoveredFile{}, false
+	}
 
 	// Claude: <claudeDir>/<project>/<session>.jsonl
 	//     or: <claudeDir>/<project>/<session>/subagents/agent-<id>.jsonl
@@ -426,20 +464,33 @@ func (e *Engine) classifyOnePath(
 					Agent: parser.AgentCopilot,
 				}, true
 			case 2:
-				if parts[1] != "events.jsonl" {
-					continue
+				if parts[1] == "events.jsonl" {
+					return parser.DiscoveredFile{
+						Path:  path,
+						Agent: parser.AgentCopilot,
+					}, true
 				}
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentCopilot,
-				}, true
+				// workspace.yaml changes should trigger a re-parse
+				// of the sibling events.jsonl.
+				if parts[1] == "workspace.yaml" {
+					eventsPath := filepath.Join(
+						stateDir, parts[0], "events.jsonl",
+					)
+					if _, err := os.Stat(eventsPath); err == nil {
+						return parser.DiscoveredFile{
+							Path:  eventsPath,
+							Agent: parser.AgentCopilot,
+						}, true
+					}
+				}
+				continue
 			default:
 				continue
 			}
 		}
 	}
 
-	// Gemini: <geminiDir>/tmp/<dir>/chats/session-*.json
+	// Gemini: <geminiDir>/tmp/<dir>/chats/session-*.json(.l)
 	// <dir> is either a SHA-256 hash (old) or project name (new).
 	for _, geminiDir := range e.agentDirs[parser.AgentGemini] {
 		if geminiDir == "" {
@@ -454,7 +505,8 @@ func (e *Engine) classifyOnePath(
 			}
 			name := parts[3]
 			if !strings.HasPrefix(name, "session-") ||
-				!strings.HasSuffix(name, ".json") {
+				(!strings.HasSuffix(name, ".json") &&
+					!strings.HasSuffix(name, ".jsonl")) {
 				continue
 			}
 			dirName := parts[1]
@@ -754,6 +806,131 @@ func (e *Engine) classifyOnePath(
 	return parser.DiscoveredFile{}, false
 }
 
+func (e *Engine) classifyOpenCodePath(
+	path string, pathExists bool,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+
+	// OpenCode storage:
+	//   <opencodeDir>/storage/session/<project>/<session>.json
+	//   <opencodeDir>/storage/message/<session>/<message>.json
+	//   <opencodeDir>/storage/part/<message>/<part>.json
+	for _, openCodeDir := range e.agentDirs[parser.AgentOpenCode] {
+		if openCodeDir == "" {
+			continue
+		}
+		rel, ok := isUnder(openCodeDir, path)
+		if !ok {
+			continue
+		}
+		base := filepath.Base(rel)
+		if rel == "opencode.db" ||
+			strings.HasPrefix(base, "opencode.db-") {
+			dbPath := filepath.Join(openCodeDir, "opencode.db")
+			if info, err := os.Stat(dbPath); err == nil &&
+				!info.IsDir() {
+				return parser.DiscoveredFile{
+					Path:  dbPath,
+					Agent: parser.AgentOpenCode,
+				}, true
+			}
+			continue
+		}
+		if parser.ResolveOpenCodeSource(openCodeDir).Mode !=
+			parser.OpenCodeSourceStorage {
+			continue
+		}
+		parts := strings.Split(rel, sep)
+		switch {
+		case pathExists &&
+			len(parts) == 4 &&
+			parts[0] == "storage" &&
+			parts[1] == "session" &&
+			strings.HasSuffix(parts[3], ".json"):
+			return parser.DiscoveredFile{
+				Path:  path,
+				Agent: parser.AgentOpenCode,
+			}, true
+		case len(parts) == 4 &&
+			parts[0] == "storage" &&
+			parts[1] == "message" &&
+			strings.HasSuffix(parts[3], ".json"):
+			sessionPath := parser.FindOpenCodeSourceFile(
+				openCodeDir, parts[2],
+			)
+			if sessionPath == "" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  sessionPath,
+				Agent: parser.AgentOpenCode,
+			}, true
+		case len(parts) == 4 &&
+			parts[0] == "storage" &&
+			parts[1] == "part" &&
+			strings.HasSuffix(parts[3], ".json"):
+			sessionID := ""
+			if pathExists {
+				sessionID = readOpenCodeStorageSessionID(path)
+			}
+			if sessionID == "" {
+				sessionID =
+					findOpenCodeStorageSessionIDByMessageID(
+						openCodeDir, parts[2],
+					)
+			}
+			if sessionID == "" {
+				continue
+			}
+			sessionPath := parser.FindOpenCodeSourceFile(
+				openCodeDir, sessionID,
+			)
+			if sessionPath == "" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  sessionPath,
+				Agent: parser.AgentOpenCode,
+			}, true
+		case !pathExists &&
+			len(parts) == 3 &&
+			parts[0] == "storage" &&
+			parts[1] == "message":
+			sessionPath := parser.FindOpenCodeSourceFile(
+				openCodeDir, parts[2],
+			)
+			if sessionPath == "" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  sessionPath,
+				Agent: parser.AgentOpenCode,
+			}, true
+		case !pathExists &&
+			len(parts) == 3 &&
+			parts[0] == "storage" &&
+			parts[1] == "part":
+			sessionID := findOpenCodeStorageSessionIDByMessageID(
+				openCodeDir, parts[2],
+			)
+			if sessionID == "" {
+				continue
+			}
+			sessionPath := parser.FindOpenCodeSourceFile(
+				openCodeDir, sessionID,
+			)
+			if sessionPath == "" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  sessionPath,
+				Agent: parser.AgentOpenCode,
+			}, true
+		}
+	}
+	return parser.DiscoveredFile{}, false
+}
+
 // vscodeJSONLSiblingExists returns true when path is a .json
 // file and a .jsonl sibling exists for the same UUID. This
 // mirrors the dedup logic in DiscoverVSCodeCopilotSessions.
@@ -791,17 +968,25 @@ func (e *Engine) ResyncAll(
 	origPath := origDB.Path()
 	tempPath := origPath + resyncTempSuffix
 
-	// Snapshot old file-backed session count to detect
-	// empty-discovery. Uses file-backed count (excludes
-	// OpenCode) so OpenCode-only datasets don't trigger the
-	// guard. Fail closed: if we can't query, assume old DB
-	// has file-backed data worth protecting.
+	// Snapshot old non-OpenCode file-backed session count to
+	// detect empty-discovery. OpenCode is excluded entirely
+	// because a root may legitimately fall back between
+	// storage and SQLite sources across resyncs. Fail closed:
+	// if we can't query, assume old DB has file-backed data
+	// worth protecting.
 	oldFileSessions, err := origDB.FileBackedSessionCount(
 		context.Background(),
 	)
 	if err != nil {
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
+	} else {
+		oldFileSessions -= e.countRootOpenCodeSessions(
+			origDB,
+		)
+		if oldFileSessions < 0 {
+			oldFileSessions = 0
+		}
 	}
 
 	// Clean up stale temp DB from a prior crash.
@@ -845,11 +1030,54 @@ func (e *Engine) ResyncAll(
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
+	trashedCopied := 0
+	if n, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
+		log.Printf("resync: pre-sync copy trashed sessions: %v", err)
+		// Non-fatal: worst case, trashed sessions are reparsed
+		// and then re-marked as trashed by metadata copy.
+	} else if n > 0 {
+		trashedCopied = n
+		log.Printf("resync: pre-sync copied %d trashed sessions", n)
+	}
+
+	// The temp DB is not swapped into production until the end,
+	// so avoid per-row FTS trigger work during the bulk load and
+	// rebuild the index once all message rows are final.
+	ftsDropped := false
+	if newDB.HasFTS() {
+		tFTS := time.Now()
+		if err := newDB.DropFTS(); err != nil {
+			log.Printf("resync: drop temp fts: %v", err)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			stats = SyncStats{
+				Aborted: true,
+				Warnings: []string{
+					"resync failed: drop temp fts: " +
+						err.Error(),
+				},
+			}
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return
+		}
+		ftsDropped = true
+		log.Printf(
+			"resync: drop temp fts: %s",
+			time.Since(tFTS).Round(time.Millisecond),
+		)
+	}
 
 	// 3. Point engine at newDB and sync into it.
+	e.openCodeArchiveStore = origDB
 	e.db = newDB
-	stats = e.syncAllLocked(ctx, onProgress, time.Time{})
+	stats = e.syncAllLocked(
+		ctx, onProgress, time.Time{}, syncWriteBulk,
+	)
 	e.db = origDB // restore immediately
+	e.openCodeArchiveStore = nil
 
 	// Abort swap when the fresh DB would be worse than the
 	// original:
@@ -858,14 +1086,24 @@ func (e *Engine) ResyncAll(
 	//   when old DB had data
 	// - more files failed than succeeded (permission errors,
 	//   disk issues)
+	// OpenCode-only rebuilds are allowed to finish with 0
+	// freshly synced sessions when every storage parse was
+	// intentionally preserved against the archive; orphan copy
+	// restores those rows immediately after the sync pass.
 	// A few permanent parse failures are tolerated since those
 	// files were broken in the old DB too.
 	emptyDiscovery := stats.filesDiscovered == 0 &&
 		stats.filesOK == 0 &&
 		oldFileSessions > 0
+	preservedOnly := stats.Synced == 0 &&
+		stats.TotalSessions > 0 &&
+		stats.Failed == 0 &&
+		(oldFileSessions == 0 || trashedCopied > 0)
 	abortSwap := stats.Aborted ||
 		emptyDiscovery ||
-		(stats.Synced == 0 && stats.TotalSessions > 0) ||
+		(stats.Synced == 0 &&
+			stats.TotalSessions > 0 &&
+			!preservedOnly) ||
 		(stats.Failed > 0 && stats.Failed > stats.filesOK)
 	if abortSwap {
 		log.Printf(
@@ -988,6 +1226,43 @@ func (e *Engine) ResyncAll(
 		// Non-fatal: worst case, renames/soft-deletes are lost.
 	}
 
+	// Reclassify is_automated across every row. Orphan-copied
+	// rows carry is_automated values computed against the OLD
+	// DB's classifier set; the temp DB's at-Open backfill ran on
+	// an empty table and stamped the current hash, so without
+	// this pass those rows would be permanently stuck with stale
+	// flags. Non-fatal: worst case, some sessions keep their
+	// pre-resync classification until the next algorithm bump.
+	if err := newDB.ForceBackfillIsAutomated(); err != nil {
+		log.Printf("resync: reclassify is_automated: %v", err)
+	}
+
+	if ftsDropped {
+		tFTS := time.Now()
+		if err := newDB.RebuildFTS(); err != nil {
+			log.Printf("resync: rebuild fts: %v", err)
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"fts rebuild failed, aborting swap: "+
+					err.Error(),
+			)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			if rerr := origDB.Reopen(); rerr != nil {
+				log.Printf("resync: recovery reopen: %v", rerr)
+			}
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats
+		}
+		log.Printf(
+			"resync: rebuild fts: %s",
+			time.Since(tFTS).Round(time.Millisecond),
+		)
+	}
+
 	// 5. Close newDB and swap files, then reopen origDB.
 	newDB.Close()
 
@@ -1044,6 +1319,23 @@ func removeWAL(path string) {
 	os.Remove(path + "-shm")
 }
 
+func (e *Engine) countRootOpenCodeSessions(
+	database *db.DB,
+) int {
+	var count int
+	err := database.Reader().QueryRow(`
+		SELECT COUNT(*) FROM sessions
+		WHERE agent = ?
+		  AND message_count > 0
+		  AND relationship_type NOT IN ('subagent', 'fork')
+		  AND deleted_at IS NULL
+	`, string(parser.AgentOpenCode)).Scan(&count)
+	if err != nil {
+		log.Printf("count root opencode sessions: %v", err)
+	}
+	return count
+}
+
 // Sync state keys persisted in pg_sync_state.
 const (
 	syncStateStartedAt  = "last_sync_started_at"
@@ -1080,7 +1372,9 @@ func (e *Engine) SyncAll(
 		}
 	}()
 	defer e.syncMu.Unlock()
-	stats = e.syncAllLocked(ctx, onProgress, time.Time{})
+	stats = e.syncAllLocked(
+		ctx, onProgress, time.Time{}, syncWriteDefault,
+	)
 	return
 }
 
@@ -1101,12 +1395,15 @@ func (e *Engine) SyncAllSince(
 		}
 	}()
 	defer e.syncMu.Unlock()
-	stats = e.syncAllLocked(ctx, onProgress, since)
+	stats = e.syncAllLocked(
+		ctx, onProgress, since, syncWriteDefault,
+	)
 	return
 }
 
 func (e *Engine) syncAllLocked(
 	ctx context.Context, onProgress ProgressFunc, since time.Time,
+	writeMode syncWriteMode,
 ) SyncStats {
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
@@ -1153,17 +1450,19 @@ func (e *Engine) syncAllLocked(
 		)
 	}
 
+	progressTotal := len(all)
 	if onProgress != nil {
+		progressTotal += e.countDBBackedSessions(ctx)
 		onProgress(Progress{
 			Phase:         PhaseSyncing,
-			SessionsTotal: len(all),
+			SessionsTotal: progressTotal,
 		})
 	}
 
 	tWorkers := time.Now()
 	results := e.startWorkers(ctx, all)
 	stats := e.collectAndBatch(
-		ctx, results, len(all), onProgress,
+		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
 	if verbose {
 		log.Printf(
@@ -1184,6 +1483,24 @@ func (e *Engine) syncAllLocked(
 		return stats
 	}
 
+	dbProgress := Progress{
+		Phase:           PhaseSyncing,
+		SessionsTotal:   progressTotal,
+		SessionsDone:    stats.filesDiscovered,
+		MessagesIndexed: stats.messagesIndexed,
+	}
+
+	advanceDBProgress := func(total int, pending []pendingWrite) {
+		if onProgress == nil || total == 0 {
+			return
+		}
+		dbProgress.SessionsDone += total
+		for _, pw := range pending {
+			dbProgress.MessagesIndexed += len(pw.msgs)
+		}
+		onProgress(dbProgress)
+	}
+
 	// Sync OpenCode sessions (DB-backed, not file-based).
 	// Uses full replace because OpenCode messages can change
 	// in place (streaming updates, tool result pairing).
@@ -1193,17 +1510,28 @@ func (e *Engine) syncAllLocked(
 		stats.TotalSessions += len(ocPending)
 		tWrite := time.Now()
 		var ocWritten int
-		for _, pw := range ocPending {
-			if ctx.Err() != nil {
-				break
-			}
-			switch err := e.writeSessionFull(pw); {
-			case err == nil:
-				ocWritten++
-			case errors.Is(err, db.ErrSessionExcluded):
-				// Intentional skip, not a failure.
-			default:
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			ocWritten, _, failedWrites = e.writeBatch(
+				ocPending, writeMode, true,
+			)
+			for range failedWrites {
 				stats.RecordFailed()
+			}
+		} else {
+			for _, pw := range ocPending {
+				if ctx.Err() != nil {
+					break
+				}
+				switch err := e.writeSessionFull(pw); {
+				case err == nil:
+					ocWritten++
+				case isIntentionalSessionSkip(err),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
 			}
 		}
 		stats.RecordSynced(ocWritten)
@@ -1221,6 +1549,7 @@ func (e *Engine) syncAllLocked(
 			time.Since(tOC).Round(time.Millisecond),
 		)
 	}
+	advanceDBProgress(e.countDBBackedProgressTotal(parser.AgentOpenCode), ocPending)
 
 	if ctx.Err() != nil {
 		stats.Aborted = true
@@ -1234,17 +1563,28 @@ func (e *Engine) syncAllLocked(
 		stats.TotalSessions += len(warpPending)
 		tWrite := time.Now()
 		var warpWritten int
-		for _, pw := range warpPending {
-			if ctx.Err() != nil {
-				break
-			}
-			switch err := e.writeSessionFull(pw); {
-			case err == nil:
-				warpWritten++
-			case errors.Is(err, db.ErrSessionExcluded):
-				// Intentional skip, not a failure.
-			default:
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			warpWritten, _, failedWrites = e.writeBatch(
+				warpPending, writeMode, true,
+			)
+			for range failedWrites {
 				stats.RecordFailed()
+			}
+		} else {
+			for _, pw := range warpPending {
+				if ctx.Err() != nil {
+					break
+				}
+				switch err := e.writeSessionFull(pw); {
+				case err == nil:
+					warpWritten++
+				case isIntentionalSessionSkip(err),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
 			}
 		}
 		stats.RecordSynced(warpWritten)
@@ -1262,10 +1602,125 @@ func (e *Engine) syncAllLocked(
 			time.Since(tWarp).Round(time.Millisecond),
 		)
 	}
+	advanceDBProgress(e.countDBBackedProgressTotal(parser.AgentWarp), warpPending)
 
 	if ctx.Err() != nil {
 		stats.Aborted = true
 		return stats
+	}
+
+	// Sync Forge sessions (DB-backed, not file-based).
+	tForge := time.Now()
+	forgePending := e.syncForge(ctx)
+	if len(forgePending) > 0 {
+		stats.TotalSessions += len(forgePending)
+		tWrite := time.Now()
+		var forgeWritten int
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			forgeWritten, _, failedWrites = e.writeBatch(
+				forgePending, writeMode, true,
+			)
+			for range failedWrites {
+				stats.RecordFailed()
+			}
+		} else {
+			for _, pw := range forgePending {
+				if ctx.Err() != nil {
+					break
+				}
+				switch err := e.writeSessionFull(pw); {
+				case err == nil:
+					forgeWritten++
+				case errors.Is(err, db.ErrSessionExcluded),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
+			}
+		}
+		stats.RecordSynced(forgeWritten)
+		if verbose {
+			log.Printf(
+				"forge write: %d sessions in %s",
+				len(forgePending),
+				time.Since(tWrite).Round(time.Millisecond),
+			)
+		}
+	}
+	if verbose {
+		log.Printf(
+			"forge sync: %s",
+			time.Since(tForge).Round(time.Millisecond),
+		)
+	}
+	advanceDBProgress(e.countDBBackedProgressTotal(parser.AgentForge), forgePending)
+
+	if ctx.Err() != nil {
+		stats.Aborted = true
+		return stats
+	}
+
+	// Sync Piebald sessions (DB-backed, not file-based).
+	tPiebald := time.Now()
+	piebaldPending := e.syncPiebald(ctx)
+	if len(piebaldPending) > 0 {
+		stats.TotalSessions += len(piebaldPending)
+		tWrite := time.Now()
+		var piebaldWritten int
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			piebaldWritten, _, failedWrites = e.writeBatch(
+				piebaldPending, writeMode, true,
+			)
+			for range failedWrites {
+				stats.RecordFailed()
+			}
+		} else {
+			for _, pw := range piebaldPending {
+				if ctx.Err() != nil {
+					break
+				}
+				switch err := e.writeSessionFull(pw); {
+				case err == nil:
+					piebaldWritten++
+				case errors.Is(err, db.ErrSessionExcluded),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
+			}
+		}
+		stats.RecordSynced(piebaldWritten)
+		if verbose {
+			log.Printf(
+				"piebald write: %d sessions in %s",
+				len(piebaldPending),
+				time.Since(tWrite).Round(time.Millisecond),
+			)
+		}
+	}
+	if verbose {
+		log.Printf(
+			"piebald sync: %s",
+			time.Since(tPiebald).Round(time.Millisecond),
+		)
+	}
+	advanceDBProgress(e.countDBBackedProgressTotal(parser.AgentPiebald), piebaldPending)
+
+	if ctx.Err() != nil {
+		stats.Aborted = true
+		return stats
+	}
+
+	// Link subagent child sessions to their parents after all DB-backed
+	// agent writes (Warp, Forge, Piebald). LinkSubagentSessions is idempotent — its
+	// WHERE filter and partial index make it a cheap no-op when nothing new
+	// was written — so no guard is needed.
+	if err := e.db.LinkSubagentSessions(); err != nil {
+		log.Printf("link subagent sessions: %v", err)
 	}
 
 	tPersist := time.Now()
@@ -1276,6 +1731,15 @@ func (e *Engine) syncAllLocked(
 			skipCount,
 			time.Since(tPersist).Round(time.Millisecond),
 		)
+	}
+
+	if onProgress != nil {
+		onProgress(Progress{
+			Phase:           PhaseDone,
+			SessionsTotal:   progressTotal,
+			SessionsDone:    progressTotal,
+			MessagesIndexed: stats.messagesIndexed,
+		})
 	}
 
 	e.mu.Lock()
@@ -1326,16 +1790,139 @@ func filterFilesByMtime(
 	cutoffNs := cutoff.UnixNano()
 	out := files[:0]
 	for _, f := range files {
-		info, err := os.Stat(f.Path)
+		mtime, err := discoveredFileMtime(f)
 		if err != nil {
 			out = append(out, f)
 			continue
 		}
-		if info.ModTime().UnixNano() >= cutoffNs {
+		if mtime >= cutoffNs {
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+func discoveredFileMtime(
+	file parser.DiscoveredFile,
+) (int64, error) {
+	if file.Agent == parser.AgentOpenCode {
+		if _, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(file.Path); ok {
+			return parser.OpenCodeSourceMtime(file.Path)
+		}
+	}
+
+	info, err := os.Stat(file.Path)
+	if err != nil {
+		return 0, err
+	}
+
+	if file.Agent == parser.AgentCopilot {
+		return copilotEffectiveMtime(file.Path, info), nil
+	}
+
+	return info.ModTime().UnixNano(), nil
+}
+
+// syncOpenCode syncs sessions from OpenCode SQLite databases.
+// Uses per-session time_updated to detect changes, so only
+// modified sessions are fully parsed. Returns pending writes.
+func (e *Engine) openCodePendingSessionIDs(dir string) []string {
+	dbPath := filepath.Join(dir, "opencode.db")
+	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
+		return nil
+	}
+
+	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync opencode: %v", err)
+		return nil
+	}
+	storageIDs := parser.OpenCodeStorageSessionIDs(dir)
+	var changed []string
+	for _, m := range metas {
+		if _, ok := storageIDs[m.SessionID]; ok {
+			continue
+		}
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	return changed
+}
+
+func (e *Engine) countOneOpenCodeSessions(dir string) int {
+	dbPath := filepath.Join(dir, "opencode.db")
+	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
+		return 0
+	}
+	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync opencode: %v", err)
+		return 0
+	}
+	storageIDs := parser.OpenCodeStorageSessionIDs(dir)
+	count := 0
+	for _, m := range metas {
+		if _, ok := storageIDs[m.SessionID]; !ok {
+			count++
+		}
+	}
+	return count
+}
+
+func (e *Engine) countDBBackedProgressTotal(agent parser.AgentType) int {
+	total := 0
+	for _, dir := range e.agentDirs[agent] {
+		if dir == "" {
+			continue
+		}
+		switch agent {
+		case parser.AgentOpenCode:
+			total += e.countOneOpenCodeSessions(dir)
+		case parser.AgentWarp:
+			total += e.countOneWarpSessions(dir)
+		case parser.AgentForge:
+			total += e.countOneForgeSessions(dir)
+		case parser.AgentPiebald:
+			total += e.countOnePiebaldSessions(dir)
+		}
+	}
+	return total
+}
+
+func (e *Engine) countDBBackedSessions(ctx context.Context) int {
+	if ctx.Err() != nil {
+		return 0
+	}
+	total := 0
+	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOneOpenCodeSessions(dir)
+	}
+	for _, dir := range e.agentDirs[parser.AgentWarp] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOneWarpSessions(dir)
+	}
+	for _, dir := range e.agentDirs[parser.AgentForge] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOneForgeSessions(dir)
+	}
+	for _, dir := range e.agentDirs[parser.AgentPiebald] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOnePiebaldSessions(dir)
+	}
+	return total
 }
 
 // syncOpenCode syncs sessions from OpenCode SQLite databases.
@@ -1364,25 +1951,7 @@ func (e *Engine) syncOneOpenCode(
 	ctx context.Context, dir string,
 ) []pendingWrite {
 	dbPath := filepath.Join(dir, "opencode.db")
-
-	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync opencode: %v", err)
-		return nil
-	}
-	if len(metas) == 0 {
-		return nil
-	}
-
-	var changed []string
-	for _, m := range metas {
-		_, storedMtime, ok :=
-			e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
+	changed := e.openCodePendingSessionIDs(dir)
 	if len(changed) == 0 {
 		return nil
 	}
@@ -1422,12 +1991,14 @@ func (e *Engine) startWorkers(
 	files []parser.DiscoveredFile,
 ) <-chan syncJob {
 	workers := min(max(runtime.NumCPU(), 2), maxWorkers)
+	buffer := max(workers*2, 1)
 
-	jobs := make(chan parser.DiscoveredFile, len(files))
-	results := make(chan syncJob, len(files))
+	jobs := make(chan parser.DiscoveredFile, buffer)
+	results := make(chan syncJob, buffer)
 
+	var wg gosync.WaitGroup
 	for range workers {
-		go func() {
+		wg.Go(func() {
 			for file := range jobs {
 				if ctx.Err() != nil {
 					results <- syncJob{
@@ -1443,13 +2014,17 @@ func (e *Engine) startWorkers(
 					path:          file.Path,
 				}
 			}
-		}()
+		})
 	}
 
-	for _, f := range files {
-		jobs <- f
-	}
-	close(jobs)
+	go func() {
+		for _, f := range files {
+			jobs <- f
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
 	return results
 }
 
@@ -1459,16 +2034,20 @@ func (e *Engine) startWorkers(
 // and returns partial stats.
 func (e *Engine) collectAndBatch(
 	ctx context.Context,
-	results <-chan syncJob, total int,
+	results <-chan syncJob, total int, progressTotal int,
 	onProgress ProgressFunc,
+	writeMode syncWriteMode,
 ) SyncStats {
 	var stats SyncStats
 	stats.TotalSessions = total
 	stats.filesDiscovered = total
 
+	if progressTotal == 0 {
+		progressTotal = total
+	}
 	progress := Progress{
 		Phase:         PhaseSyncing,
-		SessionsTotal: total,
+		SessionsTotal: progressTotal,
 	}
 
 	var pending []pendingWrite
@@ -1493,7 +2072,7 @@ func (e *Engine) collectAndBatch(
 				goto flush
 			}
 			stats.RecordFailed()
-			if r.mtime != 0 {
+			if r.cacheSkip && r.mtime != 0 {
 				e.cacheSkip(r.path, r.mtime)
 			}
 			log.Printf("sync error: %v", r.err)
@@ -1508,14 +2087,18 @@ func (e *Engine) collectAndBatch(
 			continue
 		}
 		if len(r.results) == 0 && r.incremental == nil {
-			e.cacheSkip(r.path, r.mtime)
+			if r.cacheSkip {
+				e.cacheSkip(r.path, r.mtime)
+			}
 			progress.SessionsDone++
 			if onProgress != nil {
 				onProgress(progress)
 			}
 			continue
 		}
-		e.clearSkip(r.path)
+		if r.cacheSkip {
+			e.clearSkip(r.path)
+		}
 		stats.filesOK++
 
 		if r.incremental != nil {
@@ -1528,19 +2111,26 @@ func (e *Engine) collectAndBatch(
 			progress.MessagesIndexed += len(
 				r.incremental.msgs,
 			)
+			stats.messagesIndexed = progress.MessagesIndexed
 		} else {
 			for _, pr := range r.results {
 				pending = append(pending, pendingWrite{
-					sess: pr.Session,
-					msgs: pr.Messages,
+					sess:         pr.Session,
+					msgs:         pr.Messages,
+					forceReplace: r.forceReplace,
 				})
 			}
 		}
 
 		if len(pending) >= batchSize {
-			stats.RecordSynced(len(pending))
-			progress.MessagesIndexed += countMessages(pending)
-			e.writeBatch(pending)
+			writtenSessions, writtenMessages, failedWrites :=
+				e.writeBatch(pending, writeMode, false)
+			stats.RecordSynced(writtenSessions)
+			for range failedWrites {
+				stats.RecordFailed()
+			}
+			progress.MessagesIndexed += writtenMessages
+			stats.messagesIndexed = progress.MessagesIndexed
 			pending = pending[:0]
 		}
 
@@ -1552,9 +2142,14 @@ func (e *Engine) collectAndBatch(
 
 flush:
 	if len(pending) > 0 {
-		stats.RecordSynced(len(pending))
-		progress.MessagesIndexed += countMessages(pending)
-		e.writeBatch(pending)
+		writtenSessions, writtenMessages, failedWrites :=
+			e.writeBatch(pending, writeMode, false)
+		stats.RecordSynced(writtenSessions)
+		for range failedWrites {
+			stats.RecordFailed()
+		}
+		progress.MessagesIndexed += writtenMessages
+		stats.messagesIndexed = progress.MessagesIndexed
 	}
 
 	// Link subagent child sessions to their parents via
@@ -1564,10 +2159,8 @@ flush:
 		log.Printf("link subagent sessions: %v", err)
 	}
 
-	progress.Phase = PhaseDone
-	if onProgress != nil {
-		onProgress(progress)
-	}
+	// PhaseDone is emitted by syncAllLocked after DB-backed
+	// agents finish, so this stage stays in PhaseSyncing.
 	return stats
 }
 
@@ -1583,19 +2176,17 @@ func drainResults(results <-chan syncJob, remaining int) {
 // incremental JSONL parse, used to partially update the
 // session row without overwriting unrelated columns.
 type incrementalUpdate struct {
-	sessionID                   string
-	msgs                        []parser.ParsedMessage
-	endedAt                     time.Time
-	msgCount                    int // total (old + new)
-	userMsgCount                int // total (old + new)
-	fileSize                    int64
-	fileMtime                   int64
-	totalOutputTokens           int // absolute (old + new)
-	peakContextTokens           int // absolute max(old, new)
-	modelContextWindowTokens    int
-	hasTotalOutputTokens        bool
-	hasPeakContextTokens        bool
-	hasModelContextWindowTokens bool
+	sessionID            string
+	msgs                 []parser.ParsedMessage
+	endedAt              time.Time
+	msgCount             int // total (old + new)
+	userMsgCount         int // total (old + new)
+	fileSize             int64
+	fileMtime            int64
+	totalOutputTokens    int // absolute (old + new)
+	peakContextTokens    int // absolute max(old, new)
+	hasTotalOutputTokens bool
+	hasPeakContextTokens bool
 }
 
 type processResult struct {
@@ -1604,6 +2195,14 @@ type processResult struct {
 	mtime       int64
 	err         error
 	incremental *incrementalUpdate
+	cacheSkip   bool
+	// forceReplace requests full message replacement on write,
+	// even when the existing rows would otherwise be left in
+	// place. Set when a fall-through to full parse is recovering
+	// from a cross-sync streaming split: the new merged messages
+	// reuse the existing ordinals, so the default append-only
+	// writeMessages would silently drop the rewrite.
+	forceReplace bool
 }
 
 func (e *Engine) processFile(
@@ -1627,6 +2226,7 @@ func (e *Engine) processFile(
 		}
 		mtime = snapshot.Mtime
 	}
+	cacheSkip := e.shouldCacheSkip(file)
 
 	// Skip files cached from a previous sync (parse errors
 	// or non-interactive sessions) whose mtime is unchanged.
@@ -1635,11 +2235,17 @@ func (e *Engine) processFile(
 	// migrateLegacyCodexExecSkips, so this check can treat
 	// the skip cache as authoritative without per-file
 	// re-validation.
-	e.skipMu.RLock()
-	cachedMtime, cached := e.skipCache[file.Path]
-	e.skipMu.RUnlock()
-	if cached && cachedMtime == mtime {
-		return processResult{skip: true, mtime: mtime}
+	if cacheSkip {
+		e.skipMu.RLock()
+		cachedMtime, cached := e.skipCache[file.Path]
+		e.skipMu.RUnlock()
+		if cached && cachedMtime == mtime {
+			return processResult{
+				skip:      true,
+				mtime:     mtime,
+				cacheSkip: true,
+			}
+		}
 	}
 
 	var res processResult
@@ -1652,6 +2258,8 @@ func (e *Engine) processFile(
 		res = e.processCopilot(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
+	case parser.AgentOpenCode:
+		res = e.processOpenCode(file, info)
 	case parser.AgentOpenHands:
 		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
@@ -1687,8 +2295,39 @@ func (e *Engine) processFile(
 			),
 		}
 	}
+	res.cacheSkip = cacheSkip
 	res.mtime = mtime
 	return res
+}
+
+func (e *Engine) shouldCacheSkip(
+	file parser.DiscoveredFile,
+) bool {
+	if file.Agent != parser.AgentOpenCode {
+		return true
+	}
+	if filepath.Base(file.Path) == "opencode.db" {
+		return false
+	}
+	if _, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(file.Path); ok {
+		return false
+	}
+	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
+		if dir == "" {
+			continue
+		}
+		if parser.ResolveOpenCodeSource(dir).Mode !=
+			parser.OpenCodeSourceStorage {
+			continue
+		}
+		if rel, ok := isUnder(dir, file.Path); ok {
+			rel = filepath.ToSlash(rel)
+			return !strings.HasPrefix(
+				rel, "storage/session/",
+			)
+		}
+	}
+	return true
 }
 
 // cacheSkip records a file so it won't be retried until
@@ -1834,21 +2473,18 @@ func (e *Engine) processClaude(
 	}
 
 	// Try incremental parse for append-only JSONL files
-	// that have already been synced.
-	claudeParseFn := func(
-		path string, offset int64, startOrd int,
-	) ([]parser.ParsedMessage, time.Time, int64, int, bool, error) {
-		msgs, endedAt, consumed, err := parser.ParseClaudeSessionFrom(
-			path, offset, startOrd,
-		)
-		return msgs, endedAt, consumed, 0, false, err
-	}
-	if res, ok := e.tryIncrementalJSONL(
+	// that have already been synced. When the incremental path
+	// declines but signals forceReplace (e.g. cross-sync split
+	// recovery), carry the flag onto the full-parse result so the
+	// write path uses ReplaceSessionMessages.
+	res, ok := e.tryIncrementalJSONL(
 		file, info, parser.AgentClaude,
-		claudeParseFn,
-	); ok {
+		parser.ParseClaudeSessionFrom,
+	)
+	if ok {
 		return res
 	}
+	forceReplace := res.forceReplace
 
 	// Determine project name from cwd if possible
 	project := parser.GetProjectName(file.Project)
@@ -1870,6 +2506,12 @@ func (e *Engine) processClaude(
 		return processResult{err: err}
 	}
 
+	inode, device := getFileIdentity(info)
+	for i := range results {
+		results[i].Session.File.Inode = inode
+		results[i].Session.File.Device = device
+	}
+
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {
 		for i := range results {
@@ -1879,7 +2521,7 @@ func (e *Engine) processClaude(
 
 	parser.InferRelationshipTypes(results)
 
-	return processResult{results: results}
+	return processResult{results: results, forceReplace: forceReplace}
 }
 
 // incrementalParseFunc reads new JSONL lines from a file
@@ -1890,7 +2532,7 @@ func (e *Engine) processClaude(
 // lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
 	path string, offset int64, startOrdinal int,
-) ([]parser.ParsedMessage, time.Time, int64, int, bool, error)
+) ([]parser.ParsedMessage, time.Time, int64, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -1921,9 +2563,45 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
+	// Claude-only: if the stored preview is empty despite the
+	// session already having user turns, the parser skipped
+	// every user message so far (e.g. a session that opens with
+	// /clear or /effort). Fall back to a full parse so any real
+	// user message appended this sync becomes first_message.
+	//
+	// Other agents can legitimately have UserMsgCount > 0 with
+	// an empty first_message — for example Codex inserts orphan
+	// subagent notifications as Role=user messages that bypass
+	// firstMessage — so this fall-through is gated on Claude.
+	if agent == parser.AgentClaude &&
+		inc.FirstMessage == "" && inc.UserMsgCount > 0 {
+		return processResult{}, false
+	}
+
 	currentSize := info.Size()
 	if currentSize <= inc.FileSize {
 		return processResult{}, false
+	}
+
+	// If the file was replaced (different inode/device), fall
+	// back to a full parse so we don't append on top of stale
+	// state. Only check when both sides have a known identity
+	// (non-zero); zeros mean the data is missing or the
+	// platform doesn't expose inode/device (Windows).
+	if inc.FileInode != 0 && inc.FileDevice != 0 {
+		curInode, curDevice := getFileIdentity(info)
+		if curInode != 0 && curDevice != 0 &&
+			(curInode != inc.FileInode ||
+				curDevice != inc.FileDevice) {
+			log.Printf(
+				"incremental %s %s: file identity changed "+
+					"(inode %d→%d, device %d→%d), full parse",
+				agent, file.Path,
+				inc.FileInode, curInode,
+				inc.FileDevice, curDevice,
+			)
+			return processResult{}, false
+		}
 	}
 
 	maxOrd := e.db.MaxOrdinal(inc.ID)
@@ -1931,7 +2609,7 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
-	newMsgs, endedAt, consumed, modelContextWindowTokens, hasModelContextWindowTokens, err := parseFn(
+	newMsgs, endedAt, consumed, err := parseFn(
 		file.Path, inc.FileSize, maxOrd+1,
 	)
 	if err != nil {
@@ -1940,7 +2618,14 @@ func (e *Engine) tryIncrementalJSONL(
 				"incremental %s %s: %v (explicit full parse fallback)",
 				agent, file.Path, err,
 			)
-			return processResult{}, false
+			// The fallback fires when appended lines update
+			// already-stored rows (toolUseResult.agentId
+			// linkage, same-message.id chunk merging). The
+			// full parse must replace existing messages —
+			// otherwise the append-only write path skips
+			// rows whose ordinal ≤ maxOrd and the updates
+			// are silently dropped.
+			return processResult{forceReplace: true}, false
 		}
 		log.Printf(
 			"incremental %s %s: %v (full parse)",
@@ -1963,27 +2648,46 @@ func (e *Engine) tryIncrementalJSONL(
 		if consumed > 0 {
 			return processResult{
 				incremental: &incrementalUpdate{
-					sessionID:         inc.ID,
-					endedAt:           endedAt,
-					msgCount:          inc.MsgCount,
-					userMsgCount:      inc.UserMsgCount,
-					fileSize:          newOffset,
-					fileMtime:         info.ModTime().UnixNano(),
-					totalOutputTokens: inc.TotalOutputTokens,
-					peakContextTokens: inc.PeakContextTokens,
-					modelContextWindowTokens: func() int {
-						if hasModelContextWindowTokens {
-							return modelContextWindowTokens
-						}
-						return inc.ModelContextWindowTokens
-					}(),
-					hasTotalOutputTokens:        inc.HasTotalOutputTokens,
-					hasPeakContextTokens:        inc.HasPeakContextTokens,
-					hasModelContextWindowTokens: hasModelContextWindowTokens || inc.HasModelContextWindowTokens,
+					sessionID:            inc.ID,
+					endedAt:              endedAt,
+					msgCount:             inc.MsgCount,
+					userMsgCount:         inc.UserMsgCount,
+					fileSize:             newOffset,
+					fileMtime:            info.ModTime().UnixNano(),
+					totalOutputTokens:    inc.TotalOutputTokens,
+					peakContextTokens:    inc.PeakContextTokens,
+					hasTotalOutputTokens: inc.HasTotalOutputTokens,
+					hasPeakContextTokens: inc.HasPeakContextTokens,
 				},
 			}, true
 		}
 		return processResult{skip: true}, true
+	}
+
+	// Claude cross-sync split detection: when the first appended
+	// assistant message shares its provider message id with the
+	// last already-stored assistant message for this session, the
+	// previous sync stopped mid-stream. The incremental path would
+	// store the new chunk as a separate message instead of merging
+	// it into the existing one — fall back to a full parse so the
+	// chunk merge sees the whole run. forceReplace tells the
+	// downstream write path to use ReplaceSessionMessages: the
+	// merged tail reuses existing ordinals, so the default
+	// append-only writeMessages would silently drop it.
+	if agent == parser.AgentClaude {
+		first := newMsgs[0]
+		if first.Role == parser.RoleAssistant &&
+			first.ClaudeMessageID != "" {
+			if e.db.LastClaudeMessageID(inc.ID) ==
+				first.ClaudeMessageID {
+				log.Printf(
+					"incremental %s %s: appended chunk shares"+
+						" message.id with stored tail, full parse",
+					agent, file.Path,
+				)
+				return processResult{forceReplace: true}, false
+			}
+		}
 	}
 
 	newUserCount := countUserMsgs(newMsgs)
@@ -1996,14 +2700,8 @@ func (e *Engine) tryIncrementalJSONL(
 
 	totalOut := inc.TotalOutputTokens
 	peakCtx := inc.PeakContextTokens
-	modelWindow := inc.ModelContextWindowTokens
 	hasTotalOut := inc.HasTotalOutputTokens
 	hasPeakCtx := inc.HasPeakContextTokens
-	hasModelWindow := inc.HasModelContextWindowTokens
-	if hasModelContextWindowTokens {
-		modelWindow = modelContextWindowTokens
-		hasModelWindow = true
-	}
 	for _, m := range newMsgs {
 		msgHasCtx, msgHasOut := m.TokenPresence()
 		if msgHasOut {
@@ -2018,19 +2716,17 @@ func (e *Engine) tryIncrementalJSONL(
 
 	return processResult{
 		incremental: &incrementalUpdate{
-			sessionID:                   inc.ID,
-			msgs:                        newMsgs,
-			endedAt:                     endedAt,
-			msgCount:                    inc.MsgCount + len(newMsgs),
-			userMsgCount:                inc.UserMsgCount + newUserCount,
-			fileSize:                    newOffset,
-			fileMtime:                   info.ModTime().UnixNano(),
-			totalOutputTokens:           totalOut,
-			peakContextTokens:           peakCtx,
-			modelContextWindowTokens:    modelWindow,
-			hasTotalOutputTokens:        hasTotalOut,
-			hasPeakContextTokens:        hasPeakCtx,
-			hasModelContextWindowTokens: hasModelWindow,
+			sessionID:            inc.ID,
+			msgs:                 newMsgs,
+			endedAt:              endedAt,
+			msgCount:             inc.MsgCount + len(newMsgs),
+			userMsgCount:         inc.UserMsgCount + newUserCount,
+			fileSize:             newOffset,
+			fileMtime:            info.ModTime().UnixNano(),
+			totalOutputTokens:    totalOut,
+			peakContextTokens:    peakCtx,
+			hasTotalOutputTokens: hasTotalOut,
+			hasPeakContextTokens: hasPeakCtx,
 		},
 	}, true
 }
@@ -2046,7 +2742,7 @@ func (e *Engine) processCodex(
 
 	codexParseFn := func(
 		path string, offset int64, startOrd int,
-	) ([]parser.ParsedMessage, time.Time, int64, int, bool, error) {
+	) ([]parser.ParsedMessage, time.Time, int64, error) {
 		return parser.ParseCodexSessionFrom(
 			path, offset, startOrd, false,
 		)
@@ -2063,9 +2759,14 @@ func (e *Engine) processCodex(
 	if err != nil {
 		return processResult{err: err}
 	}
+	if sess == nil {
+		return processResult{skip: true}
+	}
+
+	sess.File.Inode, sess.File.Device = getFileIdentity(info)
 
 	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
+	if err == nil && sess.File.Hash == "" {
 		sess.File.Hash = hash
 	}
 
@@ -2076,10 +2777,126 @@ func (e *Engine) processCodex(
 	}
 }
 
+func (e *Engine) processOpenCode(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if dbPath, sessionID, ok := parser.ParseOpenCodeSQLiteVirtualPath(file.Path); ok {
+		sess, msgs, err := parser.ParseOpenCodeSession(
+			dbPath, sessionID, e.machine,
+		)
+		if err != nil {
+			return processResult{err: err}
+		}
+		if sess == nil {
+			return processResult{}
+		}
+		return processResult{
+			results: []parser.ParseResult{
+				{Session: *sess, Messages: msgs},
+			},
+		}
+	}
+	if filepath.Base(file.Path) == "opencode.db" {
+		metas, err := parser.ListOpenCodeSessionMeta(file.Path)
+		if err != nil {
+			return processResult{err: err}
+		}
+		storageIDs := parser.OpenCodeStorageSessionIDs(
+			filepath.Dir(file.Path),
+		)
+		var results []parser.ParseResult
+		for _, meta := range metas {
+			if _, ok := storageIDs[meta.SessionID]; ok {
+				continue
+			}
+			_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
+			if ok && storedMtime == meta.FileMtime &&
+				e.db.GetDataVersionByPath(meta.VirtualPath) >=
+					db.CurrentDataVersion() {
+				continue
+			}
+			sess, msgs, err := parser.ParseOpenCodeSession(
+				file.Path, meta.SessionID, e.machine,
+			)
+			if err != nil {
+				log.Printf(
+					"opencode sqlite watch session %s: %v",
+					meta.SessionID, err,
+				)
+				continue
+			}
+			if sess == nil {
+				continue
+			}
+			results = append(results, parser.ParseResult{
+				Session:  *sess,
+				Messages: msgs,
+			})
+		}
+		return processResult{results: results}
+	}
+	if e.shouldSkipOpenCodeByPath(file.Path) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseOpenCodeFile(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil && sess.File.Hash == "" {
+		sess.File.Hash = hash
+	}
+
+	sess.File.Inode, sess.File.Device = getFileIdentity(info)
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) shouldSkipOpenCodeByPath(path string) bool {
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+
+	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+
+	sourceMtime, err := parser.OpenCodeSourceMtime(path)
+	if err != nil || sourceMtime == 0 {
+		return false
+	}
+	if storedMtime != sourceMtime {
+		return false
+	}
+	if e.db.GetDataVersionByPath(lookupPath) <
+		db.CurrentDataVersion() {
+		return false
+	}
+	return true
+}
+
 func (e *Engine) processCopilot(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
+	// Use effective mtime = max(events.jsonl, workspace.yaml) so
+	// that a new or updated workspace.yaml triggers a re-parse and
+	// the stored mtime stays consistent with what we compare against
+	// on subsequent syncs (preventing oscillation).
+	effectiveMtime := copilotEffectiveMtime(file.Path, info)
+	if e.shouldSkipCopilot(file.Path, info, effectiveMtime) {
 		return processResult{skip: true}
 	}
 
@@ -2093,6 +2910,10 @@ func (e *Engine) processCopilot(
 		return processResult{}
 	}
 
+	if effectiveMtime > sess.File.Mtime {
+		sess.File.Mtime = effectiveMtime
+	}
+
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {
 		sess.File.Hash = hash
@@ -2103,6 +2924,50 @@ func (e *Engine) processCopilot(
 			{Session: *sess, Messages: msgs},
 		},
 	}
+}
+
+// copilotEffectiveMtime returns max(events.jsonl mtime,
+// workspace.yaml mtime). For flat .jsonl sessions (no
+// workspace.yaml sibling) it returns the events.jsonl mtime.
+func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
+	m := info.ModTime().UnixNano()
+	if filepath.Base(eventsPath) != "events.jsonl" {
+		return m
+	}
+	yamlPath := filepath.Join(
+		filepath.Dir(eventsPath), "workspace.yaml",
+	)
+	if yi, err := os.Stat(yamlPath); err == nil {
+		if ym := yi.ModTime().UnixNano(); ym > m {
+			m = ym
+		}
+	}
+	return m
+}
+
+// shouldSkipCopilot is like shouldSkipByPath but uses the
+// pre-computed effectiveMtime (max of events.jsonl and
+// workspace.yaml) for the mtime comparison, keeping the stored
+// value consistent with what we compare against on next sync.
+func (e *Engine) shouldSkipCopilot(
+	path string, info os.FileInfo, effectiveMtime int64,
+) bool {
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+	if storedSize != info.Size() || storedMtime != effectiveMtime {
+		return false
+	}
+	if e.db.GetDataVersionByPath(lookupPath) <
+		db.CurrentDataVersion() {
+		return false
+	}
+	return true
 }
 
 func (e *Engine) processGemini(
@@ -2698,18 +3563,25 @@ func isAutomatedFromSession(s db.Session) bool {
 }
 
 type pendingWrite struct {
-	sess parser.ParsedSession
-	msgs []parser.ParsedMessage
+	sess         parser.ParsedSession
+	msgs         []parser.ParsedMessage
+	forceReplace bool
 }
 
-func (e *Engine) writeBatch(batch []pendingWrite) {
+func (e *Engine) writeBatch(
+	batch []pendingWrite,
+	writeMode syncWriteMode,
+	forceReplace bool,
+) (writtenSessions, writtenMessages, failedSessions int) {
+	if writeMode == syncWriteBulk {
+		return e.writeBatchBulk(batch, forceReplace)
+	}
+
 	for _, pw := range batch {
-		msgs := toDBMessages(pw, e.blockedResultCategories)
-		s := toDBSession(pw)
-		s.MessageCount, s.UserMessageCount =
-			postFilterCounts(msgs)
-		e.applyRemoteRewrites(&s, msgs)
-		s.IsAutomated = isAutomatedFromSession(s)
+		s, msgs, ok := e.prepareSessionWrite(pw)
+		if !ok {
+			continue
+		}
 
 		// Detect stale parser version BEFORE UpsertSession
 		// overwrites it. Existing message rows from an
@@ -2731,7 +3603,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		// are written first since the session already
 		// exists.
 		if err := e.db.UpsertSession(s); err != nil {
-			if errors.Is(err, db.ErrSessionExcluded) {
+			if isIntentionalSessionSkip(err) {
 				if pw.sess.File.Path != "" {
 					e.cacheSkip(
 						pw.sess.File.Path,
@@ -2741,11 +3613,15 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 				continue
 			}
 			log.Printf("upsert session %s: %v", s.ID, err)
+			failedSessions++
 			continue
 		}
 
+		replaceMessages := forceReplace || pw.forceReplace ||
+			stale || pw.sess.Agent == parser.AgentOpenCode
+
 		var werr error
-		if stale {
+		if replaceMessages {
 			werr = e.db.ReplaceSessionMessages(s.ID, msgs)
 		} else {
 			werr = e.writeMessages(s.ID, msgs)
@@ -2755,6 +3631,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 				"write messages for %s: %v",
 				s.ID, werr,
 			)
+			failedSessions++
 			continue
 		}
 
@@ -2779,8 +3656,83 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 				"signals: update %s: %v", s.ID, err,
 			)
 		}
+		writtenSessions++
+		writtenMessages += len(msgs)
+	}
+	return writtenSessions, writtenMessages, failedSessions
+}
+
+func (e *Engine) prepareSessionWrite(
+	pw pendingWrite,
+) (db.Session, []db.Message, bool) {
+	msgs := toDBMessages(pw, e.blockedResultCategories)
+	s := toDBSession(pw)
+	s.MessageCount, s.UserMessageCount =
+		postFilterCounts(msgs)
+	e.applyRemoteRewrites(&s, msgs)
+	s.IsAutomated = isAutomatedFromSession(s)
+
+	if e.shouldPreserveOpenCodeArchive(
+		pw.sess.Agent, pw.sess.File.Path, s.ID,
+		pw.sess.File.Mtime, derefString(s.FileHash), msgs,
+	) {
+		return db.Session{}, nil, false
+	}
+	return s, msgs, true
+}
+
+type batchSourceFile struct {
+	path  string
+	mtime int64
+}
+
+func (e *Engine) writeBatchBulk(
+	batch []pendingWrite, forceReplace bool,
+) (writtenSessions, writtenMessages, failedSessions int) {
+	writes := make([]db.SessionBatchWrite, 0, len(batch))
+	sources := make(map[string]batchSourceFile, len(batch))
+
+	for _, pw := range batch {
+		s, msgs, ok := e.prepareSessionWrite(pw)
+		if !ok {
+			continue
+		}
+		replaceMessages := forceReplace || pw.forceReplace ||
+			pw.sess.Agent == parser.AgentOpenCode
+		writes = append(writes, db.SessionBatchWrite{
+			Session:         s,
+			Messages:        msgs,
+			Signals:         computeSignalsFromMessages(s, msgs),
+			DataVersion:     db.CurrentDataVersion(),
+			ReplaceMessages: replaceMessages,
+		})
+		if pw.sess.File.Path != "" {
+			sources[s.ID] = batchSourceFile{
+				path:  pw.sess.File.Path,
+				mtime: pw.sess.File.Mtime,
+			}
+		}
+	}
+	if len(writes) == 0 {
+		return 0, 0, 0
 	}
 
+	result, err := e.db.WriteSessionBatch(writes)
+	if err != nil {
+		log.Printf("write session batch: %v", err)
+		return 0, 0, len(writes)
+	}
+	for _, id := range result.ExcludedIDs {
+		if source, ok := sources[id]; ok && source.path != "" {
+			e.cacheSkip(source.path, source.mtime)
+		}
+	}
+	for _, err := range result.Errors {
+		log.Printf("write session batch: %v", err)
+	}
+	return result.WrittenSessions,
+		result.WrittenMessages,
+		result.FailedSessions
 }
 
 // writeIncremental appends new messages and partially updates
@@ -2827,9 +3779,7 @@ func (e *Engine) writeIncremental(
 		msgCount, userMsgCount,
 		inc.fileSize, inc.fileMtime,
 		inc.totalOutputTokens, inc.peakContextTokens,
-		inc.modelContextWindowTokens,
 		inc.hasTotalOutputTokens, inc.hasPeakContextTokens,
-		inc.hasModelContextWindowTokens,
 	); err != nil {
 		return fmt.Errorf(
 			"incremental update %s: %w",
@@ -2895,9 +3845,9 @@ func (e *Engine) writeMessages(
 // delete+reinsert of its messages. Used by explicit
 // single-session re-syncs where existing content may have
 // changed (not just appended).
-// writeSessionFull returns nil on success,
-// db.ErrSessionExcluded for intentional skips, or
-// another error for real failures.
+// writeSessionFull returns nil on success, a session skip
+// sentinel for intentional skips, or another error for real
+// failures.
 func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	msgs := toDBMessages(pw, e.blockedResultCategories)
 	s := toDBSession(pw)
@@ -2905,12 +3855,18 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 		postFilterCounts(msgs)
 	e.applyRemoteRewrites(&s, msgs)
 	s.IsAutomated = isAutomatedFromSession(s)
+	if e.shouldPreserveOpenCodeArchive(
+		pw.sess.Agent, pw.sess.File.Path, s.ID,
+		pw.sess.File.Mtime, derefString(s.FileHash), msgs,
+	) {
+		return errSessionPreserved
+	}
 	if err := e.db.UpsertSession(s); err != nil {
-		if errors.Is(err, db.ErrSessionExcluded) {
+		if isIntentionalSessionSkip(err) {
 			if pw.sess.File.Path != "" {
 				e.cacheSkip(pw.sess.File.Path, pw.sess.File.Mtime)
 			}
-			return db.ErrSessionExcluded
+			return err
 		}
 		log.Printf("upsert session %s: %v", s.ID, err)
 		return err
@@ -2943,6 +3899,165 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	}
 
 	return nil
+}
+
+func (e *Engine) shouldPreserveOpenCodeArchive(
+	agent parser.AgentType, path, sessionID string,
+	currentMtime int64,
+	currentHash string,
+	currentMsgs []db.Message,
+) bool {
+	if agent != parser.AgentOpenCode {
+		return false
+	}
+	store := e.openCodeArchiveStore
+	if store == nil {
+		store = e.db
+	}
+	stored, err := store.GetSessionFull(
+		context.Background(), sessionID,
+	)
+	if err != nil || stored == nil {
+		return false
+	}
+	storedHash := derefString(stored.FileHash)
+	storedPath := derefString(stored.FilePath)
+	storedMtime := derefInt64(stored.FileMtime)
+	storedIsStorageArchive := parser.HasOpenCodeStorageFingerprint(
+		storedHash,
+	) || isOpenCodeStoragePath(storedPath)
+	if isOpenCodeSQLiteVirtualPath(path) &&
+		!storedIsStorageArchive {
+		return false
+	}
+	storedMsgs, err := store.GetAllMessages(
+		context.Background(), sessionID,
+	)
+	if err != nil || len(storedMsgs) == 0 {
+		return false
+	}
+	// A changed storage fingerprint alone is not enough to
+	// preserve the archive. OpenCode legitimately rewrites
+	// live child files in place, so we only preserve when the
+	// newly parsed transcript also looks incomplete relative
+	// to what is already archived.
+	if parser.HasOpenCodeStorageFingerprint(storedHash) &&
+		parser.HasOpenCodeStorageFingerprint(currentHash) &&
+		!parser.OpenCodeStorageFingerprintMissing(
+			storedHash, currentHash,
+		) {
+		return false
+	}
+	if storedIsStorageArchive &&
+		isOpenCodeSQLiteVirtualPath(path) &&
+		currentMtime != 0 &&
+		storedMtime != 0 &&
+		currentMtime <= storedMtime {
+		log.Printf(
+			"skip opencode session %s: sqlite fallback is not newer than preserved storage archive",
+			sessionID,
+		)
+		return true
+	}
+	if openCodeLegacyArchiveLooksIncomplete(
+		currentMsgs, storedMsgs,
+	) {
+		if parser.HasOpenCodeStorageFingerprint(storedHash) {
+			log.Printf(
+				"skip opencode session %s: storage fingerprint changed but update looks incomplete relative to archive",
+				sessionID,
+			)
+		} else {
+			log.Printf(
+				"skip opencode session %s: storage update looks incomplete relative to legacy archive",
+				sessionID,
+			)
+		}
+		return true
+	}
+	return false
+}
+
+func isOpenCodeStoragePath(path string) bool {
+	return strings.HasSuffix(path, ".json") &&
+		!isOpenCodeSQLiteVirtualPath(path)
+}
+
+func isOpenCodeSQLiteVirtualPath(path string) bool {
+	_, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path)
+	return ok
+}
+
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func derefInt64(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func openCodeLegacyArchiveLooksIncomplete(
+	parsed, stored []db.Message,
+) bool {
+	if parsed == nil {
+		return len(stored) > 0
+	}
+	if len(parsed) < len(stored) {
+		return true
+	}
+	for i := range stored {
+		if openCodeMessageLooksIncomplete(
+			parsed[i], stored[i],
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func openCodeMessageLooksIncomplete(
+	parsed, stored db.Message,
+) bool {
+	if parsed.Ordinal != stored.Ordinal ||
+		parsed.Role != stored.Role {
+		return false
+	}
+	if parsed.ContentLength < stored.ContentLength {
+		return true
+	}
+	if parsed.HasThinking != stored.HasThinking &&
+		stored.HasThinking {
+		return true
+	}
+	if stored.HasOutputTokens &&
+		(!parsed.HasOutputTokens ||
+			parsed.OutputTokens < stored.OutputTokens) {
+		return true
+	}
+	if stored.HasContextTokens &&
+		(!parsed.HasContextTokens ||
+			parsed.ContextTokens < stored.ContextTokens) {
+		return true
+	}
+	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
+		return true
+	}
+	return countToolResultEvents(parsed.ToolCalls) <
+		countToolResultEvents(stored.ToolCalls)
+}
+
+func countToolResultEvents(calls []db.ToolCall) int {
+	total := 0
+	for _, call := range calls {
+		total += len(call.ResultEvents)
+	}
+	return total
 }
 
 // applyRemoteRewrites prefixes session IDs and rewrites
@@ -2985,35 +4100,36 @@ func (e *Engine) applyRemoteRewrites(
 func toDBSession(pw pendingWrite) db.Session {
 	hasTotal, hasPeak := pw.sess.TokenCoverage(pw.msgs)
 	s := db.Session{
-		ID:                          pw.sess.ID,
-		Project:                     pw.sess.Project,
-		Machine:                     pw.sess.Machine,
-		Agent:                       string(pw.sess.Agent),
-		MessageCount:                pw.sess.MessageCount,
-		UserMessageCount:            pw.sess.UserMessageCount,
-		ParentSessionID:             strPtr(pw.sess.ParentSessionID),
-		RelationshipType:            string(pw.sess.RelationshipType),
-		TotalOutputTokens:           pw.sess.TotalOutputTokens,
-		PeakContextTokens:           pw.sess.PeakContextTokens,
-		ModelContextWindowTokens:    pw.sess.ModelContextWindowTokens,
-		HasTotalOutputTokens:        hasTotal,
-		HasPeakContextTokens:        hasPeak,
-		HasModelContextWindowTokens: pw.sess.HasModelContextWindowTokens,
-		Cwd:                         pw.sess.Cwd,
-		GitBranch:                   pw.sess.GitBranch,
-		SourceSessionID:             pw.sess.SourceSessionID,
-		SourceVersion:               pw.sess.SourceVersion,
-		ParserMalformedLines:        pw.sess.MalformedLines,
-		IsTruncated:                 pw.sess.IsTruncated,
+		ID:                   pw.sess.ID,
+		Project:              pw.sess.Project,
+		Machine:              pw.sess.Machine,
+		Agent:                string(pw.sess.Agent),
+		MessageCount:         pw.sess.MessageCount,
+		UserMessageCount:     pw.sess.UserMessageCount,
+		ParentSessionID:      strPtr(pw.sess.ParentSessionID),
+		RelationshipType:     string(pw.sess.RelationshipType),
+		TotalOutputTokens:    pw.sess.TotalOutputTokens,
+		PeakContextTokens:    pw.sess.PeakContextTokens,
+		HasTotalOutputTokens: hasTotal,
+		HasPeakContextTokens: hasPeak,
+		Cwd:                  pw.sess.Cwd,
+		GitBranch:            pw.sess.GitBranch,
+		SourceSessionID:      pw.sess.SourceSessionID,
+		SourceVersion:        pw.sess.SourceVersion,
+		ParserMalformedLines: pw.sess.MalformedLines,
+		IsTruncated:          pw.sess.IsTruncated,
+		TerminationStatus:    strPtr(string(pw.sess.TerminationStatus)),
 		// data_version is intentionally left at the
 		// existing column default (0). UpsertSession does
 		// not persist this field; the caller bumps it via
 		// SetSessionDataVersion only after the message
 		// rewrite succeeds.
-		FilePath:  strPtr(pw.sess.File.Path),
-		FileSize:  int64Ptr(pw.sess.File.Size),
-		FileMtime: int64Ptr(pw.sess.File.Mtime),
-		FileHash:  strPtr(pw.sess.File.Hash),
+		FilePath:   strPtr(pw.sess.File.Path),
+		FileSize:   int64Ptr(pw.sess.File.Size),
+		FileMtime:  int64Ptr(pw.sess.File.Mtime),
+		FileInode:  int64Ptr(pw.sess.File.Inode),
+		FileDevice: int64Ptr(pw.sess.File.Device),
+		FileHash:   strPtr(pw.sess.File.Hash),
 	}
 	if pw.sess.FirstMessage != "" {
 		s.FirstMessage = &pw.sess.FirstMessage
@@ -3038,6 +4154,7 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 			Ordinal:           m.Ordinal,
 			Role:              string(m.Role),
 			Content:           m.Content,
+			ThinkingText:      m.ThinkingText,
 			Timestamp:         timeutil.Format(m.Timestamp),
 			HasThinking:       m.HasThinking,
 			HasToolUse:        m.HasToolUse,
@@ -3090,14 +4207,6 @@ func countUserMsgs(msgs []parser.ParsedMessage) int {
 	return n
 }
 
-func countMessages(batch []pendingWrite) int {
-	n := 0
-	for _, pw := range batch {
-		n += len(pw.msgs)
-	}
-	return n
-}
-
 // FindSourceFile locates the original source file for a
 // session ID. It first checks the stored file_path from the
 // database (handles cases where filename differs from session
@@ -3111,7 +4220,47 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	}
 
 	def, ok := parser.AgentByPrefix(sessionID)
-	if !ok || !def.FileBased || def.FindSourceFunc == nil {
+	if !ok {
+		return ""
+	}
+	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
+	if !def.FileBased {
+		switch def.Type {
+		case parser.AgentWarp:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindWarpDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				if _, _, err := parser.ParseWarpSession(dbPath, rawSessionID, e.machine); err == nil {
+					return dbPath
+				}
+			}
+		case parser.AgentForge:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindForgeDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				if _, _, err := parser.ParseForgeSession(dbPath, rawSessionID, e.machine); err == nil {
+					return dbPath
+				}
+			}
+		case parser.AgentPiebald:
+			chatID, _, _ := strings.Cut(rawSessionID, "-")
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindPiebaldDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				if _, _, err := parser.ParsePiebaldSession(dbPath, chatID, e.machine); err == nil {
+					return dbPath
+				}
+			}
+		}
+		return ""
+	}
+	if def.FindSourceFunc == nil {
 		return ""
 	}
 
@@ -3132,15 +4281,106 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	return ""
 }
 
+// SourceMtime returns the current source-backed mtime for a
+// session. Most file-based agents map directly to a single source
+// file, but OpenCode storage sessions derive their effective mtime
+// from the session JSON plus related message/part files.
+func (e *Engine) SourceMtime(sessionID string) int64 {
+	host, rawID := parser.StripHostPrefix(sessionID)
+	if host != "" {
+		return 0
+	}
+
+	def, ok := parser.AgentByPrefix(sessionID)
+	if !ok {
+		return 0
+	}
+	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
+	if !def.FileBased {
+		switch def.Type {
+		case parser.AgentWarp:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindWarpDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				metas, err := parser.ListWarpSessionMeta(dbPath)
+				if err != nil {
+					continue
+				}
+				for _, meta := range metas {
+					if meta.SessionID == rawSessionID {
+						return meta.FileMtime
+					}
+				}
+			}
+		case parser.AgentForge:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindForgeDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				metas, err := parser.ListForgeSessionMeta(dbPath)
+				if err != nil {
+					continue
+				}
+				for _, meta := range metas {
+					if meta.SessionID == rawSessionID {
+						return meta.FileMtime
+					}
+				}
+			}
+		case parser.AgentPiebald:
+			chatID, _, _ := strings.Cut(rawSessionID, "-")
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindPiebaldDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				metas, err := parser.ListPiebaldSessionMeta(dbPath)
+				if err != nil {
+					continue
+				}
+				for _, meta := range metas {
+					if meta.SessionID == chatID {
+						return meta.FileMtime
+					}
+				}
+			}
+		}
+		return 0
+	}
+
+	path := e.FindSourceFile(sessionID)
+	if path == "" {
+		return 0
+	}
+
+	if def.Type == parser.AgentOpenCode {
+		mtime, err := parser.OpenCodeSourceMtime(path)
+		if err != nil {
+			return 0
+		}
+		return mtime
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.ModTime().UnixNano()
+}
+
 // SyncSingleSession re-syncs a single session by its ID and
 // uses the existing DB project as fallback where applicable.
 func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	e.syncMu.Lock()
+	preserved := false
 	// Defers run LIFO: unlock runs first (releasing syncMu), then
 	// emit. Keep emission outside the critical section so a future
 	// Emitter implementation can't widen the lock's scope.
 	defer func() {
-		if err == nil {
+		if err == nil && !preserved {
 			e.emit("messages")
 		}
 	}()
@@ -3161,8 +4401,17 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		switch def.Type {
 		case parser.AgentWarp:
 			return e.syncSingleWarp(sessionID)
+		case parser.AgentForge:
+			return e.syncSingleForge(sessionID)
+		case parser.AgentPiebald:
+			return e.syncSinglePiebald(sessionID)
 		default:
-			return e.syncSingleOpenCode(sessionID)
+			err = e.syncSingleOpenCode(sessionID)
+			if errors.Is(err, errSessionPreserved) {
+				preserved = true
+				return nil
+			}
+			return err
 		}
 	}
 
@@ -3172,19 +4421,30 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 			"source file not found for %s", sessionID,
 		)
 	}
+	if def.Type == parser.AgentOpenCode &&
+		isOpenCodeSQLiteVirtualPath(path) {
+		err = e.syncSingleOpenCode(sessionID)
+		if errors.Is(err, errSessionPreserved) {
+			preserved = true
+			return nil
+		}
+		return err
+	}
 
 	agent := def.Type
 
 	// Clear skip cache so explicit re-sync always processes
 	// the file, even if it was cached as non-interactive
 	// during a bulk SyncAll.
-	e.clearSkip(path)
-
-	// Reuse processFile for stat and DB-skip logic.
 	file := parser.DiscoveredFile{
 		Path:  path,
 		Agent: agent,
 	}
+	if e.shouldCacheSkip(file) {
+		e.clearSkip(path)
+	}
+
+	// Reuse processFile for stat and DB-skip logic.
 	switch agent {
 	case parser.AgentClaude:
 		// Try to preserve existing project from DB first
@@ -3230,7 +4490,7 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 
 	res := e.processFile(file)
 	if res.err != nil {
-		if res.mtime != 0 {
+		if res.cacheSkip && res.mtime != 0 {
 			e.cacheSkip(path, res.mtime)
 		}
 		return res.err
@@ -3252,9 +4512,13 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	for _, pr := range res.results {
 		if err := e.writeSessionFull(
 			pendingWrite{sess: pr.Session, msgs: pr.Messages},
-		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+		); err != nil &&
+			!isIntentionalSessionSkip(err) &&
+			!errors.Is(err, errSessionPreserved) {
 			return fmt.Errorf("write session %s: %w",
 				pr.Session.ID, err)
+		} else if errors.Is(err, errSessionPreserved) {
+			preserved = true
 		}
 	}
 
@@ -3280,6 +4544,10 @@ func (e *Engine) syncSingleOpenCode(
 			continue
 		}
 		dbPath := filepath.Join(dir, "opencode.db")
+		if info, err := os.Stat(dbPath); err != nil ||
+			info.IsDir() {
+			continue
+		}
 		sess, msgs, err := parser.ParseOpenCodeSession(
 			dbPath, rawID, e.machine,
 		)
@@ -3292,9 +4560,13 @@ func (e *Engine) syncSingleOpenCode(
 		}
 		if err := e.writeSessionFull(
 			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+		); err != nil &&
+			!isIntentionalSessionSkip(err) &&
+			!errors.Is(err, errSessionPreserved) {
 			return fmt.Errorf("write session %s: %w",
 				sess.ID, err)
+		} else if errors.Is(err, errSessionPreserved) {
+			return err
 		}
 		return nil
 	}
@@ -3308,6 +4580,79 @@ func (e *Engine) syncSingleOpenCode(
 		)
 	}
 	return fmt.Errorf("opencode session %s not found", sessionID)
+}
+
+func readOpenCodeStorageSessionID(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var data struct {
+		SessionID string `json:"sessionID"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return ""
+	}
+	return data.SessionID
+}
+
+func findOpenCodeStorageSessionIDByMessageID(
+	openCodeDir, messageID string,
+) string {
+	messageRoot := filepath.Join(
+		openCodeDir, "storage", "message",
+	)
+	entries, err := os.ReadDir(messageRoot)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(
+			messageRoot, entry.Name(), messageID+".json",
+		)
+		if info, err := os.Stat(path); err == nil &&
+			!info.IsDir() {
+			return entry.Name()
+		}
+	}
+	return ""
+}
+
+func (e *Engine) warpPendingSessionIDs(dir string) []string {
+	dbPath := parser.FindWarpDBPath(dir)
+	if dbPath == "" {
+		return nil
+	}
+	metas, err := parser.ListWarpSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync warp: %v", err)
+		return nil
+	}
+	var changed []string
+	for _, m := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	return changed
+}
+
+func (e *Engine) countOneWarpSessions(dir string) int {
+	dbPath := parser.FindWarpDBPath(dir)
+	if dbPath == "" {
+		return 0
+	}
+	metas, err := parser.ListWarpSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync warp: %v", err)
+		return 0
+	}
+	return len(metas)
 }
 
 // syncWarp syncs sessions from Warp SQLite databases.
@@ -3336,28 +4681,7 @@ func (e *Engine) syncOneWarp(
 	ctx context.Context, dir string,
 ) []pendingWrite {
 	dbPath := parser.FindWarpDBPath(dir)
-	if dbPath == "" {
-		return nil
-	}
-
-	metas, err := parser.ListWarpSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync warp: %v", err)
-		return nil
-	}
-	if len(metas) == 0 {
-		return nil
-	}
-
-	var changed []string
-	for _, m := range metas {
-		_, storedMtime, ok :=
-			e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
+	changed := e.warpPendingSessionIDs(dir)
 	if len(changed) == 0 {
 		return nil
 	}
@@ -3415,7 +4739,7 @@ func (e *Engine) syncSingleWarp(
 		}
 		if err := e.writeSessionFull(
 			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+		); err != nil && !isIntentionalSessionSkip(err) {
 			return fmt.Errorf("write session %s: %w",
 				sess.ID, err)
 		}
@@ -3431,6 +4755,256 @@ func (e *Engine) syncSingleWarp(
 		)
 	}
 	return fmt.Errorf("warp session %s not found", sessionID)
+}
+
+func (e *Engine) forgePendingSessionIDs(dir string) []string {
+	dbPath := parser.FindForgeDBPath(dir)
+	if dbPath == "" {
+		return nil
+	}
+	metas, err := parser.ListForgeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync forge: %v", err)
+		return nil
+	}
+	var changed []string
+	for _, m := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	return changed
+}
+
+func (e *Engine) countOneForgeSessions(dir string) int {
+	dbPath := parser.FindForgeDBPath(dir)
+	if dbPath == "" {
+		return 0
+	}
+	metas, err := parser.ListForgeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync forge: %v", err)
+		return 0
+	}
+	return len(metas)
+}
+
+// syncForge syncs sessions from Forge SQLite databases.
+func (e *Engine) syncForge(
+	ctx context.Context,
+) []pendingWrite {
+	var allPending []pendingWrite
+	for _, dir := range e.agentDirs[parser.AgentForge] {
+		if ctx.Err() != nil {
+			break
+		}
+		if dir == "" {
+			continue
+		}
+		allPending = append(allPending, e.syncOneForge(ctx, dir)...)
+	}
+	return allPending
+}
+
+// syncOneForge handles a single Forge directory.
+func (e *Engine) syncOneForge(
+	ctx context.Context, dir string,
+) []pendingWrite {
+	dbPath := parser.FindForgeDBPath(dir)
+	changed := e.forgePendingSessionIDs(dir)
+	if len(changed) == 0 {
+		return nil
+	}
+
+	var pending []pendingWrite
+	for _, cid := range changed {
+		if ctx.Err() != nil {
+			break
+		}
+		sess, msgs, err := parser.ParseForgeSession(dbPath, cid, e.machine)
+		if err != nil {
+			log.Printf("forge conversation %s: %v", cid, err)
+			continue
+		}
+		if sess == nil {
+			continue
+		}
+		pending = append(pending, pendingWrite{sess: *sess, msgs: msgs})
+	}
+	return pending
+}
+
+// syncSingleForge re-syncs a single Forge conversation.
+func (e *Engine) syncSingleForge(
+	sessionID string,
+) error {
+	rawID := strings.TrimPrefix(sessionID, "forge:")
+
+	var lastErr error
+	for _, dir := range e.agentDirs[parser.AgentForge] {
+		if dir == "" {
+			continue
+		}
+		dbPath := parser.FindForgeDBPath(dir)
+		if dbPath == "" {
+			continue
+		}
+		sess, msgs, err := parser.ParseForgeSession(dbPath, rawID, e.machine)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if sess == nil {
+			continue
+		}
+		if err := e.writeSessionFull(
+			pendingWrite{sess: *sess, msgs: msgs},
+		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+			return fmt.Errorf("write session %s: %w", sess.ID, err)
+		}
+		if err := e.db.LinkSubagentSessions(); err != nil {
+			log.Printf("link subagent sessions: %v", err)
+		}
+		return nil
+	}
+
+	if len(e.agentDirs[parser.AgentForge]) == 0 {
+		return fmt.Errorf("forge dir not configured")
+	}
+	if lastErr != nil {
+		return fmt.Errorf("forge session %s: %w", sessionID, lastErr)
+	}
+	return fmt.Errorf("forge session %s not found", sessionID)
+}
+
+func (e *Engine) piebaldPendingSessionIDs(dir string) []string {
+	dbPath := parser.FindPiebaldDBPath(dir)
+	if dbPath == "" {
+		return nil
+	}
+	metas, err := parser.ListPiebaldSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync piebald: %v", err)
+		return nil
+	}
+	var changed []string
+	for _, m := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	return changed
+}
+
+func (e *Engine) countOnePiebaldSessions(dir string) int {
+	dbPath := parser.FindPiebaldDBPath(dir)
+	if dbPath == "" {
+		return 0
+	}
+	metas, err := parser.ListPiebaldSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync piebald: %v", err)
+		return 0
+	}
+	return len(metas)
+}
+
+// syncPiebald syncs sessions from Piebald SQLite databases.
+func (e *Engine) syncPiebald(
+	ctx context.Context,
+) []pendingWrite {
+	var allPending []pendingWrite
+	for _, dir := range e.agentDirs[parser.AgentPiebald] {
+		if ctx.Err() != nil {
+			break
+		}
+		if dir == "" {
+			continue
+		}
+		allPending = append(allPending, e.syncOnePiebald(ctx, dir)...)
+	}
+	return allPending
+}
+
+// syncOnePiebald handles a single Piebald data directory.
+func (e *Engine) syncOnePiebald(
+	ctx context.Context, dir string,
+) []pendingWrite {
+	dbPath := parser.FindPiebaldDBPath(dir)
+	changed := e.piebaldPendingSessionIDs(dir)
+	if len(changed) == 0 {
+		return nil
+	}
+
+	var pending []pendingWrite
+	for _, cid := range changed {
+		if ctx.Err() != nil {
+			break
+		}
+		results, err := parser.ParsePiebaldSessionResults(dbPath, cid, e.machine)
+		if err != nil {
+			log.Printf("piebald chat %s: %v", cid, err)
+			continue
+		}
+		for _, result := range results {
+			pending = append(pending, pendingWrite{sess: result.Session, msgs: result.Messages})
+		}
+	}
+	return pending
+}
+
+// syncSinglePiebald re-syncs a single Piebald chat. Fork session IDs of the
+// form "piebald:<chat>-<row>" are mapped back to their base chat so the parser
+// re-emits the main session and every fork branch together.
+func (e *Engine) syncSinglePiebald(
+	sessionID string,
+) error {
+	rawID := strings.TrimPrefix(sessionID, "piebald:")
+	chatID, _, _ := strings.Cut(rawID, "-")
+
+	var lastErr error
+	for _, dir := range e.agentDirs[parser.AgentPiebald] {
+		if dir == "" {
+			continue
+		}
+		dbPath := parser.FindPiebaldDBPath(dir)
+		if dbPath == "" {
+			continue
+		}
+		results, err := parser.ParsePiebaldSessionResults(dbPath, chatID, e.machine)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(results) == 0 {
+			continue
+		}
+		for _, result := range results {
+			if err := e.writeSessionFull(
+				pendingWrite{sess: result.Session, msgs: result.Messages},
+			); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+				return fmt.Errorf("write session %s: %w", result.Session.ID, err)
+			}
+		}
+		if err := e.db.LinkSubagentSessions(); err != nil {
+			log.Printf("link subagent sessions: %v", err)
+		}
+		return nil
+	}
+
+	if len(e.agentDirs[parser.AgentPiebald]) == 0 {
+		return fmt.Errorf("piebald dir not configured")
+	}
+	if lastErr != nil {
+		return fmt.Errorf("piebald session %s: %w", sessionID, lastErr)
+	}
+	return fmt.Errorf("piebald session %s not found", sessionID)
 }
 
 func strPtr(s string) *string {

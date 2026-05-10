@@ -30,6 +30,9 @@ type Store interface {
 	GetAllMessages(ctx context.Context, sessionID string) ([]Message, error)
 	GetSessionActivity(ctx context.Context, sessionID string) (*SessionActivityResponse, error)
 
+	// Timing.
+	GetSessionTiming(ctx context.Context, sessionID string) (*SessionTiming, error)
+
 	// Search.
 	HasFTS() bool
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
@@ -55,6 +58,7 @@ type Store interface {
 	GetAnalyticsVelocity(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error)
 	GetAnalyticsTopSessions(ctx context.Context, f AnalyticsFilter, metric string) (TopSessionsResponse, error)
 	GetAnalyticsSignals(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error)
+	GetTrendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendTermInput, granularity string) (TrendsTermsResponse, error)
 
 	// Usage (token cost).
 	GetDailyUsage(ctx context.Context, f UsageFilter) (DailyUsageResult, error)
@@ -95,6 +99,10 @@ type Store interface {
 	// Upload (local-only; PG returns ErrReadOnly).
 	UpsertSession(s Session) error
 	ReplaceSessionMessages(sessionID string, msgs []Message) error
+	WriteSessionBatchAtomic(
+		writes []SessionBatchWrite,
+		beforeCommit ...func() error,
+	) (SessionBatchResult, error)
 
 	// ReadOnly returns true for remote/PG-backed stores.
 	ReadOnly() bool

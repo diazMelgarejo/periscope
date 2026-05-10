@@ -6,8 +6,9 @@
   import StatusBar from "./lib/components/layout/StatusBar.svelte";
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
-  import ActivityMinimap from "./lib/components/content/ActivityMinimap.svelte";
+  import SessionVitals from "./lib/components/content/SessionVitals.svelte";
   import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
+  import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
   import AboutModal from "./lib/components/modals/AboutModal.svelte";
   import ShortcutsModal from "./lib/components/modals/ShortcutsModal.svelte";
@@ -17,6 +18,7 @@
   import ConfirmDeleteModal from "./lib/components/modals/ConfirmDeleteModal.svelte";
   import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
+  import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
@@ -85,19 +87,27 @@
         }
         messages.loadSession(id);
         sessions.loadChildSessions(id);
-        sync.watchSession(id, () => {
-          messages.reload();
-          sessions.refreshActiveSession();
-          sessions.loadChildSessions(id);
-          if (ui.activityMinimapOpen) {
-            sessionActivity.reload(id);
-          } else {
-            sessionActivity.invalidate();
-          }
-        });
+        sessionTiming.load(id);
+        sync.watchSession(
+          id,
+          () => {
+            messages.reload();
+            sessions.refreshActiveSession();
+            sessions.loadChildSessions(id);
+            if (ui.vitalsOpen) {
+              sessionActivity.reload(id);
+            } else {
+              sessionActivity.invalidate();
+            }
+          },
+          (t) => {
+            sessionTiming.applyEvent(t);
+          },
+        );
         pins.loadForSession(id);
       } else {
         sessionActivity.clear();
+        sessionTiming.reset();
         messages.clear();
         sessions.childSessions = new Map();
         sync.unwatchSession();
@@ -416,6 +426,10 @@
   <div class="page-scroll">
     <UsagePage />
   </div>
+{:else if router.route === "trends"}
+  <div class="page-scroll">
+    <TrendsPage />
+  </div>
 {:else if router.route === "insights"}
   <div class="page-scroll">
     <InsightsPage />
@@ -468,6 +482,12 @@
         {/if}
       {:else}
         <AnalyticsPage />
+      {/if}
+    {/snippet}
+
+    {#snippet vitals()}
+      {#if sessions.activeSessionId}
+        <SessionVitals sessionId={sessions.activeSessionId} />
       {/if}
     {/snippet}
   </ThreeColumnLayout>
@@ -536,6 +556,7 @@
     min-height: 0;
     overflow-y: auto;
   }
+
 
   .undo-toast {
     position: fixed;

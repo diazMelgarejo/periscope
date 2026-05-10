@@ -20,6 +20,7 @@ export interface Session {
   parent_session_id?: string;
   relationship_type?: string;
   deleted_at?: string | null;
+  termination_status?: string | null;
   file_path?: string;
   file_size?: number;
   file_mtime?: number;
@@ -96,6 +97,7 @@ export interface Message {
   content: string;
   timestamp: string;
   has_thinking: boolean;
+  thinking_text: string;
   has_tool_use: boolean;
   content_length: number;
   model: string;

@@ -10,6 +10,8 @@ LDFLAGS := -X main.version=$(VERSION) \
 
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop
+GOLANGCI_LINT_VERSION ?= v2.11.4
+CUSTOM_GCL := ./custom-gcl
 
 GOPATH_FIRST := $(shell go env GOPATH | cut -d: -f1)
 AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
@@ -17,13 +19,15 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e vet lint lint-ci tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
 	@mkdir -p internal/web/dist
-	@test -n "$$(ls internal/web/dist/ 2>/dev/null)" \
-		|| echo ok > internal/web/dist/stub.html
+	@test -f internal/web/dist/.keep \
+		|| printf '%s\n' \
+			'keep embed dir for generated frontend assets' \
+			> internal/web/dist/.keep
 
 # Build the binary (debug, with embedded frontend)
 build: frontend
@@ -56,6 +60,9 @@ frontend:
 	cd frontend && npm install && npm run build
 	rm -rf internal/web/dist
 	cp -r frontend/dist internal/web/dist
+	printf '%s\n' \
+		'keep embed dir for generated frontend assets' \
+		> internal/web/dist/.keep
 
 # Run Vite dev server (use alongside `make dev`)
 frontend-dev:
@@ -115,7 +122,7 @@ dev-snapshot: build
 	else \
 		echo "Reusing existing snapshot at $(SNAPSHOT_ABS)/sessions.db"; \
 	fi
-	AGENT_VIEWER_DATA_DIR="$(SNAPSHOT_ABS)" ./agentsview --port 0
+	AGENTSVIEW_DATA_DIR="$(SNAPSHOT_ABS)" ./agentsview serve --port 0
 
 # Ensure air is installed for backend live reload
 check-air:
@@ -263,20 +270,52 @@ vet: ensure-embed-dir
 	go vet -tags fts5 ./...
 
 # Lint Go code and auto-fix where possible (local development)
-lint: ensure-embed-dir
+lint: lint-golangci nilaway
+
+# Run golangci-lint with auto-fixes for local development.
+lint-golangci: ensure-embed-dir
 	@if ! command -v golangci-lint >/dev/null 2>&1; then \
-		echo "golangci-lint not found. Install with: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1" >&2; \
+		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
 	golangci-lint run --fix ./...
 
 # Lint Go code without fixing (for CI)
-lint-ci: ensure-embed-dir
+lint-ci: lint-golangci-ci nilaway
+
+# Run golangci-lint without auto-fixes for CI.
+lint-golangci-ci: ensure-embed-dir
 	@if ! command -v golangci-lint >/dev/null 2>&1; then \
-		echo "golangci-lint not found. Install with: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1" >&2; \
+		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
 	golangci-lint run ./...
+
+# Build a custom golangci-lint binary with the NilAway module plugin.
+# Strip every repo-local Git env var (GIT_DIR, GIT_INDEX_FILE,
+# GIT_CONFIG_PARAMETERS, etc.) and disable VCS stamping so the inner
+# `git clone` and `go build` don't inherit the parent repo's state.
+# When `make nilaway` runs from a pre-commit hook, git exports those
+# vars pointing at the parent repo, which makes the clone and the
+# VCS-stamped build fail with exit 128. The list comes from
+# `git rev-parse --local-env-vars` so it tracks whatever Git considers
+# repo-local at runtime.
+nilaway-golangci-build:
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
+		exit 1; \
+	fi
+	@unset_args=$$(git rev-parse --local-env-vars 2>/dev/null | sed 's/^/-u /' | tr '\n' ' '); \
+	env $$unset_args GOFLAGS=-buildvcs=false \
+		golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
+
+# Run NilAway through the custom golangci-lint module plugin.
+nilaway: ensure-embed-dir nilaway-golangci-build
+	$(CUSTOM_GCL) run --config .golangci.nilaway.yml ./...
+
+# Install pinned local lint tools.
+lint-tools:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 # Tidy dependencies
 tidy:
@@ -286,6 +325,10 @@ tidy:
 clean:
 	rm -f agentsview agentsv
 	rm -rf internal/web/dist dist/ tmp/
+	mkdir -p internal/web/dist
+	printf '%s\n' \
+		'keep embed dir for generated frontend assets' \
+		> internal/web/dist/.keep
 
 # Build release binary for current platform (CGO required for sqlite3)
 release: frontend
@@ -352,8 +395,11 @@ help:
 	@echo "  ssh-down       - Stop test SSH container"
 	@echo "  e2e            - Run Playwright E2E tests"
 	@echo "  vet            - Run go vet"
-	@echo "  lint           - Run golangci-lint (auto-fix)"
-	@echo "  lint-ci        - Run golangci-lint (no fix, for CI)"
+	@echo "  lint           - Run golangci-lint and NilAway (auto-fix golangci issues)"
+	@echo "  lint-ci        - Run golangci-lint and NilAway (no fix, for CI)"
+	@echo "  lint-golangci  - Run golangci-lint with auto-fix"
+	@echo "  nilaway        - Run NilAway through custom golangci-lint"
+	@echo "  lint-tools     - Install pinned lint tools"
 	@echo "  tidy           - Tidy go.mod"
 	@echo ""
 	@echo "  release        - Release build for current platform"
