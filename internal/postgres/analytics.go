@@ -97,16 +97,38 @@ func buildAnalyticsWhere(
 	dateCol string,
 	pb *paramBuilder,
 ) string {
+	return buildAnalyticsWhereWithDate(f, dateCol, pb, true)
+}
+
+// buildAnalyticsWhereWithoutDate returns common analytics
+// predicates without adding session date bounds. Trends uses
+// this because date, day, and hour filters are evaluated
+// against message timestamps instead of session timestamps.
+func buildAnalyticsWhereWithoutDate(
+	f db.AnalyticsFilter,
+	pb *paramBuilder,
+) string {
+	return buildAnalyticsWhereWithDate(f, "", pb, false)
+}
+
+func buildAnalyticsWhereWithDate(
+	f db.AnalyticsFilter,
+	dateCol string,
+	pb *paramBuilder,
+	includeDate bool,
+) string {
 	preds := []string{
 		"message_count > 0",
 		"relationship_type NOT IN ('subagent', 'fork')",
 		"deleted_at IS NULL",
 	}
-	utcFrom, utcTo := analyticsUTCRange(f)
-	preds = append(preds,
-		dateCol+" >= "+pb.add(utcFrom)+"::timestamptz")
-	preds = append(preds,
-		dateCol+" <= "+pb.add(utcTo)+"::timestamptz")
+	if includeDate {
+		utcFrom, utcTo := analyticsUTCRange(f)
+		preds = append(preds,
+			dateCol+" >= "+pb.add(utcFrom)+"::timestamptz")
+		preds = append(preds,
+			dateCol+" <= "+pb.add(utcTo)+"::timestamptz")
+	}
 	if f.Machine != "" {
 		preds = append(preds,
 			"machine = "+pb.add(f.Machine))
@@ -152,6 +174,9 @@ func buildAnalyticsWhere(
 			"COALESCE(ended_at, started_at, created_at)"+
 				" >= "+pb.add(f.ActiveSince)+
 				"::timestamptz")
+	}
+	if pred := pgTerminationPred(f.Termination, pb); pred != "" {
+		preds = append(preds, pred)
 	}
 	return strings.Join(preds, " AND ")
 }
@@ -995,7 +1020,10 @@ func (s *Store) GetAnalyticsProjects(
 		[]db.ProjectAnalytics, 0, len(projectMap),
 	)
 	for _, name := range projectOrder {
-		pd := projectMap[name]
+		pd, ok := projectMap[name]
+		if !ok || pd == nil {
+			continue
+		}
 		sort.Ints(pd.counts)
 		n := len(pd.counts)
 
@@ -1324,7 +1352,8 @@ func (s *Store) queryAutonomyChunk(
 	pb := &paramBuilder{}
 	ph := pgInPlaceholders(chunk, pb)
 	q := `SELECT session_id,
-		SUM(CASE WHEN role='user' THEN 1 ELSE 0 END),
+		SUM(CASE WHEN role='user' AND is_system=false
+			THEN 1 ELSE 0 END),
 		SUM(CASE WHEN role='assistant'
 			AND has_tool_use=true THEN 1 ELSE 0 END)
 		FROM messages
@@ -1952,7 +1981,10 @@ func (s *Store) GetAnalyticsVelocity(
 		[]db.VelocityBreakdown, 0, len(agentKeys),
 	)
 	for _, k := range agentKeys {
-		a := byAgent[k]
+		a, ok := byAgent[k]
+		if !ok || a == nil {
+			continue
+		}
 		resp.ByAgent = append(resp.ByAgent,
 			db.VelocityBreakdown{
 				Label:    k,
@@ -1976,7 +2008,10 @@ func (s *Store) GetAnalyticsVelocity(
 		[]db.VelocityBreakdown, 0, len(compKeys),
 	)
 	for _, k := range compKeys {
-		a := byComplexity[k]
+		a, ok := byComplexity[k]
+		if !ok || a == nil {
+			continue
+		}
 		resp.ByComplexity = append(resp.ByComplexity,
 			db.VelocityBreakdown{
 				Label:    k,
@@ -2033,7 +2068,9 @@ func (s *Store) GetAnalyticsTopSessions(
 		first_message, message_count,
 		total_output_tokens,
 		EXTRACT(EPOCH FROM ended_at - started_at)
-			AS duration_sec
+			AS duration_sec,
+		started_at, ended_at,
+		termination_status
 		FROM sessions WHERE ` + where +
 		` ORDER BY ` + orderExpr + limitClause
 
@@ -2052,12 +2089,15 @@ func (s *Store) GetAnalyticsTopSessions(
 	for rows.Next() {
 		var id, project string
 		var ts *time.Time
-		var firstMsg *string
+		var startedAt, endedAt *time.Time
+		var firstMsg, termStatus *string
 		var mc, outputTokens int
 		var durationSec *float64
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
 			&mc, &outputTokens, &durationSec,
+			&startedAt, &endedAt,
+			&termStatus,
 		); err != nil {
 			return db.TopSessionsResponse{},
 				fmt.Errorf(
@@ -2077,13 +2117,25 @@ func (s *Store) GetAnalyticsTopSessions(
 		} else if needsGoSort {
 			continue
 		}
+		var startedStr, endedStr *string
+		if startedAt != nil {
+			s := FormatISO8601(*startedAt)
+			startedStr = &s
+		}
+		if endedAt != nil {
+			s := FormatISO8601(*endedAt)
+			endedStr = &s
+		}
 		sessions = append(sessions, db.TopSession{
-			ID:           id,
-			Project:      project,
-			FirstMessage: firstMsg,
-			MessageCount: mc,
-			OutputTokens: outputTokens,
-			DurationMin:  durMin,
+			ID:                id,
+			Project:           project,
+			FirstMessage:      firstMsg,
+			MessageCount:      mc,
+			OutputTokens:      outputTokens,
+			DurationMin:       durMin,
+			StartedAt:         startedStr,
+			EndedAt:           endedStr,
+			TerminationStatus: termStatus,
 		})
 	}
 	if err := rows.Err(); err != nil {

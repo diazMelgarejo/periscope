@@ -71,6 +71,8 @@ describe("parsePath", () => {
 
   it("parses page routes", () => {
     for (const route of [
+      "usage",
+      "trends",
       "insights",
       "pinned",
       "trash",
@@ -154,6 +156,14 @@ describe("RouterStore", () => {
     expect(spy).toHaveBeenCalled();
     expect(store.route).toBe("insights");
     spy.mockRestore();
+  });
+
+  it("navigate updates URL to /trends", () => {
+    setURL("/");
+    store = new RouterStore();
+    store.navigate("trends");
+    expect(window.location.pathname).toBe("/trends");
+    expect(store.route).toBe("trends");
   });
 
   it("navigate returns false on same URL (no-op)", () => {

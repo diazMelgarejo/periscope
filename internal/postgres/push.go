@@ -615,10 +615,8 @@ func sessionPushFingerprint(sess db.Session) string {
 		fmt.Sprintf("%d", sess.UserMessageCount),
 		fmt.Sprintf("%d", sess.TotalOutputTokens),
 		fmt.Sprintf("%d", sess.PeakContextTokens),
-		fmt.Sprintf("%d", sess.ModelContextWindowTokens),
 		fmt.Sprintf("%t", sess.HasTotalOutputTokens),
 		fmt.Sprintf("%t", sess.HasPeakContextTokens),
-		fmt.Sprintf("%t", sess.HasModelContextWindowTokens),
 		stringValue(sess.ParentSessionID),
 		sess.RelationshipType,
 		stringValue(sess.FileHash),
@@ -648,6 +646,7 @@ func sessionPushFingerprint(sess db.Session) string {
 		sess.SourceVersion,
 		fmt.Sprintf("%d", sess.ParserMalformedLines),
 		fmt.Sprintf("%t", sess.IsTruncated),
+		stringValue(sess.TerminationStatus),
 	}
 	var b strings.Builder
 	for _, f := range fields {
@@ -720,9 +719,7 @@ func (s *Sync) pushSession(
 	ctx context.Context, tx *sql.Tx, sess db.Session,
 ) error {
 	createdAt, _ := ParseSQLiteTimestamp(sess.CreatedAt)
-	isAutomated := sess.UserMessageCount <= 1 &&
-		sess.FirstMessage != nil &&
-		db.IsAutomatedSession(*sess.FirstMessage)
+	isAutomated := sess.IsAutomated
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent,
@@ -730,13 +727,11 @@ func (s *Sync) pushSession(
 			created_at, started_at, ended_at, deleted_at,
 			message_count, user_message_count,
 			total_output_tokens, peak_context_tokens,
-			model_context_window_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
-			has_model_context_window_tokens,
 			is_automated, data_version,
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
-			is_truncated,
+			is_truncated, termination_status,
 			parent_session_id, relationship_type,
 			tool_failure_signal_count, tool_retry_count,
 			edit_churn_count, consecutive_failure_max,
@@ -751,9 +746,9 @@ func (s *Sync) pushSession(
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10,
-			$11, $12, $13, $14, $15,
-			$16, $17, $18, $19,
-			$20, $21, $22, $23, $24, $25,
+			$11, $12, $13, $14,
+			$15, $16, $17, $18,
+			$19, $20, $21, $22, $23, $24, $25,
 			$26, $27,
 			$28, $29, $30, $31,
 			$32, $33, $34, $35,
@@ -777,10 +772,8 @@ func (s *Sync) pushSession(
 			user_message_count = EXCLUDED.user_message_count,
 			total_output_tokens = EXCLUDED.total_output_tokens,
 			peak_context_tokens = EXCLUDED.peak_context_tokens,
-			model_context_window_tokens = EXCLUDED.model_context_window_tokens,
 			has_total_output_tokens = EXCLUDED.has_total_output_tokens,
 			has_peak_context_tokens = EXCLUDED.has_peak_context_tokens,
-			has_model_context_window_tokens = EXCLUDED.has_model_context_window_tokens,
 			is_automated = EXCLUDED.is_automated,
 			data_version = EXCLUDED.data_version,
 			cwd = EXCLUDED.cwd,
@@ -789,6 +782,7 @@ func (s *Sync) pushSession(
 			source_version = EXCLUDED.source_version,
 			parser_malformed_lines = EXCLUDED.parser_malformed_lines,
 			is_truncated = EXCLUDED.is_truncated,
+			termination_status = EXCLUDED.termination_status,
 			parent_session_id = EXCLUDED.parent_session_id,
 			relationship_type = EXCLUDED.relationship_type,
 			tool_failure_signal_count = EXCLUDED.tool_failure_signal_count,
@@ -821,10 +815,8 @@ func (s *Sync) pushSession(
 			OR sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
 			OR sessions.total_output_tokens IS DISTINCT FROM EXCLUDED.total_output_tokens
 			OR sessions.peak_context_tokens IS DISTINCT FROM EXCLUDED.peak_context_tokens
-			OR sessions.model_context_window_tokens IS DISTINCT FROM EXCLUDED.model_context_window_tokens
 			OR sessions.has_total_output_tokens IS DISTINCT FROM EXCLUDED.has_total_output_tokens
 			OR sessions.has_peak_context_tokens IS DISTINCT FROM EXCLUDED.has_peak_context_tokens
-			OR sessions.has_model_context_window_tokens IS DISTINCT FROM EXCLUDED.has_model_context_window_tokens
 			OR sessions.is_automated IS DISTINCT FROM EXCLUDED.is_automated
 			OR sessions.data_version IS DISTINCT FROM EXCLUDED.data_version
 			OR sessions.cwd IS DISTINCT FROM EXCLUDED.cwd
@@ -833,6 +825,7 @@ func (s *Sync) pushSession(
 			OR sessions.source_version IS DISTINCT FROM EXCLUDED.source_version
 			OR sessions.parser_malformed_lines IS DISTINCT FROM EXCLUDED.parser_malformed_lines
 			OR sessions.is_truncated IS DISTINCT FROM EXCLUDED.is_truncated
+			OR sessions.termination_status IS DISTINCT FROM EXCLUDED.termination_status
 			OR sessions.parent_session_id IS DISTINCT FROM EXCLUDED.parent_session_id
 			OR sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type
 			OR sessions.tool_failure_signal_count IS DISTINCT FROM EXCLUDED.tool_failure_signal_count
@@ -862,13 +855,11 @@ func (s *Sync) pushSession(
 		nilStrTS(sess.DeletedAt),
 		sess.MessageCount, sess.UserMessageCount,
 		sess.TotalOutputTokens, sess.PeakContextTokens,
-		sess.ModelContextWindowTokens,
 		sess.HasTotalOutputTokens, sess.HasPeakContextTokens,
-		sess.HasModelContextWindowTokens,
 		isAutomated, sess.DataVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
 		sess.SourceVersion, sess.ParserMalformedLines,
-		sess.IsTruncated,
+		sess.IsTruncated, nilStr(sess.TerminationStatus),
 		nilStr(sess.ParentSessionID),
 		sess.RelationshipType,
 		sess.ToolFailureSignalCount, sess.ToolRetryCount,
@@ -1158,7 +1149,7 @@ func bulkInsertMessages(
 
 		var b strings.Builder
 		b.WriteString(`INSERT INTO messages (
-			session_id, ordinal, role, content,
+			session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, token_usage,
 			context_tokens, output_tokens,
@@ -1167,19 +1158,19 @@ func bulkInsertMessages(
 			source_type, source_subtype, source_uuid,
 			source_parent_uuid, is_sidechain,
 			is_compact_boundary) VALUES `)
-		args := make([]any, 0, len(batch)*23)
+		args := make([]any, 0, len(batch)*24)
 		for j, m := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*23 + 1
+			p := j*24 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-				p, p+1, p+2, p+3,
-				p+4, p+5, p+6, p+7, p+8,
-				p+9, p+10, p+11, p+12, p+13, p+14,
-				p+15, p+16, p+17, p+18, p+19,
-				p+20, p+21, p+22,
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				p, p+1, p+2, p+3, p+4,
+				p+5, p+6, p+7, p+8, p+9,
+				p+10, p+11, p+12, p+13, p+14, p+15,
+				p+16, p+17, p+18, p+19, p+20,
+				p+21, p+22, p+23,
 			)
 			var ts any
 			if m.Timestamp != "" {
@@ -1191,7 +1182,8 @@ func bulkInsertMessages(
 			}
 			args = append(args,
 				sessionID, m.Ordinal, m.Role,
-				sanitizePG(m.Content), ts,
+				sanitizePG(m.Content),
+				sanitizePG(m.ThinkingText), ts,
 				m.HasThinking,
 				m.HasToolUse, m.ContentLength, m.IsSystem,
 				m.Model, string(m.TokenUsage),

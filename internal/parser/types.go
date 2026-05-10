@@ -30,6 +30,8 @@ const (
 	AgentKiroIDE       AgentType = "kiro-ide"
 	AgentCortex        AgentType = "cortex"
 	AgentHermes        AgentType = "hermes"
+	AgentForge         AgentType = "forge"
+	AgentPiebald       AgentType = "piebald"
 	AgentWarp          AgentType = "warp"
 	AgentPositron      AgentType = "positron"
 )
@@ -113,7 +115,14 @@ var Registry = []AgentDef{
 		ConfigKey:   "opencode_dirs",
 		DefaultDirs: []string{".local/share/opencode"},
 		IDPrefix:    "opencode:",
-		FileBased:   false,
+		WatchSubdirs: []string{
+			"storage/session",
+			"storage/message",
+			"storage/part",
+		},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverOpenCodeSessions,
+		FindSourceFunc: FindOpenCodeSourceFile,
 	},
 	{
 		Type:           AgentOpenHands,
@@ -291,6 +300,31 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindHermesSourceFile,
 	},
 	{
+		Type:        AgentForge,
+		DisplayName: "Forge",
+		EnvVar:      "FORGE_DIR",
+		ConfigKey:   "forge_dirs",
+		DefaultDirs: []string{".forge"},
+		IDPrefix:    "forge:",
+		FileBased:   false,
+	},
+	{
+		Type:        AgentPiebald,
+		DisplayName: "Piebald",
+		EnvVar:      "PIEBALD_DIR",
+		ConfigKey:   "piebald_dirs",
+		DefaultDirs: []string{
+			// Linux
+			".local/share/piebald",
+			// macOS
+			"Library/Application Support/piebald",
+			// Windows
+			"AppData/Roaming/piebald",
+		},
+		IDPrefix:  "piebald:",
+		FileBased: false,
+	},
+	{
 		Type:        AgentWarp,
 		DisplayName: "Warp",
 		EnvVar:      "WARP_DIR",
@@ -392,10 +426,12 @@ const (
 
 // FileInfo holds file system metadata for a session source file.
 type FileInfo struct {
-	Path  string
-	Size  int64
-	Mtime int64
-	Hash  string
+	Path   string
+	Size   int64
+	Mtime  int64
+	Inode  int64
+	Device int64
+	Hash   string
 }
 
 // ParsedSession holds session metadata extracted from a JSONL file.
@@ -420,12 +456,15 @@ type ParsedSession struct {
 	UserMessageCount int
 	File             FileInfo
 
-	TotalOutputTokens           int
-	PeakContextTokens           int
-	ModelContextWindowTokens    int
-	HasTotalOutputTokens        bool
-	HasPeakContextTokens        bool
-	HasModelContextWindowTokens bool
+	// TerminationStatus describes how the session appears to have
+	// ended. Empty string = unknown (parser did not classify, or
+	// agent format does not yet support classification).
+	TerminationStatus TerminationStatus
+
+	TotalOutputTokens    int
+	PeakContextTokens    int
+	HasTotalOutputTokens bool
+	HasPeakContextTokens bool
 
 	// aggregateTokenPresenceKnown marks session aggregate token
 	// coverage as parser-owned and authoritative.
@@ -469,6 +508,7 @@ type ParsedMessage struct {
 	Ordinal       int
 	Role          RoleType
 	Content       string
+	ThinkingText  string // concatenated text of all thinking blocks; "" if none
 	Timestamp     time.Time
 	HasThinking   bool
 	HasToolUse    bool
@@ -498,6 +538,13 @@ type ParsedMessage struct {
 	SourceParentUUID  string
 	IsSidechain       bool
 	IsCompactBoundary bool
+
+	// StopReason is the reason the assistant stopped generating
+	// (Claude: "end_turn", "tool_use", "max_tokens", "stop_sequence";
+	// other agents may use their own vocabulary or leave it empty).
+	// Only populated for assistant messages where the parser sees
+	// the field. Empty when unknown.
+	StopReason string
 
 	// tokenPresenceKnown marks per-message token coverage as
 	// parser-owned and authoritative.

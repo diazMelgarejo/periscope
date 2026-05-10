@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,8 +60,8 @@ func seedAnalyticsData(t *testing.T, d *DB) seedStats {
 		}
 
 		insertSession(t, d, sess.id, sess.project, func(s *Session) {
-			s.StartedAt = Ptr(sess.start)
-			s.EndedAt = Ptr(sess.end)
+			s.StartedAt = new(sess.start)
+			s.EndedAt = new(sess.end)
 			s.MessageCount = sess.msgs
 			s.Agent = sess.agent
 		})
@@ -239,6 +240,34 @@ func TestGetAnalyticsSummary(t *testing.T) {
 			t.Errorf("TotalSessions = %d, want 0", s.TotalSessions)
 		}
 	})
+}
+
+func TestAnalyticsFilterMachineMultiSelect(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	for _, sess := range []struct {
+		id      string
+		machine string
+	}{
+		{"machine-a", "laptop"},
+		{"machine-b", "server"},
+		{"machine-c", "desktop"},
+	} {
+		insertSession(t, d, sess.id, "project", func(s *Session) {
+			s.Machine = sess.machine
+			s.StartedAt = new("2024-06-01T09:00:00Z")
+			s.EndedAt = new("2024-06-01T10:00:00Z")
+			s.MessageCount = 4
+		})
+	}
+
+	f := baseFilter()
+	f.Machine = "laptop,server"
+	s := mustSummary(t, d, ctx, f)
+	if s.TotalSessions != 2 {
+		t.Fatalf("TotalSessions = %d, want 2", s.TotalSessions)
+	}
 }
 
 func TestGetAnalyticsActivity(t *testing.T) {
@@ -536,12 +565,12 @@ func TestMostActiveTieBreak(t *testing.T) {
 
 	// Two projects with equal message counts
 	insertSession(t, d, "t1", "zebra", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+		s.StartedAt = new("2024-06-01T09:00:00Z")
 		s.MessageCount = 20
 		s.Agent = "claude"
 	})
 	insertSession(t, d, "t2", "alpha", func(s *Session) {
-		s.StartedAt = Ptr(tsMidYear)
+		s.StartedAt = new(tsMidYear)
 		s.MessageCount = 20
 		s.Agent = "claude"
 	})
@@ -598,7 +627,7 @@ func TestAnalyticsTimezone(t *testing.T) {
 
 	// Session at 2024-06-01T23:00:00Z = 2024-06-02 in UTC+5
 	insertSession(t, d, "tz1", "tz-project", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T23:00:00Z")
+		s.StartedAt = new("2024-06-01T23:00:00Z")
 		s.MessageCount = 10
 		s.Agent = "claude"
 	})
@@ -708,7 +737,7 @@ func TestConcentrationTopThree(t *testing.T) {
 	t.Run("OneProject", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "c1", "solo", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 50
 			s.Agent = "claude"
 		})
@@ -729,12 +758,12 @@ func TestConcentrationTopThree(t *testing.T) {
 	t.Run("TwoProjects", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "c1", "alpha", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 35
 			s.Agent = "claude"
 		})
 		insertSession(t, d, "c2", "beta", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T10:00:00Z")
+			s.StartedAt = new("2024-06-01T10:00:00Z")
 			s.MessageCount = 45
 			s.Agent = "claude"
 		})
@@ -813,7 +842,7 @@ func TestGetAnalyticsHourOfWeek(t *testing.T) {
 	// Seed sessions with known UTC times:
 	// 2024-06-01 is Saturday, 09:00 UTC
 	insertSession(t, d, "hw1", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+		s.StartedAt = new("2024-06-01T09:00:00Z")
 		s.MessageCount = 2
 		s.Agent = "claude"
 	})
@@ -832,7 +861,7 @@ func TestGetAnalyticsHourOfWeek(t *testing.T) {
 
 	// 23:00 UTC on a Saturday
 	insertSession(t, d, "hw2", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T23:00:00Z")
+		s.StartedAt = new("2024-06-01T23:00:00Z")
 		s.MessageCount = 1
 		s.Agent = "claude"
 	})
@@ -916,8 +945,8 @@ func TestGetAnalyticsSessionShape(t *testing.T) {
 
 	// Session with 10 messages, 1h duration
 	insertSession(t, d, "ss1", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T09:00:00Z")
-		s.EndedAt = Ptr("2024-06-01T10:00:00Z")
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+		s.EndedAt = new("2024-06-01T10:00:00Z")
 		s.MessageCount = 10
 		s.Agent = "claude"
 	})
@@ -939,7 +968,7 @@ func TestGetAnalyticsSessionShape(t *testing.T) {
 
 	// Session with 25 messages, no ended_at
 	insertSession(t, d, "ss2", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-02T10:00:00Z")
+		s.StartedAt = new("2024-06-02T10:00:00Z")
 		s.MessageCount = 25
 		s.Agent = "claude"
 	})
@@ -1064,7 +1093,7 @@ func insertConversation(t *testing.T, d *DB, id, proj, agent, start string, dela
 	clock := newTestClock(start)
 
 	insertSession(t, d, id, proj, func(s *Session) {
-		s.StartedAt = Ptr(start)
+		s.StartedAt = new(start)
 		s.MessageCount = len(delays)
 		s.Agent = agent
 		if len(delays) > 0 {
@@ -1072,7 +1101,7 @@ func insertConversation(t *testing.T, d *DB, id, proj, agent, start string, dela
 			for _, delay := range delays {
 				endClock.Next(delay)
 			}
-			s.EndedAt = Ptr(endClock.Now())
+			s.EndedAt = new(endClock.Now())
 		}
 	})
 
@@ -1179,7 +1208,7 @@ func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
 	t.Run("EmptyTimestampsSkipped", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "v3", "proj", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 2
 			s.Agent = "claude"
 		})
@@ -1197,7 +1226,7 @@ func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
 	t.Run("AssistantBeforeUser", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "v4", "proj", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 3
 			s.Agent = "claude"
 		})
@@ -1216,7 +1245,7 @@ func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
 	t.Run("OrdinalVsTimestampSkew", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "v5", "proj", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 3
 			s.Agent = "claude"
 		})
@@ -1235,7 +1264,7 @@ func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
 	t.Run("NegativeDeltaClampsToZero", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "v6", "proj", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 2
 			s.Agent = "claude"
 		})
@@ -1257,7 +1286,7 @@ func TestGetAnalyticsVelocity_ToolUsage(t *testing.T) {
 	t.Run("ToolCallsPerActiveMin", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "vt1", "proj", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 4
 			s.Agent = "claude"
 		})
@@ -1285,7 +1314,7 @@ func TestGetAnalyticsVelocity_ToolUsage(t *testing.T) {
 	t.Run("ToolCallsByAgentBreakdown", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "vta1", "proj", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 2
 			s.Agent = "claude"
 		})
@@ -1298,7 +1327,7 @@ func TestGetAnalyticsVelocity_ToolUsage(t *testing.T) {
 			},
 		)
 		insertSession(t, d, "vta2", "proj", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T10:00:00Z")
+			s.StartedAt = new("2024-06-01T10:00:00Z")
 			s.MessageCount = 2
 			s.Agent = "codex"
 		})
@@ -1350,7 +1379,7 @@ func TestVelocityChunkedQuery(t *testing.T) {
 	for i := range n {
 		id := fmt.Sprintf("chunk-%d", i)
 		insertSession(t, d, id, "proj", func(s *Session) {
-			s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+			s.StartedAt = new("2024-06-01T09:00:00Z")
 			s.MessageCount = 2
 			s.Agent = "claude"
 		})
@@ -1438,7 +1467,7 @@ func TestGetAnalyticsTools(t *testing.T) {
 
 	// Seed sessions with tool_calls.
 	insertSession(t, d, "t1", "alpha", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+		s.StartedAt = new("2024-06-01T09:00:00Z")
 		s.MessageCount = 3
 		s.Agent = "claude"
 	})
@@ -1461,7 +1490,7 @@ func TestGetAnalyticsTools(t *testing.T) {
 	insertMessages(t, d, m1, m2, m3)
 
 	insertSession(t, d, "t2", "beta", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-02T10:00:00Z")
+		s.StartedAt = new("2024-06-02T10:00:00Z")
 		s.MessageCount = 1
 		s.Agent = "codex"
 	})
@@ -1614,7 +1643,7 @@ func TestActivityToolAndThinkingCounts(t *testing.T) {
 	ctx := context.Background()
 
 	insertSession(t, d, "at1", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+		s.StartedAt = new("2024-06-01T09:00:00Z")
 		s.MessageCount = 3
 		s.Agent = "claude"
 	})
@@ -1791,6 +1820,163 @@ func TestBuildWhereProjectFilter(t *testing.T) {
 	})
 }
 
+func TestAnalyticsTerminationFilter(t *testing.T) {
+	t.Run("BuildWherePredicate", func(t *testing.T) {
+		cases := []struct {
+			name        string
+			termination string
+			want        string
+		}{
+			{"empty adds nothing", "", ""},
+			{
+				"clean", "clean",
+				"termination_status = 'clean'",
+			},
+			{
+				"unclean", "unclean",
+				"termination_status IN ('tool_call_pending', 'truncated')",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				f := baseFilter()
+				f.Termination = tc.termination
+				where, _ := f.buildWhere(
+					"COALESCE(NULLIF(started_at, ''), created_at)",
+				)
+				if tc.want == "" {
+					if strings.Contains(where, "termination_status") {
+						t.Errorf(
+							"empty termination produced predicate: %s",
+							where,
+						)
+					}
+					return
+				}
+				if !strings.Contains(where, tc.want) {
+					t.Errorf(
+						"buildWhere(%q) missing %q in: %s",
+						tc.termination, tc.want, where,
+					)
+				}
+			})
+		}
+	})
+
+	t.Run("RoundTripQueries", func(t *testing.T) {
+		d := testDB(t)
+		ctx := context.Background()
+
+		clean := "clean"
+		pending := "tool_call_pending"
+		truncated := "truncated"
+
+		insert := func(id string, term *string) {
+			insertSession(t, d, id, "p", func(s *Session) {
+				s.StartedAt = Ptr("2024-06-02T09:00:00Z")
+				s.EndedAt = Ptr("2024-06-02T10:00:00Z")
+				s.MessageCount = 5
+				s.UserMessageCount = 2
+				s.TerminationStatus = term
+			})
+			msgs := make([]Message, 5)
+			for i := range msgs {
+				role := "user"
+				if i%2 == 1 {
+					role = "assistant"
+				}
+				msgs[i] = Message{
+					SessionID:     id,
+					Ordinal:       i,
+					Role:          role,
+					Content:       "msg",
+					ContentLength: 3,
+					Timestamp:     "2024-06-02T09:00:00Z",
+				}
+			}
+			insertMessages(t, d, msgs...)
+		}
+
+		insert("c1", &clean)
+		insert("c2", &clean)
+		insert("p1", &pending)
+		insert("t1", &truncated)
+		insert("n1", nil)
+
+		collect := func(termination string) []string {
+			f := baseFilter()
+			f.Termination = termination
+			resp, err := d.GetAnalyticsTopSessions(
+				ctx, f, "messages",
+			)
+			if err != nil {
+				t.Fatalf("GetAnalyticsTopSessions(%q): %v",
+					termination, err)
+			}
+			ids := make([]string, len(resp.Sessions))
+			for i, s := range resp.Sessions {
+				ids[i] = s.ID
+			}
+			return ids
+		}
+
+		cases := []struct {
+			name        string
+			termination string
+			want        []string
+		}{
+			{"all", "", []string{"c1", "c2", "p1", "t1", "n1"}},
+			{"clean", "clean", []string{"c1", "c2"}},
+			{"unclean", "unclean", []string{"p1", "t1"}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				got := collect(tc.termination)
+				assertStringSetsEqual(t, got, tc.want)
+			})
+		}
+
+		t.Run("TopSessionsCarriesTerminationStatus", func(t *testing.T) {
+			f := baseFilter()
+			f.Termination = "clean"
+			resp, err := d.GetAnalyticsTopSessions(
+				ctx, f, "messages",
+			)
+			if err != nil {
+				t.Fatalf("GetAnalyticsTopSessions: %v", err)
+			}
+			if len(resp.Sessions) == 0 {
+				t.Fatal("expected sessions, got 0")
+			}
+			for _, s := range resp.Sessions {
+				if s.TerminationStatus == nil {
+					t.Errorf(
+						"session %s TerminationStatus = nil, want clean",
+						s.ID,
+					)
+					continue
+				}
+				if *s.TerminationStatus != "clean" {
+					t.Errorf(
+						"session %s TerminationStatus = %q, want clean",
+						s.ID, *s.TerminationStatus,
+					)
+				}
+			}
+		})
+
+		t.Run("SummaryFilteredByTermination", func(t *testing.T) {
+			f := baseFilter()
+			f.Termination = "unclean"
+			s := mustSummary(t, d, ctx, f)
+			if s.TotalSessions != 2 {
+				t.Errorf("TotalSessions = %d, want 2",
+					s.TotalSessions)
+			}
+		})
+	})
+}
+
 func TestTimeFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -1799,8 +1985,8 @@ func TestTimeFilter(t *testing.T) {
 	// 2024-06-01 = Saturday (ISO dow 5)
 	// 2024-06-03 = Monday   (ISO dow 0)
 	insertSession(t, d, "tf1", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T09:00:00Z")
-		s.EndedAt = Ptr("2024-06-01T10:00:00Z")
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+		s.EndedAt = new("2024-06-01T10:00:00Z")
 		s.MessageCount = 2
 		s.Agent = "claude"
 	})
@@ -1818,8 +2004,8 @@ func TestTimeFilter(t *testing.T) {
 	)
 
 	insertSession(t, d, "tf2", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T14:00:00Z")
-		s.EndedAt = Ptr("2024-06-01T15:00:00Z")
+		s.StartedAt = new("2024-06-01T14:00:00Z")
+		s.EndedAt = new("2024-06-01T15:00:00Z")
 		s.MessageCount = 1
 		s.Agent = "claude"
 	})
@@ -1830,8 +2016,8 @@ func TestTimeFilter(t *testing.T) {
 	})
 
 	insertSession(t, d, "tf3", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-03T09:00:00Z")
-		s.EndedAt = Ptr("2024-06-03T10:00:00Z")
+		s.StartedAt = new("2024-06-03T09:00:00Z")
+		s.EndedAt = new("2024-06-03T10:00:00Z")
 		s.MessageCount = 1
 		s.Agent = "claude"
 	})
@@ -1902,22 +2088,22 @@ func TestAnalyticsFilterAgentAndMinUserMessages(
 	ctx := context.Background()
 
 	insertSession(t, d, "c1", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T09:00:00Z")
-		s.EndedAt = Ptr("2024-06-01T10:00:00Z")
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+		s.EndedAt = new("2024-06-01T10:00:00Z")
 		s.MessageCount = 10
 		s.UserMessageCount = 5
 		s.Agent = "claude"
 	})
 	insertSession(t, d, "c2", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T11:00:00Z")
-		s.EndedAt = Ptr("2024-06-01T12:00:00Z")
+		s.StartedAt = new("2024-06-01T11:00:00Z")
+		s.EndedAt = new("2024-06-01T12:00:00Z")
 		s.MessageCount = 4
 		s.UserMessageCount = 1
 		s.Agent = "claude"
 	})
 	insertSession(t, d, "x1", "proj", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T14:00:00Z")
-		s.EndedAt = Ptr("2024-06-01T15:00:00Z")
+		s.StartedAt = new("2024-06-01T14:00:00Z")
+		s.EndedAt = new("2024-06-01T15:00:00Z")
 		s.MessageCount = 20
 		s.UserMessageCount = 8
 		s.Agent = "codex"
@@ -1980,8 +2166,8 @@ func TestAutonomyExcludesSystemMessages(t *testing.T) {
 
 	insertSession(t, d, "s1", "proj", func(s *Session) {
 		s.Agent = "zencoder"
-		s.StartedAt = Ptr(tsMidYear)
-		s.EndedAt = Ptr(tsMidYear)
+		s.StartedAt = new(tsMidYear)
+		s.EndedAt = new(tsMidYear)
 		s.MessageCount = 4
 	})
 
@@ -2025,8 +2211,8 @@ func TestActivityExcludesSystemUserMessages(t *testing.T) {
 
 	insertSession(t, d, "s1", "proj", func(s *Session) {
 		s.Agent = "zencoder"
-		s.StartedAt = Ptr(tsMidYear)
-		s.EndedAt = Ptr(tsMidYear)
+		s.StartedAt = new(tsMidYear)
+		s.EndedAt = new(tsMidYear)
 		s.MessageCount = 3
 	})
 
@@ -2091,14 +2277,14 @@ func TestGetAnalyticsSignals(t *testing.T) {
 	// UpsertSession only writes core fields; signal columns
 	// are written by UpdateSessionSignals.
 	insertSession(t, d, "sig1", "alpha", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T09:00:00Z")
+		s.StartedAt = new("2024-06-01T09:00:00Z")
 		s.MessageCount = 10
 		s.Agent = "claude"
 	})
 	cp1 := 0.6
 	updateSignals(t, d, "sig1", SessionSignalUpdate{
-		HealthScore:            Ptr(85),
-		HealthGrade:            Ptr("B"),
+		HealthScore:            new(85),
+		HealthGrade:            new("B"),
 		Outcome:                "completed",
 		OutcomeConfidence:      "high",
 		ToolFailureSignalCount: 2,
@@ -2107,14 +2293,14 @@ func TestGetAnalyticsSignals(t *testing.T) {
 		ContextPressureMax:     &cp1,
 	})
 	insertSession(t, d, "sig2", "alpha", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-01T14:00:00Z")
+		s.StartedAt = new("2024-06-01T14:00:00Z")
 		s.MessageCount = 5
 		s.Agent = "codex"
 	})
 	cp2 := 0.9
 	updateSignals(t, d, "sig2", SessionSignalUpdate{
-		HealthScore:            Ptr(45),
-		HealthGrade:            Ptr("D"),
+		HealthScore:            new(45),
+		HealthGrade:            new("D"),
 		Outcome:                "errored",
 		OutcomeConfidence:      "medium",
 		ToolFailureSignalCount: 5,
@@ -2123,7 +2309,7 @@ func TestGetAnalyticsSignals(t *testing.T) {
 		ContextPressureMax:     &cp2,
 	})
 	insertSession(t, d, "sig3", "beta", func(s *Session) {
-		s.StartedAt = Ptr("2024-06-02T10:00:00Z")
+		s.StartedAt = new("2024-06-02T10:00:00Z")
 		s.MessageCount = 8
 		s.Agent = "claude"
 	})

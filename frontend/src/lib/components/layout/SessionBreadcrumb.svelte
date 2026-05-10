@@ -11,6 +11,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { agentColor, agentLabel } from "../../utils/agents.js";
   import { formatTokenUsage } from "../../utils/format.js";
+  import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
   import SignalPanel from "../content/SignalPanel.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -169,7 +170,8 @@
   function startRename() {
     if (!session) return;
     renameValue =
-      session.display_name ?? session.first_message ?? "";
+      session.display_name
+      ?? normalizeMessagePreview(session.first_message);
     renaming = true;
     closeMenu();
     requestAnimationFrame(() => renameInput?.select());
@@ -654,10 +656,10 @@
         </button>
         <button
           class="minimap-btn"
-          class:minimap-btn--active={ui.activityMinimapOpen}
-          title="Activity minimap"
-          onclick={() => ui.toggleActivityMinimap()}
-          aria-label="Toggle activity minimap"
+          class:minimap-btn--active={ui.vitalsOpen}
+          title="Session vital signs"
+          onclick={() => ui.toggleVitals()}
+          aria-label="Toggle session vital signs"
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
             <path d="M1 14V8h2v6H1zm4 0V2h2v12H5zm4 0V5h2v9H9zm4 0V9h2v5h-2z"/>

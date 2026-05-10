@@ -28,7 +28,7 @@ func (s *Store) GetMessages(
 	}
 
 	query := fmt.Sprintf(`
-		SELECT session_id, ordinal, role, content,
+		SELECT session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, token_usage,
 			context_tokens, output_tokens,
@@ -68,7 +68,7 @@ func (s *Store) GetAllMessages(
 	ctx context.Context, sessionID string,
 ) ([]db.Message, error) {
 	rows, err := s.pg.QueryContext(ctx, `
-		SELECT session_id, ordinal, role, content,
+		SELECT session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, token_usage,
 			context_tokens, output_tokens,
@@ -517,6 +517,15 @@ func (s *Store) attachToolResultEventsBatch(
 
 // scanPGMessages scans message rows from PostgreSQL,
 // converting TIMESTAMPTZ to string.
+//
+// The PG messages table has no id column (composite PK on
+// session_id, ordinal), so we synthesize Message.ID = int64(ordinal)
+// to match the convention used by TurnRow.MessageID and
+// CallRow.MessageID in session_timing.go. The frontend keys
+// {#each messages (message.id)} and looks up turns via
+// turnByMessage.get(message.id); both depend on Message.ID being
+// non-zero, unique within a session, and equal to int64(ordinal)
+// so it joins with TurnRow.MessageID.
 func scanPGMessages(rows interface {
 	Next() bool
 	Scan(dest ...any) error
@@ -530,7 +539,7 @@ func scanPGMessages(rows interface {
 		var tokenUsage string
 		if err := rows.Scan(
 			&m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &ts, &m.HasThinking,
+			&m.Content, &m.ThinkingText, &ts, &m.HasThinking,
 			&m.HasToolUse, &m.ContentLength, &m.IsSystem,
 			&m.Model, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
@@ -544,6 +553,7 @@ func scanPGMessages(rows interface {
 				"scanning message: %w", err,
 			)
 		}
+		m.ID = int64(m.Ordinal)
 		if ts != nil {
 			m.Timestamp = FormatISO8601(*ts)
 		}

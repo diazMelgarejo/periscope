@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 )
 
@@ -32,6 +33,10 @@ func (s *Store) DB() *sql.DB { return s.pg }
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	return s.pg.Close()
+}
+
+func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
+	s.customPricing = p
 }
 
 // SetCursorSecret sets the HMAC key used for cursor signing.
@@ -210,4 +215,12 @@ func (s *Store) ReplaceSessionMessages(
 	_ string, _ []db.Message,
 ) error {
 	return db.ErrReadOnly
+}
+
+// WriteSessionBatchAtomic is not supported in read-only mode.
+func (s *Store) WriteSessionBatchAtomic(
+	_ []db.SessionBatchWrite,
+	_ ...func() error,
+) (db.SessionBatchResult, error) {
+	return db.SessionBatchResult{}, db.ErrReadOnly
 }

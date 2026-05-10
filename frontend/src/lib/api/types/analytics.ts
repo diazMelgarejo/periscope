@@ -1,6 +1,7 @@
 /** Analytics types — match Go structs in internal/db/analytics.go */
 
 export type Granularity = "day" | "week" | "month";
+export type TrendsGranularity = "day" | "week" | "month";
 export type HeatmapMetric =
   | "messages"
   | "sessions"
@@ -136,6 +137,12 @@ export interface TopSession {
   message_count: number;
   output_tokens: number;
   duration_min: number;
+  /** ISO timestamps used by the StatusDot component to compute
+   * the active/stale/unclean tier — the column needs the same
+   * recency inputs as the sidebar list. */
+  started_at?: string | null;
+  ended_at?: string | null;
+  termination_status?: string | null;
 }
 
 export interface TopSessionsResponse {
@@ -226,4 +233,30 @@ export interface SignalsAnalyticsResponse {
   trend: SignalsTrendBucket[];
   by_agent: SignalsAgentRow[];
   by_project: SignalsProjectRow[];
+}
+
+export interface TrendsBucket {
+  date: string;
+  message_count: number;
+}
+
+export interface TrendsPoint {
+  date: string;
+  count: number;
+}
+
+export interface TrendsSeries {
+  term: string;
+  variants: string[];
+  total: number;
+  points: TrendsPoint[];
+}
+
+export interface TrendsTermsResponse {
+  granularity: TrendsGranularity;
+  from: string;
+  to: string;
+  message_count: number;
+  buckets: TrendsBucket[];
+  series: TrendsSeries[];
 }

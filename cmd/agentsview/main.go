@@ -34,6 +34,7 @@ const (
 	periodicSyncInterval  = 15 * time.Minute
 	unwatchedPollInterval = 2 * time.Minute
 	watcherDebounce       = 500 * time.Millisecond
+	recursiveWatchBudget  = 8192
 )
 
 func main() {
@@ -79,8 +80,13 @@ func runServe(cfg config.Config) {
 	server.WriteStartupLock(cfg.DataDir)
 	defer server.RemoveStartupLock(cfg.DataDir)
 
+	applyClassifierConfig(cfg)
 	database := mustOpenDB(cfg)
 	defer database.Close()
+
+	if n := len(db.UserAutomationPrefixes()); n > 0 {
+		log.Printf("loaded %d user automation prefix(es) from config", n)
+	}
 
 	for _, def := range parser.Registry {
 		if !cfg.IsUserConfigured(def.Type) {
@@ -100,7 +106,7 @@ func runServe(cfg config.Config) {
 	)
 	defer stop()
 
-	broadcaster := server.NewBroadcaster()
+	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
 	var engine *sync.Engine
 	if !cfg.NoSync {
@@ -139,9 +145,6 @@ func runServe(cfg config.Config) {
 			return
 		}
 
-		stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
-		defer stopWatcher()
-
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
 		// during a resync), walking every row to recompute
@@ -161,9 +164,6 @@ func runServe(cfg config.Config) {
 		}()
 
 		go startPeriodicSync(engine, database)
-		if len(unwatchedDirs) > 0 {
-			go startUnwatchedPoll(engine)
-		}
 	}
 
 	// Seed model_pricing after any resync swap so the new DB
@@ -224,7 +224,7 @@ func runServe(cfg config.Config) {
 	// is active" marker so token-use doesn't start a competing
 	// on-demand sync against our live DB.
 	if _, sfErr := server.WriteStateFile(
-		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version,
+		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, false,
 	); sfErr != nil {
 		log.Printf(
 			"warning: could not write state file: %v"+
@@ -250,6 +250,14 @@ func runServe(cfg config.Config) {
 		)
 	}
 	fmt.Printf("Database: %s\n", cfg.DBPath)
+
+	if engine != nil {
+		stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
+		defer stopWatcher()
+		if len(unwatchedDirs) > 0 {
+			go startUnwatchedPoll(engine)
+		}
+	}
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)
@@ -299,8 +307,18 @@ func truncateLogFile(path string, limit int64) {
 	_ = os.Truncate(path, 0)
 }
 
-func mustOpenDB(cfg config.Config) *db.DB {
+func openDB(cfg config.Config) (*db.DB, error) {
+	applyClassifierConfig(cfg)
 	database, err := db.Open(cfg.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	applyCustomPricing(database, cfg)
+	return database, nil
+}
+
+func mustOpenDB(cfg config.Config) *db.DB {
+	database, err := openDB(cfg)
 	if err != nil {
 		fatal("opening database: %v", err)
 	}
@@ -452,6 +470,23 @@ func startFileWatcher(
 			continue
 		}
 		for _, d := range cfg.ResolveDirs(def.Type) {
+			if def.Type == parser.AgentOpenCode {
+				watchDirs := parser.ResolveOpenCodeWatchRoots(d)
+				if len(watchDirs) == 0 {
+					unwatchedDirs = append(unwatchedDirs, d)
+					continue
+				}
+				for _, watchDir := range watchDirs {
+					if _, err := os.Stat(watchDir); err == nil {
+						roots = append(
+							roots, watchRoot{d, watchDir, def.ShallowWatch},
+						)
+						continue
+					}
+					unwatchedDirs = append(unwatchedDirs, d)
+				}
+				continue
+			}
 			if len(def.WatchSubdirs) == 0 {
 				if _, err := os.Stat(d); err == nil {
 					roots = append(
@@ -473,6 +508,7 @@ func startFileWatcher(
 
 	var totalWatched int
 	var shallowWatched int
+	remaining := recursiveWatchBudget
 	for _, r := range roots {
 		if r.shallow {
 			if watcher.WatchShallow(r.root) {
@@ -483,14 +519,19 @@ func startFileWatcher(
 			}
 			continue
 		}
-		watched, uw, _ := watcher.WatchRecursive(r.root)
-		totalWatched += watched
-		if uw > 0 {
+		result := watcher.WatchRecursiveBudgeted(r.root, remaining)
+		totalWatched += result.Watched
+		remaining -= result.Watched
+		if result.Unwatched > 0 || result.BudgetExhausted ||
+			result.ResourceExhausted || result.Err != nil {
 			unwatchedDirs = append(unwatchedDirs, r.dir)
 			log.Printf(
 				"Couldn't watch %d directories under %s, will poll every %s",
-				uw, r.dir, unwatchedPollInterval,
+				result.Unwatched, r.dir, unwatchedPollInterval,
 			)
+			if result.Err != nil {
+				log.Printf("watching %s: %v", r.dir, result.Err)
+			}
 		}
 	}
 
@@ -503,6 +544,12 @@ func startFileWatcher(
 		fmt.Printf(
 			"Watching %d directories for changes (%s)\n",
 			totalWatched, time.Since(t).Round(time.Millisecond),
+		)
+	}
+	if len(unwatchedDirs) > 0 {
+		fmt.Printf(
+			"Polling %d roots every %s for changes\n",
+			len(unwatchedDirs), unwatchedPollInterval,
 		)
 	}
 	watcher.Start()

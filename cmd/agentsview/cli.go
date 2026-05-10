@@ -34,7 +34,7 @@ func newRootCommand() *cobra.Command {
 				printVersion(cmd.OutOrStdout())
 				return
 			}
-			runServe(mustLoadConfig(cmd))
+			_ = cmd.Help()
 		},
 	}
 	root.AddGroup(
@@ -46,7 +46,6 @@ func newRootCommand() *cobra.Command {
 	root.SetCompletionCommandGroupID(groupMeta)
 	root.SetHelpCommandGroupID(groupMeta)
 
-	config.RegisterServePFlags(root.Flags())
 	root.Flags().BoolVarP(
 		&showVersion,
 		"version",
@@ -65,6 +64,9 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newHealthCommand())
 	root.AddCommand(newUsageCommand())
 	root.AddCommand(newPGCommand())
+	root.AddCommand(newSessionCommand())
+	root.AddCommand(newStatsCommand())
+	root.AddCommand(newClassifierCommand())
 	root.AddCommand(newVersionCommand())
 
 	defaultHelp := root.HelpFunc()
@@ -412,7 +414,7 @@ func printVersion(w io.Writer) {
 func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintf(w, "agentsview %s - local web viewer for AI agent sessions\n\n", version)
 	fmt.Fprintln(w, "Syncs Claude Code, Codex, Copilot CLI, Gemini CLI, OpenCode,")
-	fmt.Fprintln(w, "Cursor, and Amp session data into SQLite, serves analytics,")
+	fmt.Fprintln(w, "Cursor, Amp, and Piebald session data into SQLite, serves analytics,")
 	fmt.Fprintln(w, "and exposes session browser via local web UI.")
 	fmt.Fprintln(w)
 	renderRootUsage(w, root)
@@ -430,7 +432,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  CURSOR_PROJECTS_DIR     Cursor projects directory")
 	fmt.Fprintln(w, "  IFLOW_DIR               iFlow projects directory")
 	fmt.Fprintln(w, "  AMP_DIR                 Amp threads directory")
-	fmt.Fprintln(w, "  AGENT_VIEWER_DATA_DIR   Data directory (database, config)")
+	fmt.Fprintln(w, "  PIEBALD_DIR             Piebald data directory")
+	fmt.Fprintln(w, "  AGENTSVIEW_DATA_DIR     Data directory (database, config)")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_MACHINE   Machine name for PG sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_SCHEMA    PG schema name (default \"agentsview\")")
