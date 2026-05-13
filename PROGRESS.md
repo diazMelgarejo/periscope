@@ -18,8 +18,8 @@
 | 6 | Update release.yml | ✅ done | `5e27985` | All binary/archive/artifact names updated |
 | 7 | Create PeriscopeProcessManager.kt | ✅ done | `b0d404c` | start/stop/serverUrl; auto port-finding |
 | 8 | Wire MyToolWindowFactory + MyProjectActivity | ✅ done | `b0d404c` | JBCefBrowser → serverUrl(); lifecycle wired |
-| 9 | Build verification + tag v0.29.2-periscope.2 | 🔄 in progress | — | All 20 pkg tests pass; tagging next |
-| 10 | E2E install script test | ⏳ pending | — | Requires GitHub release to exist |
+| 9 | Build verification + tag v0.29.2-periscope.2 | ✅ done | `3cdcde5` | All 20 pkg tests pass; tag pushed; 5 platform binaries released |
+| 10 | E2E install script test | ✅ done | — | darwin/arm64 install + checksum verified; binary reports correct version |
 
 ## Merge-Residue Fixes Applied (sessions.go / db.go)
 
