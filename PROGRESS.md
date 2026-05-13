@@ -53,8 +53,29 @@ When upstream latentsignal-org/periscope releases a new version:
 2. Run `./scripts/sync-upstream.sh` to merge
 3. Run `go test -tags fts5 ./...` and `make build`
 4. Bump version: `v0.(upstream_minor+1).2-periscope.2` in cmd/periscope/main.go
-5. Tag and push: `git tag v0.XX.2-periscope.2 && git push origin merged --tags`
+5. Tag and push (include commit hash):
+   ```bash
+   COMMIT=$(git rev-parse --short HEAD)
+   git tag -a "v0.XX.2-periscope.2-${COMMIT}" -m "Release v0.XX.2-periscope.2-${COMMIT}"
+   git push origin "v0.XX.2-periscope.2-${COMMIT}"
+   ```
+
+## Release Tag Convention
+
+Tags always embed the short commit hash of HEAD at release time:
+
+```
+v{semver}-{8-char-commit}   e.g.  v0.29.2-periscope.2-1895238
+```
+
+```bash
+# How to tag a release (run from merged, after all commits are in):
+COMMIT=$(git rev-parse --short HEAD)
+VERSION="v0.29.2-periscope.2"   # bump as needed
+git tag -a "${VERSION}-${COMMIT}" -m "Release ${VERSION}-${COMMIT}"
+git push origin "${VERSION}-${COMMIT}"
+```
 
 ## Target Release
 
-`v0.29.2-periscope.2` on `diazMelgarejo/periscope` — first release of the fork.
+`v0.29.2-periscope.2-1895238` on `diazMelgarejo/periscope` — first release of the fork.
