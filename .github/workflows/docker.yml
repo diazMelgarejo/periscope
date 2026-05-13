@@ -54,7 +54,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
           labels: |
-            org.opencontainers.image.title=agentsview
+            org.opencontainers.image.title=periscope
             org.opencontainers.image.description=Local web viewer for AI agent sessions
 
       - uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
