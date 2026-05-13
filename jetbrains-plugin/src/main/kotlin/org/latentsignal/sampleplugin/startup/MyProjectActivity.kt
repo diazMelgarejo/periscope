@@ -2,11 +2,33 @@ package org.latentsignal.sampleplugin.startup
 
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.ProjectManagerListener
 import com.intellij.openapi.startup.ProjectActivity
+import org.latentsignal.sampleplugin.PeriscopeProcessManager
 
+/**
+ * MyProjectActivity starts the periscope binary when a project opens and
+ * registers a listener to stop it when the project closes.
+ *
+ * Layer 3 addition (diazMelgarejo/periscope).
+ */
 class MyProjectActivity : ProjectActivity {
 
     override suspend fun execute(project: Project) {
-        thisLogger().warn("Don't forget to remove all non-needed sample code files with their corresponding registration entries in `plugin.xml`.")
+        thisLogger().info("Periscope: project opened — starting server")
+        PeriscopeProcessManager.start(project)
+
+        // Register shutdown hook for this project.
+        project.messageBus.connect().subscribe(
+            ProjectManagerListener.TOPIC,
+            object : ProjectManagerListener {
+                override fun projectClosing(closingProject: Project) {
+                    if (closingProject === project) {
+                        thisLogger().info("Periscope: project closing — stopping server")
+                        PeriscopeProcessManager.stop(project)
+                    }
+                }
+            }
+        )
     }
 }
