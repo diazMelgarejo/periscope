@@ -17,7 +17,7 @@ jobs:
     name: Desktop Build (macOS ${{ matrix.arch }})
     runs-on: macos-15
     env:
-      AGENTSVIEW_TARGET_TRIPLE: ${{ matrix.target_triple }}
+      PERISCOPE_TARGET_TRIPLE: ${{ matrix.target_triple }}
       CARGO_BUILD_TARGET: ${{ matrix.target_triple }}
     strategy:
       fail-fast: false
@@ -42,7 +42,7 @@ jobs:
           node-version: "24"
 
       - name: Install Rust target
-        run: rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
+        run: rustup target add "$PERISCOPE_TARGET_TRIPLE"
 
       - name: Install desktop dependencies
         run: npm ci
@@ -50,19 +50,19 @@ jobs:
 
       - name: Prepare sidecar
         env:
-          AGENTSVIEW_VERSION: ${{ github.ref_name }}
+          PERISCOPE_VERSION: ${{ github.ref_name }}
         run: |
-          export TAURI_ENV_TARGET_TRIPLE="$AGENTSVIEW_TARGET_TRIPLE"
+          export TAURI_ENV_TARGET_TRIPLE="$PERISCOPE_TARGET_TRIPLE"
           npm run prepare-sidecar
         working-directory: desktop
 
       - name: Patch updater config for current repository
         env:
-          AGENTSVIEW_UPDATER_PUBKEY: ${{ secrets.AGENTSVIEW_UPDATER_PUBKEY }}
+          PERISCOPE_UPDATER_PUBKEY: ${{ secrets.PERISCOPE_UPDATER_PUBKEY }}
         run: |
           sed -i.bak \
             -e "s|wesm/agentsview|${GITHUB_REPOSITORY}|g" \
-            -e "s|NOT_SET|${AGENTSVIEW_UPDATER_PUBKEY}|g" \
+            -e "s|NOT_SET|${PERISCOPE_UPDATER_PUBKEY}|g" \
             desktop/src-tauri/tauri.conf.json
           rm -f desktop/src-tauri/tauri.conf.json.bak
 
@@ -111,13 +111,13 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          AGENTSVIEW_UPDATER_PUBKEY: ${{ secrets.AGENTSVIEW_UPDATER_PUBKEY }}
-        run: npx tauri build --target "$AGENTSVIEW_TARGET_TRIPLE"
+          PERISCOPE_UPDATER_PUBKEY: ${{ secrets.PERISCOPE_UPDATER_PUBKEY }}
+        run: npx tauri build --target "$PERISCOPE_TARGET_TRIPLE"
         working-directory: desktop
 
       - name: Collect build artifacts
         run: |
-          bundle_dir="desktop/src-tauri/target/${AGENTSVIEW_TARGET_TRIPLE}/release/bundle"
+          bundle_dir="desktop/src-tauri/target/${PERISCOPE_TARGET_TRIPLE}/release/bundle"
           mkdir -p staging
           cp "$bundle_dir"/dmg/*.dmg staging/
 
@@ -132,7 +132,7 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: agentsview-desktop-macos-${{ matrix.arch }}
+          name: periscope-desktop-macos-${{ matrix.arch }}
           path: staging/*
           if-no-files-found: error
 
@@ -186,18 +186,18 @@ jobs:
       - name: Prepare sidecar
         shell: bash
         env:
-          AGENTSVIEW_VERSION: ${{ github.ref_name }}
+          PERISCOPE_VERSION: ${{ github.ref_name }}
         run: npm run prepare-sidecar
         working-directory: desktop
 
       - name: Patch updater config for current repository
         shell: bash
         env:
-          AGENTSVIEW_UPDATER_PUBKEY: ${{ secrets.AGENTSVIEW_UPDATER_PUBKEY }}
+          PERISCOPE_UPDATER_PUBKEY: ${{ secrets.PERISCOPE_UPDATER_PUBKEY }}
         run: |
           sed -i.bak \
             -e "s|wesm/agentsview|${GITHUB_REPOSITORY}|g" \
-            -e "s|NOT_SET|${AGENTSVIEW_UPDATER_PUBKEY}|g" \
+            -e "s|NOT_SET|${PERISCOPE_UPDATER_PUBKEY}|g" \
             desktop/src-tauri/tauri.conf.json
           rm -f desktop/src-tauri/tauri.conf.json.bak
 
@@ -206,7 +206,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          AGENTSVIEW_UPDATER_PUBKEY: ${{ secrets.AGENTSVIEW_UPDATER_PUBKEY }}
+          PERISCOPE_UPDATER_PUBKEY: ${{ secrets.PERISCOPE_UPDATER_PUBKEY }}
         run: npx tauri build --bundles nsis
         working-directory: desktop
 
@@ -221,7 +221,7 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: agentsview-desktop-windows
+          name: periscope-desktop-windows
           path: staging/*
           if-no-files-found: error
 
@@ -229,7 +229,7 @@ jobs:
     name: Desktop Build (Linux ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     env:
-      AGENTSVIEW_TARGET_TRIPLE: ${{ matrix.target_triple }}
+      PERISCOPE_TARGET_TRIPLE: ${{ matrix.target_triple }}
     strategy:
       fail-fast: false
       matrix:
@@ -237,13 +237,13 @@ jobs:
           - arch: x86_64
             os: ubuntu-22.04
             target_triple: ""
-            artifact_name: agentsview-desktop-linux
+            artifact_name: periscope-desktop-linux
             artifact_dir: desktop/src-tauri/target/release/bundle/appimage/
             create_updater_artifacts: "true"
           - arch: arm64
             os: ubuntu-22.04-arm
             target_triple: aarch64-unknown-linux-gnu
-            artifact_name: agentsview-desktop-linux-arm64
+            artifact_name: periscope-desktop-linux-arm64
             artifact_dir: desktop/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage/
             create_updater_artifacts: "false"
     steps:
@@ -261,8 +261,8 @@ jobs:
           node-version: "24"
 
       - name: Install Rust target
-        if: env.AGENTSVIEW_TARGET_TRIPLE != ''
-        run: rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
+        if: env.PERISCOPE_TARGET_TRIPLE != ''
+        run: rustup target add "$PERISCOPE_TARGET_TRIPLE"
 
       - name: Install Linux system dependencies
         run: |
@@ -278,19 +278,19 @@ jobs:
 
       - name: Prepare sidecar
         env:
-          AGENTSVIEW_VERSION: ${{ github.ref_name }}
+          PERISCOPE_VERSION: ${{ github.ref_name }}
         run: |
-          export TAURI_ENV_TARGET_TRIPLE="$AGENTSVIEW_TARGET_TRIPLE"
+          export TAURI_ENV_TARGET_TRIPLE="$PERISCOPE_TARGET_TRIPLE"
           npm run prepare-sidecar
         working-directory: desktop
 
       - name: Patch updater config for current repository
         env:
-          AGENTSVIEW_UPDATER_PUBKEY: ${{ secrets.AGENTSVIEW_UPDATER_PUBKEY }}
+          PERISCOPE_UPDATER_PUBKEY: ${{ secrets.PERISCOPE_UPDATER_PUBKEY }}
         run: |
           sed -i.bak \
             -e "s|wesm/agentsview|${GITHUB_REPOSITORY}|g" \
-            -e "s|NOT_SET|${AGENTSVIEW_UPDATER_PUBKEY}|g" \
+            -e "s|NOT_SET|${PERISCOPE_UPDATER_PUBKEY}|g" \
             desktop/src-tauri/tauri.conf.json
           rm -f desktop/src-tauri/tauri.conf.json.bak
 
@@ -298,11 +298,11 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          AGENTSVIEW_UPDATER_PUBKEY: ${{ secrets.AGENTSVIEW_UPDATER_PUBKEY }}
+          PERISCOPE_UPDATER_PUBKEY: ${{ secrets.PERISCOPE_UPDATER_PUBKEY }}
         run: |
           build_cmd=(npx tauri build --bundles appimage)
-          if [ -n "$AGENTSVIEW_TARGET_TRIPLE" ]; then
-            build_cmd+=(--target "$AGENTSVIEW_TARGET_TRIPLE")
+          if [ -n "$PERISCOPE_TARGET_TRIPLE" ]; then
+            build_cmd+=(--target "$PERISCOPE_TARGET_TRIPLE")
           fi
           if [ "${{ matrix.create_updater_artifacts }}" = "false" ]; then
             build_cmd+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
@@ -336,7 +336,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: artifacts
-          pattern: agentsview-desktop-*
+          pattern: periscope-desktop-*
           merge-multiple: true
 
       - name: Generate checksums

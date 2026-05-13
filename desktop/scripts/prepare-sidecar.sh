@@ -47,11 +47,11 @@ map_go_target() {
 }
 
 resolve_version() {
-  # In CI, AGENTSVIEW_VERSION is set from the triggering tag ref
+  # In CI, PERISCOPE_VERSION is set from the triggering tag ref
   # to avoid git-describe picking the wrong tag when multiple
   # tags point at the same commit.
-  if [ -n "${AGENTSVIEW_VERSION:-}" ]; then
-    echo "$AGENTSVIEW_VERSION"
+  if [ -n "${PERISCOPE_VERSION:-}" ]; then
+    echo "$PERISCOPE_VERSION"
     return 0
   fi
 
@@ -139,7 +139,7 @@ main() {
   read -r goos goarch <<<"$go_target"
   host_triple="$(detect_host_triple)"
 
-  echo "Building agentsview backend for sidecar ($target_triple -> $goos/$goarch)..."
+  echo "Building periscope backend for sidecar ($target_triple -> $goos/$goarch)..."
   if [ "$target_triple" != "$host_triple" ]; then
     echo "warning: cross-target sidecar build requested from host $host_triple" >&2
   fi
@@ -167,13 +167,13 @@ main() {
 
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "${tmp_dir:-}"' EXIT
-  build_bin="$tmp_dir/agentsview$ext"
+  build_bin="$tmp_dir/periscope$ext"
 
   (
     cd "$REPO_ROOT"
     CGO_ENABLED=1 GOOS="$goos" GOARCH="$goarch" \
       go build -tags fts5 -ldflags "$ldflags" -trimpath \
-      -o "$build_bin" ./cmd/agentsview
+      -o "$build_bin" ./cmd/periscope
   )
 
   if [ ! -f "$build_bin" ]; then
@@ -183,7 +183,7 @@ main() {
 
   local out_dir out_bin
   out_dir="$TAURI_DIR/src-tauri/binaries"
-  out_bin="$out_dir/agentsview-$target_triple$ext"
+  out_bin="$out_dir/periscope-$target_triple$ext"
 
   mkdir -p "$out_dir"
   cp "$build_bin" "$out_bin"
