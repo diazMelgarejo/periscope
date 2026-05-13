@@ -1,11 +1,11 @@
 #!/bin/bash
-# agentsview installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/wesm/agentsview/main/scripts/install.sh | bash
+# periscope installer — diazMelgarejo/periscope fork
+# Usage: curl -fsSL https://raw.githubusercontent.com/diazMelgarejo/periscope/merged/scripts/install.sh | bash
 
 set -euo pipefail
 
-REPO="wesm/agentsview"
-BINARY_NAME="agentsview"
+REPO="diazMelgarejo/periscope"
+BINARY_NAME="periscope"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -20,7 +20,7 @@ detect_os() {
     case "$(uname -s)" in
         Darwin) echo "darwin" ;;
         Linux) echo "linux" ;;
-        *) error "Unsupported OS: $(uname -s). agentsview supports macOS and Linux." ;;
+        *) error "Unsupported OS: $(uname -s). periscope supports macOS and Linux." ;;
     esac
 }
 
@@ -74,13 +74,13 @@ verify_checksum() {
     local checksums_file="$2"
     local filename="$3"
 
-    if [ "${AGENTSVIEW_SKIP_CHECKSUM:-0}" = "1" ]; then
-        warn "Checksum verification skipped (AGENTSVIEW_SKIP_CHECKSUM=1)"
+    if [ "${PERISCOPE_SKIP_CHECKSUM:-0}" = "1" ]; then
+        warn "Checksum verification skipped (PERISCOPE_SKIP_CHECKSUM=1)"
         return 0
     fi
 
     if [ ! -f "$checksums_file" ]; then
-        error "Checksum file not available. Set AGENTSVIEW_SKIP_CHECKSUM=1 to bypass."
+        error "Checksum file not available. Set PERISCOPE_SKIP_CHECKSUM=1 to bypass."
     fi
 
     local expected
@@ -95,7 +95,7 @@ verify_checksum() {
     elif command -v shasum &>/dev/null; then
         actual=$(shasum -a 256 "$file" | cut -d' ' -f1)
     else
-        error "No sha256 tool available. Install coreutils or set AGENTSVIEW_SKIP_CHECKSUM=1 to bypass."
+        error "No sha256 tool available. Install coreutils or set PERISCOPE_SKIP_CHECKSUM=1 to bypass."
     fi
 
     if [ "$expected" != "$actual" ]; then
@@ -133,13 +133,13 @@ install_from_release() {
         return 1
     fi
 
-    if [ "${AGENTSVIEW_SKIP_CHECKSUM:-0}" != "1" ]; then
+    if [ "${PERISCOPE_SKIP_CHECKSUM:-0}" != "1" ]; then
         if ! download "${base_url}/SHA256SUMS" "$tmpdir/SHA256SUMS"; then
             error "Failed to download SHA256SUMS. Cannot verify binary integrity."
         fi
         verify_checksum "$tmpdir/release.tar.gz" "$tmpdir/SHA256SUMS" "$filename"
     else
-        warn "Checksum verification skipped (AGENTSVIEW_SKIP_CHECKSUM=1)"
+        warn "Checksum verification skipped (PERISCOPE_SKIP_CHECKSUM=1)"
     fi
 
     info "Extracting..."
@@ -164,7 +164,7 @@ install_from_release() {
 }
 
 main() {
-    info "Installing agentsview..."
+    info "Installing periscope..."
     echo
 
     local os
@@ -195,8 +195,8 @@ main() {
     fi
 
     echo "Get started:"
-    echo "  agentsview serve    # Start the server and open browser"
-    echo "  agentsview update   # Check for and install updates"
+    echo "  periscope serve    # Start the server and open browser"
+    echo "  periscope update   # Check for and install updates"
 }
 
 # Guard: only run main when executed directly, not when sourced.

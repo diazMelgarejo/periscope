@@ -60,14 +60,14 @@ jobs:
           mkdir -p dist
           LDFLAGS="-s -w -X main.version=v${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}"
           go build -tags fts5 -buildvcs=false -ldflags="$LDFLAGS" -trimpath \
-            -o dist/agentsview ./cmd/agentsview
+            -o dist/periscope ./cmd/periscope
 
           # Smoke test (native builds — no cross-compilation)
-          ./dist/agentsview --version
+          ./dist/periscope --version
 
           # Verify glibc compatibility
           MAX_GLIBC="GLIBC_2.28"
-          HIGHEST=$(objdump -T dist/agentsview | grep -oP 'GLIBC_\d+\.\d+' | sort -t. -k1,1n -k2,2n | tail -1)
+          HIGHEST=$(objdump -T dist/periscope | grep -oP 'GLIBC_\d+\.\d+' | sort -t. -k1,1n -k2,2n | tail -1)
           echo "Highest glibc symbol: $HIGHEST (max allowed: $MAX_GLIBC)"
           if [ "$(printf '%s\n%s' "$MAX_GLIBC" "$HIGHEST" | sort -t. -k1,1n -k2,2n | tail -1)" != "$MAX_GLIBC" ]; then
             echo "ERROR: Binary requires $HIGHEST but wheel claims $MAX_GLIBC"
@@ -75,13 +75,13 @@ jobs:
           fi
 
           cd dist
-          ARCHIVE="agentsview_${VERSION}_linux_${{ matrix.goarch }}.tar.gz"
-          tar czf "$ARCHIVE" agentsview
-          rm agentsview
+          ARCHIVE="periscope_${VERSION}_linux_${{ matrix.goarch }}.tar.gz"
+          tar czf "$ARCHIVE" periscope
+          rm periscope
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: agentsview-linux-${{ matrix.goarch }}
+          name: periscope-linux-${{ matrix.goarch }}
           path: dist/*.tar.gz
 
   build:
@@ -149,16 +149,16 @@ jobs:
           mkdir -p dist
           LDFLAGS="-s -w -X main.version=v${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}"
           go build -tags fts5 -ldflags="$LDFLAGS" -trimpath \
-            -o dist/agentsview${EXT} ./cmd/agentsview
+            -o dist/periscope${EXT} ./cmd/periscope
 
           # Smoke test (skip cross-compiled darwin/amd64 on ARM runner)
           if [ "$GOARCH" = "$(go env GOHOSTARCH)" ]; then
-            ./dist/agentsview${EXT} --version
+            ./dist/periscope${EXT} --version
           fi
 
           # Verify macOS deployment target
           if [ "$GOOS" = "darwin" ]; then
-            MINOS=$(otool -l dist/agentsview | grep -A3 LC_BUILD_VERSION | grep minos | awk '{print $2}')
+            MINOS=$(otool -l dist/periscope | grep -A3 LC_BUILD_VERSION | grep minos | awk '{print $2}')
             echo "Minimum macOS version: $MINOS"
             if [ "$MINOS" != "11.0" ]; then
               echo "ERROR: Expected minos 11.0, got $MINOS"
@@ -168,17 +168,17 @@ jobs:
 
           cd dist
           if [ "$GOOS" = "windows" ]; then
-            ARCHIVE="agentsview_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
-            7z a "$ARCHIVE" agentsview${EXT}
+            ARCHIVE="periscope_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+            7z a "$ARCHIVE" periscope${EXT}
           else
-            ARCHIVE="agentsview_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
-            tar czf "$ARCHIVE" agentsview${EXT}
+            ARCHIVE="periscope_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+            tar czf "$ARCHIVE" periscope${EXT}
           fi
-          rm agentsview${EXT}
+          rm periscope${EXT}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: agentsview-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: periscope-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             dist/*.tar.gz
             dist/*.zip
@@ -272,8 +272,8 @@ jobs:
       - name: Smoke test wheel
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          pip install wheels/agentsview-${VERSION}-py3-none-manylinux_2_28_x86_64.whl
-          agentsview --version
+          pip install wheels/periscope-${VERSION}-py3-none-manylinux_2_28_x86_64.whl
+          periscope --version
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
