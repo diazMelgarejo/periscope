@@ -198,7 +198,7 @@ fn is_allowed_external_open_url(url: &Url) -> bool {
 // sidecar_env returns the environment passed to the backend
 // sidecar process. It merges the app environment with
 // login-shell variables so desktop launches inherit zshrc/bash
-// exports. An optional ~/.agentsview/desktop.env file can
+// exports. An optional ~/.periscope/desktop.env file can
 // override specific keys as an escape hatch.
 fn sidecar_env() -> Vec<(OsString, OsString)> {
     let skip_login_shell = std::env::var_os("AGENTSVIEW_DESKTOP_SKIP_LOGIN_SHELL_ENV");
@@ -241,7 +241,7 @@ fn default_login_shell() -> String {
     "/bin/sh".to_string()
 }
 
-// read_desktop_env_file parses ~/.agentsview/desktop.env as
+// read_desktop_env_file parses ~/.periscope/desktop.env as
 // KEY=VALUE lines. This provides a manual override path before
 // desktop settings UI exists.
 fn read_desktop_env_file() -> Vec<(OsString, OsString)> {
