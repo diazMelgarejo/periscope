@@ -19,6 +19,32 @@ import zipfile
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
+# Version helpers
+# ---------------------------------------------------------------------------
+
+
+def normalize_wheel_version(version: str) -> str:
+    """Convert a release tag version to a PEP 440-compatible wheel version.
+
+    Our release tags follow the convention:
+        {semver}-{suffix}-{commit}  →  0.29.2-periscope.2-258218f5
+
+    Wheel filenames use ``-`` as a field delimiter, so the version field must
+    not contain dashes.  PEP 440 local identifiers (``+``) are the standard
+    escape hatch:
+
+        0.29.2-periscope.2-258218f5  →  0.29.2+periscope.2.258218f5
+
+    A plain semver (e.g. ``0.29.2``) is returned as-is.
+    """
+    m = re.match(r"^(\d+\.\d+\.\d+)-(.+)$", version)
+    if m:
+        local = m.group(2).replace("-", ".")
+        return f"{m.group(1)}+{local}"
+    return version
+
+
+# ---------------------------------------------------------------------------
 # Platform constants
 # ---------------------------------------------------------------------------
 
@@ -185,15 +211,17 @@ def build_wheel(
     binary_name = platform_info["binary_name"]
     is_windows = platform_key.startswith("windows")
 
-    dist_info = f"periscope-{version}.dist-info"
-    whl_name = f"periscope-{version}-py3-none-{wheel_tag}.whl"
+    # Normalize version for PEP 440 compliance (dashes → local identifier)
+    whl_version = normalize_wheel_version(version)
+    dist_info = f"periscope-{whl_version}.dist-info"
+    whl_name = f"periscope-{whl_version}-py3-none-{wheel_tag}.whl"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     whl_path = output_dir / whl_name
 
     init_py = _INIT_PY_WINDOWS if is_windows else _INIT_PY_UNIX
     main_py = _MAIN_PY
-    metadata = _build_metadata(version, readme)
+    metadata = _build_metadata(whl_version, readme)
     wheel_meta = _build_wheel_file(wheel_tag)
     entry_points = "[console_scripts]\nperiscope = periscope:main\n"
 
