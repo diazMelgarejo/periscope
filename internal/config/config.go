@@ -160,7 +160,7 @@ func Default() (Config, error) {
 			"determining home directory: %w", err,
 		)
 	}
-	dataDir := filepath.Join(home, ".agentsview")
+	dataDir := filepath.Join(home, ".periscope")
 
 	agentDirs := make(map[parser.AgentType][]string)
 	agentDirSource := make(map[parser.AgentType]dirSource)
@@ -538,10 +538,10 @@ func (c *Config) writeConfigMap(m map[string]any) error {
 }
 
 // dataDirFromEnv returns the data directory from the environment, preferring
-// AGENTSVIEW_DATA_DIR and falling back to the legacy AGENT_VIEWER_DATA_DIR.
+// PERISCOPE_DATA_DIR and falling back to the legacy AGENT_VIEWER_DATA_DIR.
 // Returns "" when neither is set.
 func dataDirFromEnv() string {
-	if v := os.Getenv("AGENTSVIEW_DATA_DIR"); v != "" {
+	if v := os.Getenv("PERISCOPE_DATA_DIR"); v != "" {
 		return v
 	}
 	return os.Getenv("AGENT_VIEWER_DATA_DIR")
@@ -560,7 +560,7 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
 		c.PG.URL = v
 	}
-	if v := os.Getenv("AGENTSVIEW_PG_SCHEMA"); v != "" {
+	if v := os.Getenv("PERISCOPE_PG_SCHEMA"); v != "" {
 		c.PG.Schema = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
@@ -1080,7 +1080,7 @@ func (c *Config) ResolvePG() (PGConfig, error) {
 		pg.URL = expanded
 	}
 	if pg.Schema == "" {
-		pg.Schema = "agentsview"
+		pg.Schema = "periscope"
 	}
 	if pg.MachineName == "" {
 		h, err := os.Hostname()

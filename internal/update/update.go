@@ -118,7 +118,7 @@ func CheckForUpdate(
 		ext = ".zip"
 	}
 	assetName := fmt.Sprintf(
-		"agentsview_%s_%s_%s%s",
+		"periscope_%s_%s_%s%s",
 		latestVersion, runtime.GOOS, runtime.GOARCH, ext,
 	)
 	asset, checksumsAsset := findAssets(release.Assets, assetName)
@@ -163,7 +163,7 @@ func PerformUpdate(
 	}
 
 	fmt.Printf("Downloading %s...\n", info.AssetName)
-	tempDir, err := os.MkdirTemp("", "agentsview-update-*")
+	tempDir, err := os.MkdirTemp("", "periscope-update-*")
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
@@ -216,9 +216,9 @@ func installFromArchive(
 		return fmt.Errorf("resolve symlinks: %w", err)
 	}
 	binDir := filepath.Dir(currentExe)
-	binaryName := "agentsview"
+	binaryName := "periscope"
 	if runtime.GOOS == "windows" {
-		binaryName = "agentsview.exe"
+		binaryName = "periscope.exe"
 	}
 	dstPath := filepath.Join(binDir, binaryName)
 
@@ -254,7 +254,7 @@ func installFromArchiveTo(
 		)
 	}
 
-	extractDir, err := os.MkdirTemp("", "agentsview-extract-*")
+	extractDir, err := os.MkdirTemp("", "periscope-extract-*")
 	if err != nil {
 		return fmt.Errorf("create extract dir: %w", err)
 	}
@@ -270,9 +270,9 @@ func installFromArchiveTo(
 		}
 	}
 
-	binaryName := "agentsview"
+	binaryName := "periscope"
 	if runtime.GOOS == "windows" {
-		binaryName = "agentsview.exe"
+		binaryName = "periscope.exe"
 	}
 	srcPath := filepath.Join(extractDir, binaryName)
 	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
@@ -366,7 +366,7 @@ func fetchLatestRelease() (*Release, error) {
 	req.Header.Set(
 		"Accept", "application/vnd.github.v3+json",
 	)
-	req.Header.Set("User-Agent", "agentsview-update")
+	req.Header.Set("User-Agent", "periscope-update")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
