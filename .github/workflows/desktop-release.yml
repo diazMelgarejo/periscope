@@ -67,6 +67,7 @@ jobs:
           rm -f desktop/src-tauri/tauri.conf.json.bak
 
       - name: Import signing certificate
+        if: env.APPLE_CERTIFICATE != ''
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -93,6 +94,7 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
 
       - name: Write API key
+        if: env.APPLE_API_KEY != '' && env.APPLE_API_KEY_CONTENT != ''
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -104,7 +106,8 @@ jobs:
           echo "APPLE_API_KEY_PATH=$KEY_DIR/AuthKey_${APPLE_API_KEY}.p8" \
             >> "$GITHUB_ENV"
 
-      - name: Build DMG and updater bundle
+      - name: Build DMG (signed + updater)
+        if: env.TAURI_SIGNING_PRIVATE_KEY != ''
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -115,19 +118,33 @@ jobs:
         run: npx tauri build --target "$PERISCOPE_TARGET_TRIPLE"
         working-directory: desktop
 
+      - name: Build DMG (unsigned, no updater)
+        if: env.TAURI_SIGNING_PRIVATE_KEY == ''
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          npx tauri build --target "$PERISCOPE_TARGET_TRIPLE" \
+            --config '{"plugins":{"updater":{"active":false}},"bundle":{"createUpdaterArtifacts":false}}'
+        working-directory: desktop
+
       - name: Collect build artifacts
         run: |
           bundle_dir="desktop/src-tauri/target/${PERISCOPE_TARGET_TRIPLE}/release/bundle"
           mkdir -p staging
           cp "$bundle_dir"/dmg/*.dmg staging/
 
-          app_bundle="$(find "$bundle_dir"/macos -maxdepth 1 -name '*.app.tar.gz' -print -quit)"
-          app_sig="$(find "$bundle_dir"/macos -maxdepth 1 -name '*.app.tar.gz.sig' -print -quit)"
+          app_bundle="$(find "$bundle_dir"/macos -maxdepth 1 -name '*.app.tar.gz' -print -quit 2>/dev/null || true)"
+          app_sig="$(find "$bundle_dir"/macos -maxdepth 1 -name '*.app.tar.gz.sig' -print -quit 2>/dev/null || true)"
 
-          app_name="$(basename "$app_bundle")"
-          app_sig_name="$(basename "$app_sig")"
-          cp "$app_bundle" "staging/${app_name%.app.tar.gz}_${{ matrix.arch }}.app.tar.gz"
-          cp "$app_sig" "staging/${app_sig_name%.app.tar.gz.sig}_${{ matrix.arch }}.app.tar.gz.sig"
+          if [ -n "$app_bundle" ] && [ -f "$app_bundle" ]; then
+            app_name="$(basename "$app_bundle")"
+            cp "$app_bundle" "staging/${app_name%.app.tar.gz}_${{ matrix.arch }}.app.tar.gz"
+          fi
+          if [ -n "$app_sig" ] && [ -f "$app_sig" ]; then
+            app_sig_name="$(basename "$app_sig")"
+            cp "$app_sig" "staging/${app_sig_name%.app.tar.gz.sig}_${{ matrix.arch }}.app.tar.gz.sig"
+          fi
+
           ls -la staging/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -137,7 +154,9 @@ jobs:
           if-no-files-found: error
 
       - name: Cleanup signing secrets
-        if: always()
+        if: always() && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
@@ -201,7 +220,8 @@ jobs:
             desktop/src-tauri/tauri.conf.json
           rm -f desktop/src-tauri/tauri.conf.json.bak
 
-      - name: Build NSIS installer and updater bundle
+      - name: Build NSIS installer and updater bundle (signed)
+        if: env.TAURI_SIGNING_PRIVATE_KEY != ''
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -210,13 +230,24 @@ jobs:
         run: npx tauri build --bundles nsis
         working-directory: desktop
 
+      - name: Build NSIS installer (unsigned, no updater)
+        if: env.TAURI_SIGNING_PRIVATE_KEY == ''
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          npx tauri build --bundles nsis \
+            --config '{"plugins":{"updater":{"active":false}},"bundle":{"createUpdaterArtifacts":false}}'
+        working-directory: desktop
+
       - name: Collect build artifacts
         shell: bash
         run: |
           mkdir -p staging
           cp desktop/src-tauri/target/release/bundle/nsis/*.exe staging/
-          cp desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip staging/
-          cp desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip.sig staging/
+          # Updater bundles are only present when TAURI_SIGNING_PRIVATE_KEY is set
+          find desktop/src-tauri/target/release/bundle/nsis/ -name '*.nsis.zip' -exec cp {} staging/ \; 2>/dev/null || true
+          find desktop/src-tauri/target/release/bundle/nsis/ -name '*.nsis.zip.sig' -exec cp {} staging/ \; 2>/dev/null || true
           ls -la staging/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -304,8 +335,8 @@ jobs:
           if [ -n "$PERISCOPE_TARGET_TRIPLE" ]; then
             build_cmd+=(--target "$PERISCOPE_TARGET_TRIPLE")
           fi
-          if [ "${{ matrix.create_updater_artifacts }}" = "false" ]; then
-            build_cmd+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+          if [ "${{ matrix.create_updater_artifacts }}" = "false" ] || [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            build_cmd+=(--config '{"plugins":{"updater":{"active":false}},"bundle":{"createUpdaterArtifacts":false}}')
           fi
           "${build_cmd[@]}"
         working-directory: desktop
@@ -315,8 +346,8 @@ jobs:
           mkdir -p staging
           cp "${{ matrix.artifact_dir }}"/*.AppImage staging/
           if [ "${{ matrix.create_updater_artifacts }}" = "true" ]; then
-            cp "${{ matrix.artifact_dir }}"/*.AppImage.tar.gz staging/
-            cp "${{ matrix.artifact_dir }}"/*.AppImage.tar.gz.sig staging/
+            find "${{ matrix.artifact_dir }}" -name '*.AppImage.tar.gz' -exec cp {} staging/ \; 2>/dev/null || true
+            find "${{ matrix.artifact_dir }}" -name '*.AppImage.tar.gz.sig' -exec cp {} staging/ \; 2>/dev/null || true
           fi
           ls -la staging/
 
@@ -345,7 +376,37 @@ jobs:
           sha256sum *.dmg *.exe *.AppImage *.tar.gz *.nsis.zip > SHA256SUMS-desktop 2>/dev/null || true
           cat SHA256SUMS-desktop
 
+      - name: Check for updater signatures
+        id: check_sigs
+        run: |
+          # Determine whether all required updater sig files are present
+          HAS_MACOS_AARCH64=false
+          HAS_MACOS_X86_64=false
+          HAS_WINDOWS=false
+          HAS_LINUX=false
+          ls artifacts/ 2>/dev/null || true
+          [ -n "$(find artifacts -name '*_aarch64.app.tar.gz.sig' 2>/dev/null)" ] && HAS_MACOS_AARCH64=true
+          [ -n "$(find artifacts -name '*_x86_64.app.tar.gz.sig' 2>/dev/null)" ] && HAS_MACOS_X86_64=true
+          [ -n "$(find artifacts -name '*.nsis.zip.sig' 2>/dev/null)" ] && HAS_WINDOWS=true
+          [ -n "$(find artifacts -name '*.AppImage.tar.gz.sig' 2>/dev/null)" ] && HAS_LINUX=true
+
+          if [ "$HAS_MACOS_AARCH64" = "true" ] && \
+             [ "$HAS_MACOS_X86_64" = "true" ] && \
+             [ "$HAS_WINDOWS" = "true" ] && \
+             [ "$HAS_LINUX" = "true" ]; then
+            echo "has_sigs=true" >> "$GITHUB_OUTPUT"
+            echo "All updater signatures present — will generate updater manifest."
+          else
+            echo "has_sigs=false" >> "$GITHUB_OUTPUT"
+            echo "Missing one or more updater signatures — skipping updater manifest."
+            echo "  macOS aarch64: $HAS_MACOS_AARCH64"
+            echo "  macOS x86_64:  $HAS_MACOS_X86_64"
+            echo "  Windows:       $HAS_WINDOWS"
+            echo "  Linux:         $HAS_LINUX"
+          fi
+
       - name: Generate updater manifest
+        if: steps.check_sigs.outputs.has_sigs == 'true'
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
@@ -393,23 +454,6 @@ jobs:
             fi
           done
 
-          if [ -z "$MACOS_AARCH64_SIG" ] || [ -z "$MACOS_AARCH64_URL" ]; then
-            echo "error: missing macOS aarch64 updater signature or URL" >&2
-            exit 1
-          fi
-          if [ -z "$MACOS_X86_64_SIG" ] || [ -z "$MACOS_X86_64_URL" ]; then
-            echo "error: missing macOS x86_64 updater signature or URL" >&2
-            exit 1
-          fi
-          if [ -z "$WINDOWS_SIG" ] || [ -z "$WINDOWS_URL" ]; then
-            echo "error: missing Windows updater signature or URL" >&2
-            exit 1
-          fi
-          if [ -z "$LINUX_SIG" ] || [ -z "$LINUX_URL" ]; then
-            echo "error: missing Linux updater signature or URL" >&2
-            exit 1
-          fi
-
           cat > artifacts/latest.json << MANIFEST
           {
             "version": "${VERSION}",
@@ -448,6 +492,7 @@ jobs:
             artifacts/SHA256SUMS-desktop
 
       - name: Upload updater artifacts
+        if: steps.check_sigs.outputs.has_sigs == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
