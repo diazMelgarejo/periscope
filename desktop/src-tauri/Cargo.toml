@@ -1,12 +1,12 @@
 [package]
-name = "agentsview-desktop"
+name = "periscope-desktop"
 version = "0.1.0"
-description = "AgentsView desktop wrapper"
+description = "Periscope desktop wrapper"
 authors = ["Wes McKinney"]
 edition = "2021"
 
 [lib]
-name = "agentsview_desktop_lib"
+name = "periscope_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
