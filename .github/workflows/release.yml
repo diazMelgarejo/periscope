@@ -272,13 +272,7 @@ jobs:
       - name: Smoke test wheel
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          # Normalize to PEP 440: 0.29.2-periscope.2-abc1234 → 0.29.2+periscope.2.abc1234
-          WHL_VERSION=$(python3 -c "
-import re, sys
-v = '${VERSION}'
-m = re.match(r'^(\d+\.\d+\.\d+)-(.+)$', v)
-print(m.group(1) + '+' + m.group(2).replace('-', '.') if m else v)
-")
+          WHL_VERSION=$(python3 -c "import re,sys; v='${VERSION}'; m=re.match(r'^(\d+\.\d+\.\d+)-(.+)$',v); print(m.group(1)+'+'+m.group(2).replace('-','.')if m else v)")
           pip install "wheels/periscope-${WHL_VERSION}-py3-none-manylinux_2_28_x86_64.whl"
           periscope --version
 
