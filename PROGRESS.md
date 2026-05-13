@@ -21,6 +21,32 @@
 | 9 | Build verification + tag v0.29.2-periscope.2 | ✅ done | `3cdcde5` | All 20 pkg tests pass; tag pushed; 5 platform binaries released |
 | 10 | E2E install script test | ✅ done | — | darwin/arm64 install + checksum verified; binary reports correct version |
 
+## CI Fix Status (post v0.29.2-periscope.2-3d3e10b0)
+
+| Issue | Status | Fix |
+|---|---|---|
+| PyPI wheel `_ARCHIVE_RE` matched `agentsview_*` | ✅ fixed | Regex → `^periscope_` in `build_wheels.py` |
+| Desktop: `agentsview_desktop_lib::run` in `main.rs` | ✅ fixed | Renamed to `periscope_desktop_lib::run` |
+| PEP 440: tag dashes invalid in wheel filename | ✅ fixed | `normalize_wheel_version()` → `0.29.2+periscope.2.abc` |
+| Desktop: missing `APPLE_CERTIFICATE` → CI fails hard | ✅ fixed | `if: env.APPLE_CERTIFICATE != ''` guards on signing steps |
+| Desktop: missing `TAURI_SIGNING_PRIVATE_KEY` → fails | ✅ fixed | Conditional signed vs unsigned build paths |
+| Desktop: updater manifest fails when no sigs present | ✅ fixed | `check_sigs` step gates manifest + upload steps |
+| PyPI: `invalid-publisher` on upload | ⚠️ user action | Configure OIDC trusted publisher on pypi.org for this fork |
+| `TAURI_SIGNING_PRIVATE_KEY` not set in repo secrets | ⚠️ user action | See "Setting up updater signing" below |
+
+## Setting Up Updater Signing (one-time)
+
+A keypair was generated for this fork. Add these as GitHub Actions secrets
+in Settings → Secrets and variables → Actions:
+
+| Secret name | Value |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | (private key — see `/tmp/periscope-keys/key` on Mac) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | (leave empty — key has no password) |
+| `PERISCOPE_UPDATER_PUBKEY` | `dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGN0Y2RkUyODZEMEJFNUIKUldSYnZ0Q0c0bTkvMzhFY2ZaQlRHWnVMNkJqdWluRXMvN3dRTHZremlUcGw4dHpMQUpnRXdhOHEK` |
+
+Then re-tag to trigger a fresh Desktop Release run.
+
 ## Merge-Residue Fixes Applied (sessions.go / db.go)
 
 These were silent merge bugs from the upstream merge — fixed in `b55dea5`:
