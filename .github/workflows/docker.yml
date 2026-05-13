@@ -52,7 +52,9 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.vars.outputs.image }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
             type=semver,pattern={{version}}
+            type=sha,format=short
           labels: |
             org.opencontainers.image.title=periscope
             org.opencontainers.image.description=Local web viewer for AI agent sessions
