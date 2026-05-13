@@ -10,31 +10,31 @@
 
 | # | Task | Status | Commit | Notes |
 |---|---|---|---|---|
-| 1 | Go Module Rename | 🔄 in progress | — | |
-| 2 | Binary + Makefile Rename | ⏳ pending | — | |
-| 3 | Version String in main.go | ⏳ pending | — | |
-| 4 | Update install.sh | ⏳ pending | — | |
-| 5 | Create sync-upstream.sh | ⏳ pending | — | |
-| 6 | Update release.yml | ⏳ pending | — | |
-| 7 | Create PeriscopeProcessManager.kt | ⏳ pending | — | |
-| 8 | Wire MyToolWindowFactory + MyProjectActivity | ⏳ pending | — | |
-| 9 | Build verification + tag v0.29.2-periscope.2 | ⏳ pending | — | |
-| 10 | E2E install script test | ⏳ pending | — | |
+| 1 | Go Module Rename | ✅ done | `0158c93` | All ~163 .go files; GitHub API URL fixed |
+| 2 | Binary + Makefile Rename | ✅ done | `b55dea5` | cmd/agentsview→cmd/periscope; 3 merge-residue fixes in sessions.go + db.go |
+| 3 | Version String in main.go | ✅ done | `b55dea5` | v0.29.2-periscope.2; ldflags override for dev builds |
+| 4 | Update install.sh | ✅ done | `5e27985` | REPO, BINARY_NAME, PERISCOPE_SKIP_CHECKSUM |
+| 5 | Create sync-upstream.sh | ✅ done | `5e27985` | Auto-resolution + invariant verification |
+| 6 | Update release.yml | ✅ done | `5e27985` | All binary/archive/artifact names updated |
+| 7 | Create PeriscopeProcessManager.kt | ✅ done | `b0d404c` | start/stop/serverUrl; auto port-finding |
+| 8 | Wire MyToolWindowFactory + MyProjectActivity | ✅ done | `b0d404c` | JBCefBrowser → serverUrl(); lifecycle wired |
+| 9 | Build verification + tag v0.29.2-periscope.2 | 🔄 in progress | — | All 20 pkg tests pass; tagging next |
+| 10 | E2E install script test | ⏳ pending | — | Requires GitHub release to exist |
 
-## Model Strategy
+## Merge-Residue Fixes Applied (sessions.go / db.go)
 
-| Task | Model | Reason |
-|---|---|---|
-| 1, 2, 3 | haiku | Mechanical sed/rename — no judgment needed |
-| 4, 5, 6 | sonnet | Script/YAML writing — spec fully defines content |
-| 7, 8 | sonnet | Kotlin/IntelliJ Platform — needs API knowledge |
-| 9, 10 | inline | CI trigger + local Mac test — not delegatable |
-| Reviews | haiku + LM Studio (192.168.254.104:1234) | Spec compliance checks |
+These were silent merge bugs from the upstream merge — fixed in `b55dea5`:
+
+1. **`upsertSessionSQL` VALUES placeholders**: 30 `?` → 32 (was missing model_context_window_tokens, has_model_context_window_tokens)
+2. **`FindPruneCandidates` Scan**: added `&s.ModelContextWindowTokens`, `&s.HasModelContextWindowTokens`
+3. **`ListSessionsModifiedBetween` Scan**: same fix
+4. **`db.go` migrations**: added `ALTER TABLE` for both new periscope columns
+5. **`automated_backfill_test.go`**: UpdateSessionIncremental calls 10→12 args
 
 ## Local Model Resources
 
 - **Ollama (Mac localhost:11434):** Available for mechanical review passes
-- **LM Studio (Windows 192.168.254.104:1234):** Available via OpenClaw for parallel review
+- **LM Studio (Windows 192.168.254.102:1234):** Available via OpenClaw for parallel review
 
 ## How to Resume
 
@@ -45,6 +45,15 @@ git log --oneline -10
 # Find the last completed task commit, then continue from the next task
 # in docs/superpowers/plans/2026-05-10-periscope-build-system.md
 ```
+
+## Next Sync Upgrade Path
+
+When upstream latentsignal-org/periscope releases a new version:
+1. Run `./scripts/sync-upstream.sh --dry-run` to preview
+2. Run `./scripts/sync-upstream.sh` to merge
+3. Run `go test -tags fts5 ./...` and `make build`
+4. Bump version: `v0.(upstream_minor+1).2-periscope.2` in cmd/periscope/main.go
+5. Tag and push: `git tag v0.XX.2-periscope.2 && git push origin merged --tags`
 
 ## Target Release
 
