@@ -66,14 +66,14 @@ func TestIsNewer(t *testing.T) {
 
 func TestExtractChecksum(t *testing.T) {
 	body := `abc123  some_other_file.tar.gz
-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  agentsview_0.1.0_linux_amd64.tar.gz
+deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  periscope_0.1.0_linux_amd64.tar.gz
 fff000  yet_another.zip`
 
 	tests := []struct {
 		filename string
 		want     string
 	}{
-		{"agentsview_0.1.0_linux_amd64.tar.gz", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
+		{"periscope_0.1.0_linux_amd64.tar.gz", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 		{"nonexistent.tar.gz", ""},
 	}
 
@@ -96,8 +96,8 @@ func TestSanitizePath(t *testing.T) {
 		wantPath string
 		wantErr  bool
 	}{
-		{"normal", "agentsview", filepath.Join(destDir, "agentsview"), false},
-		{"subdir", "dir/agentsview", filepath.Join(destDir, "dir/agentsview"), false},
+		{"normal", "periscope", filepath.Join(destDir, "periscope"), false},
+		{"subdir", "dir/periscope", filepath.Join(destDir, "dir/periscope"), false},
 		{"absolute", "/etc/passwd", "", true},
 		{"traversal", "../../../etc/passwd", "", true},
 		{"hidden_traversal", "foo/../../etc/passwd", "", true},
@@ -128,14 +128,14 @@ func TestExtractTarGz(t *testing.T) {
 
 	// Create a test tar.gz with a dummy binary
 	archivePath := filepath.Join(srcDir, "test.tar.gz")
-	createTestTarGz(t, archivePath, "agentsview", "binary-content")
+	createTestTarGz(t, archivePath, "periscope", "binary-content")
 
 	if err := extractTarGz(archivePath, destDir); err != nil {
 		t.Fatalf("extractTarGz: %v", err)
 	}
 
 	content, err := os.ReadFile(
-		filepath.Join(destDir, "agentsview"),
+		filepath.Join(destDir, "periscope"),
 	)
 	if err != nil {
 		t.Fatalf("read extracted file: %v", err)

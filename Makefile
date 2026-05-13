@@ -31,19 +31,19 @@ ensure-embed-dir:
 
 # Build the binary (debug, with embedded frontend)
 build: frontend
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o agentsview ./cmd/agentsview
-	@chmod +x agentsview
+	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o periscope ./cmd/periscope
+	@chmod +x periscope
 
 # Build with optimizations (release)
 build-release: frontend
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview
-	@chmod +x agentsview
+	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o periscope ./cmd/periscope
+	@chmod +x periscope
 
 # Install to ~/.local/bin, $GOBIN, or $GOPATH/bin
 install: build-release
 	@if [ -d "$(HOME)/.local/bin" ]; then \
-		echo "Installing to ~/.local/bin/agentsview"; \
-		cp agentsview "$(HOME)/.local/bin/agentsview"; \
+		echo "Installing to ~/.local/bin/periscope"; \
+		cp periscope "$(HOME)/.local/bin/periscope"; \
 	else \
 		INSTALL_DIR="$${GOBIN:-$$(go env GOBIN)}"; \
 		if [ -z "$$INSTALL_DIR" ]; then \
@@ -51,8 +51,8 @@ install: build-release
 			INSTALL_DIR="$$GOPATH_FIRST/bin"; \
 		fi; \
 		mkdir -p "$$INSTALL_DIR"; \
-		echo "Installing to $$INSTALL_DIR/agentsview"; \
-		cp agentsview "$$INSTALL_DIR/agentsview"; \
+		echo "Installing to $$INSTALL_DIR/periscope"; \
+		cp periscope "$$INSTALL_DIR/periscope"; \
 	fi
 
 # Build frontend SPA and copy into embed directory
@@ -68,14 +68,14 @@ frontend:
 frontend-dev:
 	cd frontend && npm run dev
 
-# Build and run agentsview against a fresh snapshot of the prod SQLite DB.
+# Build and run periscope against a fresh snapshot of the prod SQLite DB.
 # Prod DB is never written; sqlite3 .backup is WAL-safe even with prod running.
 # Prod config.toml is NOT copied, so remote PG push is disabled in the snapshot.
 # Overrides:
-#   PROD_DATA_DIR  - source data dir (default: $$HOME/.agentsview)
+#   PROD_DATA_DIR  - source data dir (default: $$HOME/.periscope)
 #   SNAPSHOT_DIR   - destination dir (default: tmp/prod-snapshot)
 #   RESNAPSHOT=0   - reuse existing snapshot instead of re-cloning
-PROD_DATA_DIR ?= $(HOME)/.agentsview
+PROD_DATA_DIR ?= $(HOME)/.periscope
 SNAPSHOT_DIR ?= tmp/prod-snapshot
 # Resolve SNAPSHOT_DIR so relative and absolute paths both work.
 SNAPSHOT_ABS := $(abspath $(SNAPSHOT_DIR))
@@ -89,7 +89,7 @@ SNAPSHOT_ABS := $(abspath $(SNAPSHOT_DIR))
 # SNAPSHOT_DIR=tmp wiping unrelated tmp/ contents) even with a
 # denylist, so we now only ever delete a small set of files we
 # know we wrote.
-SNAPSHOT_MARKER := .agentsview-snapshot
+SNAPSHOT_MARKER := .periscope-snapshot
 
 dev-snapshot: build
 	@if [ ! -f "$(PROD_DATA_DIR)/sessions.db" ]; then \
@@ -122,7 +122,7 @@ dev-snapshot: build
 	else \
 		echo "Reusing existing snapshot at $(SNAPSHOT_ABS)/sessions.db"; \
 	fi
-	AGENTSVIEW_DATA_DIR="$(SNAPSHOT_ABS)" ./agentsview serve --port 0
+	PERISCOPE_DATA_DIR="$(SNAPSHOT_ABS)" ./periscope serve --port 0
 
 # Ensure air is installed for backend live reload
 check-air:
@@ -323,7 +323,7 @@ tidy:
 
 # Clean build artifacts
 clean:
-	rm -f agentsview agentsv
+	rm -f periscope agentsv
 	rm -rf internal/web/dist dist/ tmp/
 	mkdir -p internal/web/dist
 	printf '%s\n' \
@@ -335,26 +335,26 @@ release: frontend
 	mkdir -p dist
 	CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
-		-o dist/agentsview-$$(go env GOOS)-$$(go env GOARCH) ./cmd/agentsview
+		-o dist/periscope-$$(go env GOOS)-$$(go env GOARCH) ./cmd/periscope
 
 # Cross-compile targets (require CC set to target cross-compiler)
 release-darwin-arm64: frontend
 	mkdir -p dist
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
-		-o dist/agentsview-darwin-arm64 ./cmd/agentsview
+		-o dist/periscope-darwin-arm64 ./cmd/periscope
 
 release-darwin-amd64: frontend
 	mkdir -p dist
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
-		-o dist/agentsview-darwin-amd64 ./cmd/agentsview
+		-o dist/periscope-darwin-amd64 ./cmd/periscope
 
 release-linux-amd64: frontend
 	mkdir -p dist
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
-		-o dist/agentsview-linux-amd64 ./cmd/agentsview
+		-o dist/periscope-linux-amd64 ./cmd/periscope
 
 # Install pre-commit hooks via prek
 install-hooks:
@@ -366,14 +366,14 @@ install-hooks:
 
 # Show help
 help:
-	@echo "agentsview build targets:"
+	@echo "periscope build targets:"
 	@echo ""
 	@echo "  build          - Build with embedded frontend"
 	@echo "  build-release  - Release build (optimized, stripped)"
 	@echo "  install        - Build and install to ~/.local/bin or GOPATH"
 	@echo ""
 	@echo "  dev            - Run Go server with live reload via air (use with frontend-dev)"
-	@echo "  dev-snapshot   - Run agentsview against a fresh snapshot of prod sessions.db"
+	@echo "  dev-snapshot   - Run periscope against a fresh snapshot of prod sessions.db"
 	@echo "  air-install    - Install air for backend live reload"
 	@echo "  frontend       - Build frontend SPA"
 	@echo "  frontend-dev   - Run Vite dev server"

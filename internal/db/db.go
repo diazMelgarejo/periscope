@@ -547,6 +547,15 @@ func (db *DB) migrateColumns() error {
 			"sessions", "termination_status",
 			"ALTER TABLE sessions ADD COLUMN termination_status TEXT",
 		},
+		// Periscope additions: model context window tracking.
+		{
+			"sessions", "model_context_window_tokens",
+			"ALTER TABLE sessions ADD COLUMN model_context_window_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "has_model_context_window_tokens",
+			"ALTER TABLE sessions ADD COLUMN has_model_context_window_tokens INTEGER NOT NULL DEFAULT 0",
+		},
 	}
 
 	for _, m := range migrations {

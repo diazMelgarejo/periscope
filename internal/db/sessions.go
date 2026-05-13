@@ -776,7 +776,7 @@ const upsertSessionSQL = `
 			is_truncated,
 			file_path, file_size, file_mtime,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -1643,7 +1643,9 @@ func (db *DB) FindPruneCandidates(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.ModelContextWindowTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+			&s.HasModelContextWindowTokens,
 			&s.IsAutomated,
 			&s.ToolFailureSignalCount, &s.ToolRetryCount,
 			&s.EditChurnCount, &s.ConsecutiveFailureMax,
@@ -1919,7 +1921,9 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.ModelContextWindowTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+			&s.HasModelContextWindowTokens,
 			&s.IsAutomated,
 			&s.ToolFailureSignalCount, &s.ToolRetryCount,
 			&s.EditChurnCount, &s.ConsecutiveFailureMax,
