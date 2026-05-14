@@ -239,6 +239,12 @@ jobs:
           generate_release_notes: ${{ steps.tag_message.outputs.has_body != 'true' }}
 
   pypi:
+    # Disabled by default — the 'periscope' package name on PyPI is taken by an unrelated
+    # project (Patrick Dessalle, v0.2.4). To enable: set the ENABLE_PYPI_PUBLISH repo
+    # variable to 'true' AND configure an OIDC Trusted Publisher at pypi.org with:
+    #   project name: <your-package-name>, owner: diazMelgarejo, repo: periscope,
+    #   workflow: release.yml, environment: pypi
+    if: vars.ENABLE_PYPI_PUBLISH == 'true'
     needs: [build-linux, build, release]
     runs-on: ubuntu-latest
     environment: pypi
