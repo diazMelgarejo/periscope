@@ -34,6 +34,84 @@ func TestGetDailyUsageEmpty(t *testing.T) {
 	}
 }
 
+func TestUsageEventsReplaceAndList(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "hermes:event", "proj", func(s *Session) {
+		s.Agent = "hermes"
+		s.StartedAt = new("2026-05-14T10:00:00Z")
+		s.UserMessageCount = 2
+	})
+
+	cost := 0.02
+	ordinal := 3
+	events := []UsageEvent{{
+		SessionID:                "hermes:event",
+		MessageOrdinal:           &ordinal,
+		Source:                   "session",
+		Model:                    "gpt-5.4",
+		InputTokens:              100,
+		OutputTokens:             50,
+		CacheCreationInputTokens: 7,
+		CacheReadInputTokens:     11,
+		ReasoningTokens:          13,
+		CostUSD:                  &cost,
+		CostStatus:               "estimated",
+		CostSource:               "hermes",
+		OccurredAt:               "2026-05-14T10:05:00Z",
+		DedupKey:                 "session:hermes:event",
+	}}
+	if err := d.ReplaceSessionUsageEvents("hermes:event", events); err != nil {
+		t.Fatalf("ReplaceSessionUsageEvents: %v", err)
+	}
+
+	got, err := d.GetUsageEvents(ctx, "hermes:event")
+	if err != nil {
+		t.Fatalf("GetUsageEvents: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1", len(got))
+	}
+	if got[0].InputTokens != 100 ||
+		got[0].OutputTokens != 50 ||
+		got[0].CacheCreationInputTokens != 7 ||
+		got[0].CacheReadInputTokens != 11 ||
+		got[0].ReasoningTokens != 13 {
+		t.Fatalf("token fields not round-tripped: %#v", got[0])
+	}
+	if got[0].MessageOrdinal == nil || *got[0].MessageOrdinal != 3 {
+		t.Fatalf("MessageOrdinal = %#v, want 3", got[0].MessageOrdinal)
+	}
+	if got[0].CostUSD == nil || *got[0].CostUSD != cost {
+		t.Fatalf("CostUSD = %#v, want %v", got[0].CostUSD, cost)
+	}
+	if got[0].DedupKey != "session:hermes:event" {
+		t.Fatalf("DedupKey = %q", got[0].DedupKey)
+	}
+	fps, err := d.UsageEventFingerprints([]string{"hermes:event", "missing"})
+	if err != nil {
+		t.Fatalf("UsageEventFingerprints: %v", err)
+	}
+	if fps["hermes:event"] == "" {
+		t.Fatal("expected non-empty usage event fingerprint")
+	}
+	if fps["missing"] != "" {
+		t.Fatalf("missing fingerprint = %q, want empty", fps["missing"])
+	}
+
+	if err := d.ReplaceSessionUsageEvents("hermes:event", nil); err != nil {
+		t.Fatalf("ReplaceSessionUsageEvents clear: %v", err)
+	}
+	got, err = d.GetUsageEvents(ctx, "hermes:event")
+	if err != nil {
+		t.Fatalf("GetUsageEvents after clear: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("usage events after clear = %d, want 0", len(got))
+	}
+}
+
 func TestGetDailyUsageWithData(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -125,6 +203,107 @@ func TestGetDailyUsageWithData(t *testing.T) {
 	if math.Abs(result.Totals.TotalCost-wantCost) > 1e-9 {
 		t.Errorf("Totals.TotalCost = %v, want %v",
 			result.Totals.TotalCost, wantCost)
+	}
+}
+
+func TestUsageQueriesUnionMessageAndUsageEvents(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "claude:msg", "proj-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-05-14T09:00:00Z")
+		s.UserMessageCount = 2
+	})
+	insertMessages(t, d, Message{
+		SessionID: "claude:msg",
+		Ordinal:   0,
+		Role:      "assistant",
+		Timestamp: "2026-05-14T09:05:00Z",
+		Model:     "claude-sonnet-4-20250514",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":100,"output_tokens":40}`,
+		),
+	})
+
+	insertSession(t, d, "hermes:event", "proj-b", func(s *Session) {
+		s.Agent = "hermes"
+		s.StartedAt = new("2026-05-14T10:00:00Z")
+		s.UserMessageCount = 2
+	})
+	requireNoError(t, d.ReplaceSessionUsageEvents(
+		"hermes:event",
+		[]UsageEvent{{
+			SessionID:            "hermes:event",
+			Source:               "session",
+			Model:                "gpt-5.4",
+			InputTokens:          300,
+			OutputTokens:         70,
+			CacheReadInputTokens: 20,
+			DedupKey:             "shared-key",
+		}},
+	), "replace hermes usage event")
+	insertSession(t, d, "hermes:event-2", "proj-b", func(s *Session) {
+		s.Agent = "hermes"
+		s.StartedAt = new("2026-05-14T10:10:00Z")
+		s.UserMessageCount = 2
+	})
+	requireNoError(t, d.ReplaceSessionUsageEvents(
+		"hermes:event-2",
+		[]UsageEvent{{
+			SessionID:    "hermes:event-2",
+			Source:       "session",
+			Model:        "gpt-5.4",
+			InputTokens:  50,
+			OutputTokens: 5,
+			DedupKey:     "shared-key",
+		}},
+	), "replace second hermes usage event")
+
+	filter := UsageFilter{
+		From:       "2026-05-14",
+		To:         "2026-05-14",
+		Breakdowns: true,
+	}
+	daily, err := d.GetDailyUsage(ctx, filter)
+	requireNoError(t, err, "GetDailyUsage")
+	if daily.Totals.InputTokens != 450 ||
+		daily.Totals.OutputTokens != 115 ||
+		daily.Totals.CacheReadTokens != 20 {
+		t.Fatalf("daily totals = %#v", daily.Totals)
+	}
+	if len(daily.Daily) != 1 {
+		t.Fatalf("daily entries = %d, want 1", len(daily.Daily))
+	}
+	if len(daily.Daily[0].AgentBreakdowns) != 2 {
+		t.Fatalf("agent breakdowns = %#v",
+			daily.Daily[0].AgentBreakdowns)
+	}
+
+	top, err := d.GetTopSessionsByCost(ctx, filter, 10)
+	requireNoError(t, err, "GetTopSessionsByCost")
+	topByID := make(map[string]TopSessionEntry, len(top))
+	for _, entry := range top {
+		topByID[entry.SessionID] = entry
+	}
+	if topByID["claude:msg"].TotalTokens != 140 {
+		t.Fatalf("claude top tokens = %#v", topByID["claude:msg"])
+	}
+	if topByID["hermes:event"].TotalTokens != 390 {
+		t.Fatalf("hermes top tokens = %#v", topByID["hermes:event"])
+	}
+	if topByID["hermes:event-2"].TotalTokens != 55 {
+		t.Fatalf("second hermes top tokens = %#v", topByID["hermes:event-2"])
+	}
+
+	counts, err := d.GetUsageSessionCounts(ctx, filter)
+	requireNoError(t, err, "GetUsageSessionCounts")
+	if counts.Total != 3 ||
+		counts.ByAgent["claude"] != 1 ||
+		counts.ByAgent["hermes"] != 2 ||
+		counts.ByProject["proj-a"] != 1 ||
+		counts.ByProject["proj-b"] != 2 {
+		t.Fatalf("counts = %#v", counts)
 	}
 }
 
