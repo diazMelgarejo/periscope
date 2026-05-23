@@ -22,10 +22,20 @@
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
+  import {
+    getAlignedOffsetScrollAlign,
+    getLatestDisplayIndex,
+    type ScrollAlign,
+  } from "./message-scroll.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
-  let scrollRaf: number | null = $state(null);
+  let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
+  let activeFollowScrollRequest: number | null = null;
+  let followingScrollRaf: number | null = null;
+  let followSettleTimer:
+    | ReturnType<typeof setTimeout>
+    | null = null;
 
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
@@ -194,7 +204,58 @@
       if (ui.vitalsOpen) {
         publishVisibleTimestamp();
       }
+
     });
+  }
+
+  function handleManualScrollIntent() {
+    if (ui.followLatest) {
+      cancelFollowLatestWork();
+      ui.setFollowLatest(false);
+    }
+  }
+
+  function manualScrollIntent(node: HTMLElement) {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (
+        [
+          "ArrowDown",
+          "ArrowUp",
+          "End",
+          "Home",
+          "PageDown",
+          "PageUp",
+          " ",
+        ].includes(event.key)
+      ) {
+        handleManualScrollIntent();
+      }
+    };
+    node.addEventListener("wheel", handleManualScrollIntent, {
+      passive: true,
+    });
+    node.addEventListener("pointerdown", handleManualScrollIntent);
+    node.addEventListener("touchmove", handleManualScrollIntent, {
+      passive: true,
+    });
+    node.addEventListener("keydown", handleKeydown);
+    return {
+      destroy() {
+        node.removeEventListener(
+          "wheel",
+          handleManualScrollIntent,
+        );
+        node.removeEventListener(
+          "pointerdown",
+          handleManualScrollIntent,
+        );
+        node.removeEventListener(
+          "touchmove",
+          handleManualScrollIntent,
+        );
+        node.removeEventListener("keydown", handleKeydown);
+      },
+    };
   }
 
   onDestroy(() => {
@@ -202,13 +263,40 @@
       cancelAnimationFrame(scrollRaf);
       scrollRaf = null;
     }
+    if (followingScrollRaf !== null) {
+      cancelAnimationFrame(followingScrollRaf);
+      followingScrollRaf = null;
+    }
+    if (followSettleTimer !== null) {
+      clearTimeout(followSettleTimer);
+      followSettleTimer = null;
+    }
   });
+
+  function cancelFollowLatestWork() {
+    if (
+      activeFollowScrollRequest !== null &&
+      activeFollowScrollRequest === lastScrollRequest
+    ) {
+      lastScrollRequest += 1;
+    }
+    activeFollowScrollRequest = null;
+    if (followingScrollRaf !== null) {
+      cancelAnimationFrame(followingScrollRaf);
+      followingScrollRaf = null;
+    }
+    if (followSettleTimer !== null) {
+      clearTimeout(followSettleTimer);
+      followSettleTimer = null;
+    }
+  }
 
   function scrollToDisplayIndex(
     index: number,
     waitFrames: number = 0,
     scrollRetries: number = 0,
     reqId: number = lastScrollRequest,
+    align: ScrollAlign = "start",
   ) {
     if (reqId !== lastScrollRequest) return;
 
@@ -225,6 +313,7 @@
       requestAnimationFrame(() => {
         scrollToDisplayIndex(
           index, waitFrames + 1, 0, reqId,
+          align,
         );
       });
       return;
@@ -237,12 +326,12 @@
     );
     if (isRendered) {
       const offsetAndAlign =
-        v.getOffsetForIndex(index, "start");
+        v.getOffsetForIndex(index, align);
       if (offsetAndAlign) {
         const [offset] = offsetAndAlign;
         v.scrollToOffset(
           Math.round(offset),
-          { align: "start" },
+          { align: getAlignedOffsetScrollAlign(align) },
         );
       }
       return;
@@ -259,12 +348,16 @@
     // finds the item rendered (for an exact offset scroll) or
     // repeats with a more accurate estimate. Limit to 15 scroll
     // retries (~480 ms) to avoid looping forever.
-    v.scrollToIndex(index, { align: "start" });
+    v.scrollToIndex(index, { align });
     if (scrollRetries < 15) {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           scrollToDisplayIndex(
-            index, waitFrames, scrollRetries + 1, reqId,
+            index,
+            waitFrames,
+            scrollRetries + 1,
+            reqId,
+            align,
           );
         });
       });
@@ -277,6 +370,7 @@
 
   async function scrollToOrdinalInternal(ordinal: number) {
     const reqId = ++lastScrollRequest;
+    activeFollowScrollRequest = null;
 
     const idxAsc = displayItemsAsc.findIndex((item) =>
       item.ordinals.includes(ordinal),
@@ -312,6 +406,103 @@
 
   export function scrollToOrdinal(ordinal: number) {
     void scrollToOrdinalInternal(ordinal);
+  }
+
+  function scrollToLatestInternal() {
+    const reqId = ++lastScrollRequest;
+    activeFollowScrollRequest = reqId;
+    const idx = getLatestDisplayIndex(
+      displayItemsAsc.length,
+      ui.sortNewestFirst,
+    );
+    if (idx < 0) return;
+    scrollToDisplayIndex(
+      idx,
+      0,
+      0,
+      reqId,
+      ui.sortNewestFirst ? "start" : "end",
+    );
+    startFollowLatestSettle(reqId);
+  }
+
+  function forceLatestEdge() {
+    if (!containerRef) return;
+    containerRef.scrollTop = ui.sortNewestFirst
+      ? 0
+      : containerRef.scrollHeight;
+  }
+
+  function startFollowLatestSettle(reqId: number) {
+    if (followSettleTimer !== null) {
+      clearTimeout(followSettleTimer);
+      followSettleTimer = null;
+    }
+
+    const tick = () => {
+      followSettleTimer = null;
+      if (
+        reqId !== lastScrollRequest ||
+        !ui.followLatest ||
+        !containerRef
+      ) {
+        return;
+      }
+
+      forceLatestEdge();
+      followSettleTimer = setTimeout(tick, 100);
+    };
+
+    tick();
+  }
+
+  function queueFollowLatestScroll() {
+    if (!ui.followLatest) return;
+    if (followingScrollRaf !== null) {
+      cancelAnimationFrame(followingScrollRaf);
+    }
+    followingScrollRaf = requestAnimationFrame(() => {
+      followingScrollRaf = null;
+      if (!ui.followLatest) return;
+      scrollToLatestInternal();
+    });
+  }
+
+  function latestDisplaySignature(): string {
+    const item = displayItemsAsc[displayItemsAsc.length - 1];
+    if (!item) return "";
+    if (item.kind === "tool-group") {
+      return item.messages
+        .map((m) => `${m.ordinal}:${m.content_length}:${m.timestamp}`)
+        .join("|");
+    }
+    const m = item.message;
+    return `${m.ordinal}:${m.content_length}:${m.timestamp}`;
+  }
+
+  $effect(() => {
+    const follow = ui.followLatest;
+    if (!follow) {
+      cancelFollowLatestWork();
+    }
+  });
+
+  $effect(() => {
+    const follow = ui.followLatest;
+    const request = ui.followLatestRequest;
+    const count = displayItemsAsc.length;
+    const latest = latestDisplaySignature();
+    const newestFirst = ui.sortNewestFirst;
+    const sessionId = messages.sessionId;
+    if (!follow || count === 0 || !sessionId) return;
+    void request;
+    void latest;
+    void newestFirst;
+    queueFollowLatestScroll();
+  });
+
+  export function scrollToLatest() {
+    scrollToLatestInternal();
   }
 
   export function getDisplayItems(): DisplayItem[] {
@@ -351,6 +542,7 @@
     data-messages-session-id={messages.sessionId}
     data-loaded={!messages.loading}
     onscroll={handleScroll}
+    use:manualScrollIntent
   >
     <div
       style="height: {virtualizer.instance?.getTotalSize() ?? 0}px; width: 100%; position: relative;"
