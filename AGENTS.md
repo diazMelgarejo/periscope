@@ -190,3 +190,23 @@ handle data version changes. Schema changes use ALTER TABLE; parser changes
 trigger a full resync (build fresh DB, sync files, copy orphaned sessions from
 old DB, atomic swap). Existing session data must be preserved even when source
 files no longer exist on disk.
+
+## Cursor Cloud specific instructions
+
+- **Go version:** Requires Go 1.25+. The default VM Go (1.22) is too old; the
+  update script installs Go 1.25 to `/usr/local/go`. Ensure
+  `PATH=/usr/local/go/bin:$HOME/go/bin:$PATH` when running Go commands.
+- **CGO is mandatory:** All Go build/test commands need `CGO_ENABLED=1` (the
+  default on Linux with gcc installed).
+- **Frontend must be built before Go tests:** Two server tests
+  (`TestBasePath_InjectsBaseHrefIntoHTML`, `TestBasePath_SPAFallbackServesIndex`)
+  fail if `internal/web/dist/` contains only the stub. Run `make frontend` or
+  `cd frontend && npm run build` then copy dist to `internal/web/dist/` first.
+- **golangci-lint:** Installed to `$HOME/go/bin`. Lint issues on `main` are
+  pre-existing (modernize + staticcheck suggestions); they do not block tests.
+- **One pre-existing sync test failure:** `TestSyncEngineHashSkip` may fail on
+  `main` due to a hash-skip logic issue; this is not environment-related.
+- **Standard commands:** `make test`, `make lint`, `make build`, `make dev` per
+  the Development section above. `make dev` requires `air` (`make air-install`).
+- **Demo data:** `go run -tags fts5 ./cmd/testfixture --out /path/to/sessions.db`
+  generates fixture sessions for local testing without real agent data.
