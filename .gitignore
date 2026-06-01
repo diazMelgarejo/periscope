@@ -5,6 +5,9 @@
 /testfixture
 *.test.exe
 
+# Cursor private attribution (never commit)
+.cursor/private/
+
 # Frontend
 node_modules/
 frontend/dist/
