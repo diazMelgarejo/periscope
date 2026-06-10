@@ -5,6 +5,7 @@ import {
   type SyncHandle,
 } from "../api/client.js";
 import {
+  ApiError as GeneratedApiError,
   MetadataService,
   SyncService,
 } from "../api/generated/index";
@@ -55,6 +56,11 @@ class SyncStore {
   // reach (network error, CSP block, or the server being down).
   // Surfaced in the status bar so the failure is not silent.
   remoteUnreachable: boolean = $state(false);
+  // True when the backend process answers but one of its dependencies
+  // is not ready yet, such as a PostgreSQL-backed server before PG
+  // becomes reachable.
+  backendDegraded: boolean = $state(false);
+  backendDegradedMessage: string | null = $state(null);
   updateAvailable: boolean = $state(false);
   latestVersion: string | null = $state(null);
   readonly buildCommit: string =
@@ -86,15 +92,42 @@ class SyncStore {
     }
   }
 
-  /** Record whether the backend responded. Only flags a failure
-   * when a remote server is configured — local failures are handled
-   * by the visibility health check, which reloads the page. */
+  /** Record whether the backend process responded. Only flags a
+   * failure when a remote server is configured — local failures are
+   * handled by the visibility health check, which reloads the page.
+   * A successful liveness-style response does not prove PG-backed
+   * reads are healthy, so it must not clear backendDegraded. */
   private markRemoteReachable(reachable: boolean) {
     if (reachable) {
       this.remoteUnreachable = false;
-    } else if (isRemoteConnection()) {
+      return;
+    }
+    this.clearBackendDegraded();
+    if (isRemoteConnection()) {
       this.remoteUnreachable = true;
     }
+  }
+
+  markBackendDegraded(message = "sync not ready") {
+    this.remoteUnreachable = false;
+    this.backendDegraded = true;
+    this.backendDegradedMessage = message;
+  }
+
+  clearBackendDegraded() {
+    this.backendDegraded = false;
+    this.backendDegradedMessage = null;
+  }
+
+  private markBackendFailure(error: unknown) {
+    if (
+      error instanceof GeneratedApiError &&
+      error.status >= 500
+    ) {
+      this.markBackendDegraded();
+      return;
+    }
+    this.markRemoteReachable(false);
   }
 
   async loadStatus() {
@@ -109,16 +142,19 @@ class SyncStore {
         newLastSync !== null && newLastSync !== this.lastSync;
       this.lastSync = newLastSync;
       this.lastSyncStats = status.stats as unknown as SyncStats | null;
+      const shouldRetryStats = this.backendDegraded;
       // Suppress notifications on initial hydration and
       // when a local sync just completed (pendingHydration).
       if (this.pendingHydration) {
         this.pendingHydration = false;
       } else if (changed && !isInitial) {
-        this.loadStats();
+        await this.loadStats();
         this.notifySyncComplete();
+      } else if (shouldRetryStats) {
+        await this.loadStats();
       }
     } catch (error) {
-      this.markRemoteReachable(false);
+      this.markBackendFailure(error);
       this.pendingHydration = false;
       console.warn("Failed to load sync status:", error);
     }
@@ -156,9 +192,13 @@ class SyncStore {
       ) as unknown as Stats;
       if (this.statsVersion === version) {
         this.stats = result;
+        this.clearBackendDegraded();
       }
     } catch (error) {
-      console.warn("Failed to load sync stats:", error);
+      if (this.statsVersion === version) {
+        this.markBackendFailure(error);
+        console.warn("Failed to load sync stats:", error);
+      }
     }
   }
 
@@ -173,7 +213,7 @@ class SyncStore {
         this.serverVersion.commit,
       );
     } catch (error) {
-      this.markRemoteReachable(false);
+      this.markBackendFailure(error);
       console.warn("Failed to load version info:", error);
     }
   }
