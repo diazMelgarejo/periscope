@@ -250,7 +250,8 @@
     if (!session) return;
     renameValue =
       session.display_name
-      ?? normalizeMessagePreview(session.first_message);
+      ?? normalizeMessagePreview(session.first_message)
+      ?? "";
     renaming = true;
     closeMenu();
     requestAnimationFrame(() => renameInput?.select());
@@ -519,7 +520,7 @@
     />
   {:else}
     <span class="breadcrumb-current">
-      {session?.display_name || session?.project || ""}
+      {session?.display_name ?? session?.project ?? ""}
     </span>
   {/if}
   {#if session}

@@ -61,7 +61,7 @@ func (s *Store) SetCursorSecret(secret []byte) {
 func (s *Store) ReadOnly() bool { return true }
 
 const duckSessionCols = `id, project, machine, agent,
-	first_message, display_name, created_at, started_at,
+	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -284,7 +284,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			project,
 			machine,
 			agent,
-			display_name,
+			COALESCE(display_name, session_name) AS display_name,
 			started_at,
 			ended_at,
 			created_at,
@@ -554,7 +554,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	rows, err := s.duck.QueryContext(ctx, `
 		WITH msg_ranked AS (
 			SELECT m.session_id, s.project, s.agent,
-				COALESCE(s.display_name, s.first_message, '') AS name,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				m.ordinal, SUBSTRING(m.content, 1, 200) AS snippet,
 				1.0 AS rank, 1 AS match_priority,
@@ -580,19 +580,19 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		),
 		name_matches AS (
 			SELECT s.id AS session_id, s.project, s.agent,
-				COALESCE(s.display_name, s.first_message, '') AS name,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				-1 AS ordinal,
 				CASE
-					WHEN s.display_name ILIKE ? ESCAPE '\'
-						THEN COALESCE(s.display_name, '')
+					WHEN COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
+						THEN COALESCE(s.display_name, s.session_name, '')
 					WHEN s.first_message ILIKE ? ESCAPE '\'
 						THEN COALESCE(s.first_message, '')
-					ELSE COALESCE(s.display_name, s.first_message, '')
+					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
 				1.0 AS rank, 2 AS match_priority, 0 AS match_pos
 			FROM sessions s
-			WHERE (s.display_name ILIKE ? ESCAPE '\'
+			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
 				OR s.first_message ILIKE ? ESCAPE '\')
 				AND s.deleted_at IS NULL
 				AND EXISTS (

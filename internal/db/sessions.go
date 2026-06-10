@@ -29,7 +29,7 @@ var ErrSessionTrashed = errors.New("session trashed")
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
-	first_message, display_name, started_at, ended_at,
+	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -53,7 +53,7 @@ const sessionBaseCols = `id, project, machine, agent,
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
 const sessionPruneCols = `id, project, machine, agent,
-	first_message, display_name, started_at, ended_at,
+	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -76,7 +76,7 @@ const sessionPruneCols = `id, project, machine, agent,
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
-	first_message, display_name, started_at, ended_at,
+	first_message, display_name, session_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -150,6 +150,7 @@ type Session struct {
 	Agent                string  `json:"agent"`
 	FirstMessage         *string `json:"first_message"`
 	DisplayName          *string `json:"display_name,omitempty"`
+	SessionName          *string `json:"-"`
 	StartedAt            *string `json:"started_at"`
 	EndedAt              *string `json:"ended_at"`
 	MessageCount         int     `json:"message_count"`
@@ -480,7 +481,7 @@ func (db *DB) GetSidebarSessionIndex(
 			project,
 			machine,
 			agent,
-			display_name,
+			COALESCE(display_name, session_name) AS display_name,
 			started_at,
 			ended_at,
 			created_at,
@@ -574,7 +575,7 @@ func (db *DB) GetSessionFull(
 	var s Session
 	err := row.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
+		&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
@@ -603,6 +604,14 @@ func (db *DB) GetSessionFull(
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting session full %s: %w", id, err)
+	}
+	// Expose the visible name (user rename, else agent session name)
+	// like the PG and DuckDB GetSessionFull and the sqlite base reads.
+	// The coalesce happens post-scan because sessionFullCols is shared
+	// with ListSessionsModifiedBetween, whose push consumers must see
+	// display_name and session_name unmerged.
+	if s.DisplayName == nil {
+		s.DisplayName = s.SessionName
 	}
 	return &s, nil
 }
@@ -672,7 +681,7 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 
 const upsertSessionSQL = `
 		INSERT INTO sessions (
-			id, project, machine, agent, first_message, display_name,
+			id, project, machine, agent, first_message, session_name,
 			started_at, ended_at, message_count,
 			user_message_count, parent_session_id,
 			relationship_type,
@@ -691,6 +700,9 @@ const upsertSessionSQL = `
 			machine = excluded.machine,
 			agent = excluded.agent,
 			first_message = excluded.first_message,
+			-- session_name is always overwritten by re-parse; display_name
+			-- is the user override and is only touched by RenameSession.
+			session_name = excluded.session_name,
 			started_at = excluded.started_at,
 			ended_at = excluded.ended_at,
 			message_count = excluded.message_count,
@@ -724,7 +736,7 @@ func sessionIsAutomated(s Session) bool {
 
 func upsertSessionArgs(s Session) []any {
 	return []any{
-		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.DisplayName,
+		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
 		s.StartedAt, s.EndedAt, s.MessageCount,
 		s.UserMessageCount, s.ParentSessionID,
 		s.RelationshipType,
@@ -858,6 +870,37 @@ func (db *DB) GetSessionFilePath(id string) string {
 		return ""
 	}
 	return fp.String
+}
+
+// BumpLocalModifiedAt stamps the current time as local_modified_at so
+// incremental PG push picks up metadata changes (e.g. session_name updates
+// on the importer skip path) that don't go through the file-based sync path.
+func (db *DB) BumpLocalModifiedAt(id string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`UPDATE sessions SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ? AND deleted_at IS NULL`,
+		id,
+	)
+	return err
+}
+
+// RefreshSessionName updates only session_name and bumps local_modified_at
+// in a single targeted UPDATE. Use this on re-import skip paths where the
+// full UpsertSession is unsafe because the caller does not have a complete
+// row to avoid overwriting existing fields with zero values.
+func (db *DB) RefreshSessionName(id string, sessionName *string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`UPDATE sessions
+		 SET session_name = ?,
+		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ? AND deleted_at IS NULL`,
+		sessionName, id,
+	)
+	return err
 }
 
 // FindSessionIDsByPartial returns up to limit session IDs that
@@ -1591,7 +1634,7 @@ func (db *DB) RestoreSession(id string) (int64, error) {
 }
 
 // RenameSession sets or clears the display_name for a session.
-// Pass nil to clear a custom name (reverts to first_message).
+// Pass nil to clear a custom name (reverts to session_name or first_message).
 func (db *DB) RenameSession(id string, displayName *string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1804,7 +1847,7 @@ func (db *DB) ListSessionsModifiedBetween(
 		var s Session
 		err := rows.Scan(
 			&s.ID, &s.Project, &s.Machine, &s.Agent,
-			&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
+			&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,

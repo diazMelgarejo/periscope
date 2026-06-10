@@ -367,7 +367,7 @@ func seedBenchmarkFixture(b *testing.B, store *db.DB, fixture benchmarkFixture) 
 			project,
 			benchmarkQuery,
 		)
-		displayName := fmt.Sprintf("Benchmark %03d", i)
+		sessionName := fmt.Sprintf("Benchmark %03d", i)
 		healthScore := 65 + i%35
 		healthGrade := "B"
 		if healthScore >= 90 {
@@ -387,7 +387,7 @@ func seedBenchmarkFixture(b *testing.B, store *db.DB, fixture benchmarkFixture) 
 			Machine:                benchmarkMachine,
 			Agent:                  agent,
 			FirstMessage:           &firstMessage,
-			DisplayName:            &displayName,
+			SessionName:            &sessionName,
 			StartedAt:              strPtr(startedAt.Format(time.RFC3339)),
 			EndedAt:                strPtr(endedAt.Format(time.RFC3339)),
 			MessageCount:           fixture.messagesPerSession,

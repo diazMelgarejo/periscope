@@ -51,7 +51,8 @@ func (s *Store) analyticsSessions(
 	where, args := duckBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	rows, err := s.duck.QueryContext(ctx, `
-		SELECT id, project, machine, agent, first_message, display_name,
+		SELECT id, project, machine, agent, first_message,
+			COALESCE(display_name, session_name) AS display_name,
 			started_at, ended_at, created_at, message_count,
 			user_message_count, total_output_tokens,
 			has_total_output_tokens, is_automated,
@@ -1879,7 +1880,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			0 AS cache_create, 0 AS cache_read, NULL AS cost_usd,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM messages m
@@ -1900,7 +1901,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			ue.cost_usd AS cost_usd,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM usage_events ue

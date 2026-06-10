@@ -235,7 +235,7 @@ func upsertSession(
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, project, machine, agent,
-			first_message, display_name, started_at, ended_at,
+			first_message, display_name, session_name, started_at, ended_at,
 			message_count, user_message_count,
 			file_path, file_size, file_mtime, file_inode, file_device,
 			file_hash, local_modified_at, parent_session_id,
@@ -253,7 +253,7 @@ func upsertSession(
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
@@ -261,6 +261,7 @@ func upsertSession(
 			agent = excluded.agent,
 			first_message = excluded.first_message,
 			display_name = excluded.display_name,
+			session_name = excluded.session_name,
 			started_at = excluded.started_at,
 			ended_at = excluded.ended_at,
 			message_count = excluded.message_count,
@@ -309,6 +310,7 @@ func upsertSession(
 			secrets_rules_version = excluded.secrets_rules_version`,
 		sess.ID, sess.Project, machine, sess.Agent,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),
+		nilString(sess.SessionName),
 		nilTime(sess.StartedAt), nilTime(sess.EndedAt),
 		sess.MessageCount, sess.UserMessageCount,
 		nilString(sess.FilePath), sess.FileSize, sess.FileMtime,

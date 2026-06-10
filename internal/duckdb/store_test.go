@@ -241,8 +241,8 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 	local := newLocalDB(t)
 
 	nameSession := syncSession("duck-search-name", "alpha", "plain first", "2026-01-15T00:00:00.000Z", 1)
-	displayName := "needle display name"
-	nameSession.DisplayName = &displayName
+	sessionName := "needle session name"
+	nameSession.SessionName = &sessionName
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
 		{
 			Session: syncSession("duck-search-content", "alpha", "content first", "2026-01-14T00:00:00.000Z", 2),
@@ -274,7 +274,7 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 	assert.Equal(t, 1, got.Results[0].Ordinal)
 	assert.Equal(t, "duck-search-name", got.Results[1].SessionID)
 	assert.Equal(t, -1, got.Results[1].Ordinal)
-	assert.Equal(t, "needle display name", got.Results[1].Snippet)
+	assert.Equal(t, "needle session name", got.Results[1].Snippet)
 
 	quotedContent, err := store.Search(ctx, db.SearchFilter{Query: `"needle second"`, Limit: 10})
 	require.NoError(t, err)
@@ -282,11 +282,22 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 	assert.Equal(t, "duck-search-content", quotedContent.Results[0].SessionID)
 	assert.Equal(t, 1, quotedContent.Results[0].Ordinal)
 
-	quotedName, err := store.Search(ctx, db.SearchFilter{Query: `"needle display"`, Limit: 10})
+	quotedName, err := store.Search(ctx, db.SearchFilter{Query: `"needle session"`, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, quotedName.Results, 1)
 	assert.Equal(t, "duck-search-name", quotedName.Results[0].SessionID)
 	assert.Equal(t, -1, quotedName.Results[0].Ordinal)
+
+	renamed := "needle override rename"
+	require.NoError(t, local.RenameSession("duck-search-name", &renamed))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	overridden, err := store.Search(ctx, db.SearchFilter{Query: "override", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, overridden.Results, 1)
+	assert.Equal(t, "duck-search-name", overridden.Results[0].SessionID)
+	assert.Equal(t, -1, overridden.Results[0].Ordinal)
+	assert.Equal(t, "needle override rename", overridden.Results[0].Snippet)
 }
 
 func TestStoreCurationMethods(t *testing.T) {

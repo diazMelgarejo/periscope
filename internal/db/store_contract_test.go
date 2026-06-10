@@ -140,6 +140,14 @@ func contractSessionsCursorFiltersAndDates(
 	require.NotNil(t, full)
 	require.NotNil(t, full.DeletedAt)
 
+	// GetSessionFull returns the visible name on every backend:
+	// the user rename when set, else the agent-provided session name.
+	named, err := store.GetSessionFull(ctx, fixture.oldID)
+	require.NoError(t, err)
+	require.NotNil(t, named)
+	require.NotNil(t, named.DisplayName)
+	require.Equal(t, "Old Contract Name", *named.DisplayName)
+
 	index, err := store.GetSidebarSessionIndex(ctx, SessionFilter{
 		Project: "alpha",
 	})
@@ -569,7 +577,7 @@ func seedStoreContractSQLite(
 			machine:      "mac",
 			agent:        "claude",
 			firstMessage: "Alpha parity investigation starts with duckdb parity keyword.",
-			displayName:  "Alpha DuckDB parity",
+			sessionName:  "Alpha DuckDB parity",
 			startedAt:    "2026-01-10T12:00:00Z",
 			endedAt:      "2026-01-10T12:06:00Z",
 			userMessages: 3,
@@ -728,7 +736,7 @@ func seedStoreContractSQLite(
 			machine:      "linux",
 			agent:        "claude",
 			firstMessage: "Old contract first message.",
-			displayName:  "Old Contract Name",
+			sessionName:  "Old Contract Name",
 			startedAt:    "2026-01-09T08:00:00Z",
 			endedAt:      "2026-01-09T08:03:00Z",
 			userMessages: 1,
@@ -784,7 +792,7 @@ type contractSessionSeed struct {
 	machine      string
 	agent        string
 	firstMessage string
-	displayName  string
+	sessionName  string
 	startedAt    string
 	endedAt      string
 	userMessages int
@@ -819,8 +827,8 @@ func contractSessionWrite(seed contractSessionSeed) SessionBatchWrite {
 		HasTotalOutputTokens: seed.outputTokens > 0,
 		HasPeakContextTokens: seed.peakTokens > 0,
 	}
-	if seed.displayName != "" {
-		session.DisplayName = &seed.displayName
+	if seed.sessionName != "" {
+		session.SessionName = &seed.sessionName
 	}
 	if seed.parentID != "" {
 		session.ParentSessionID = &seed.parentID
