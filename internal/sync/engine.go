@@ -319,9 +319,18 @@ func (e *Engine) classifyPaths(
 	seen := make(map[string]struct{}, len(paths))
 	var files []parser.DiscoveredFile
 	for _, p := range paths {
-		if df, ok := e.classifyOnePath(
-			p, geminiProjectsByDir,
-		); ok {
+		// Antigravity sidecar events map to potentially several
+		// session sources and must classify even when the event
+		// path was deleted, so they bypass classifyOnePath.
+		dfs := e.classifyAntigravitySidecarPath(p)
+		if len(dfs) == 0 {
+			if df, ok := e.classifyOnePath(
+				p, geminiProjectsByDir,
+			); ok {
+				dfs = []parser.DiscoveredFile{df}
+			}
+		}
+		for _, df := range dfs {
 			key := string(df.Agent) + "\x00" + df.Path
 			if _, ok := seen[key]; ok {
 				continue
@@ -1038,33 +1047,35 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm)
+	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm).
+	// annotations/<uuid>.pbtxt and brain/<uuid>/* sidecar events are
+	// handled in classifyPaths via classifyAntigravitySidecarPath,
+	// which runs without the path-existence requirement above.
 	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
 		if agDir == "" {
 			continue
 		}
-		if rel, ok := isUnder(agDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 || parts[0] != "conversations" {
-				continue
-			}
-			name := parts[1]
-			name = strings.TrimSuffix(name, "-wal")
-			name = strings.TrimSuffix(name, "-shm")
-			if !strings.HasSuffix(name, ".db") {
-				continue
-			}
-			id := strings.TrimSuffix(name, ".db")
-			if !parser.IsValidSessionID(id) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path: filepath.Join(
-					agDir, "conversations", name,
-				),
-				Agent: parser.AgentAntigravity,
-			}, true
+		rel, ok := isUnder(agDir, path)
+		if !ok {
+			continue
 		}
+		parts := strings.Split(rel, sep)
+		if len(parts) != 2 || parts[0] != "conversations" {
+			continue
+		}
+		name := strings.TrimSuffix(parts[1], "-wal")
+		name = strings.TrimSuffix(name, "-shm")
+		if !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".db")
+		if !parser.IsValidSessionID(id) {
+			continue
+		}
+		return parser.DiscoveredFile{
+			Path:  filepath.Join(agDir, "conversations", id+".db"),
+			Agent: parser.AgentAntigravity,
+		}, true
 	}
 
 	// Antigravity CLI: <root>/conversations/<uuid>.db or
@@ -1120,6 +1131,111 @@ func (e *Engine) classifyOnePath(
 	}
 
 	return parser.DiscoveredFile{}, false
+}
+
+// classifyAntigravitySidecarPath maps Antigravity sidecar events --
+// IDE annotations/<id>.pbtxt plus IDE and CLI brain/<id>/* artifacts
+// -- to every session source file that renders them. A CLI storage
+// UUID can hold both a conversation and an implicit session, so one
+// brain event can affect two sources. The sidecar path itself may no
+// longer exist (deletes must reparse the session too), so only the
+// mapped source files are required to exist.
+func (e *Engine) classifyAntigravitySidecarPath(
+	path string,
+) []parser.DiscoveredFile {
+	if df, ok := e.classifyAntigravityIDESidecar(path); ok {
+		return []parser.DiscoveredFile{df}
+	}
+	return e.classifyAntigravityCLIBrainPath(path)
+}
+
+func (e *Engine) classifyAntigravityIDESidecar(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
+		if agDir == "" {
+			continue
+		}
+		rel, ok := isUnder(agDir, path)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rel, sep)
+		var id string
+		switch {
+		case len(parts) == 2 && parts[0] == "annotations" &&
+			strings.HasSuffix(parts[1], ".pbtxt"):
+			id = strings.TrimSuffix(parts[1], ".pbtxt")
+		case len(parts) == 3 && parts[0] == "brain":
+			id = parts[1]
+		default:
+			continue
+		}
+		if !parser.IsValidSessionID(id) {
+			continue
+		}
+		dbPath := filepath.Join(agDir, "conversations", id+".db")
+		if _, err := os.Stat(dbPath); err != nil {
+			continue
+		}
+		return parser.DiscoveredFile{
+			Path:  dbPath,
+			Agent: parser.AgentAntigravity,
+		}, true
+	}
+	return parser.DiscoveredFile{}, false
+}
+
+func (e *Engine) classifyAntigravityCLIBrainPath(
+	path string,
+) []parser.DiscoveredFile {
+	sep := string(filepath.Separator)
+	for _, agDir := range e.agentDirs[parser.AgentAntigravityCLI] {
+		if agDir == "" {
+			continue
+		}
+		rel, ok := isUnder(agDir, path)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rel, sep)
+		if len(parts) != 3 || parts[0] != "brain" {
+			continue
+		}
+		id := parts[1]
+		if !parser.IsValidSessionID(id) {
+			continue
+		}
+		var out []parser.DiscoveredFile
+		// Conversation session: prefer the SQLite source when both
+		// old and new files exist, matching discovery.
+		for _, src := range []string{
+			filepath.Join(agDir, "conversations", id+".db"),
+			filepath.Join(agDir, "conversations", id+".pb"),
+		} {
+			if _, err := os.Stat(src); err == nil {
+				out = append(out, parser.DiscoveredFile{
+					Path:  src,
+					Agent: parser.AgentAntigravityCLI,
+				})
+				break
+			}
+		}
+		// The implicit session is distinct from the conversation
+		// session and renders the same brain artifacts.
+		implicit := filepath.Join(agDir, "implicit", id+".pb")
+		if _, err := os.Stat(implicit); err == nil {
+			out = append(out, parser.DiscoveredFile{
+				Path:  implicit,
+				Agent: parser.AgentAntigravityCLI,
+			})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
 }
 
 func (e *Engine) classifyOpenCodePath(
@@ -2323,6 +2439,13 @@ func discoveredFileMtime(
 		}
 		return info.ModTime().UnixNano(), nil
 	}
+	if file.Agent == parser.AgentAntigravity {
+		info, err := parser.AntigravityFileInfo(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return info.ModTime().UnixNano(), nil
+	}
 	if file.Agent == parser.AgentCommandCode {
 		info, err := os.Stat(file.Path)
 		if err != nil {
@@ -2931,9 +3054,14 @@ func (e *Engine) processFile(
 
 	var info os.FileInfo
 	var err error
-	if file.Agent == parser.AgentAntigravityCLI {
+	switch file.Agent {
+	case parser.AgentAntigravityCLI:
 		info, err = parser.AntigravityCLIFileInfo(file.Path)
-	} else {
+	case parser.AgentAntigravity:
+		// WAL-only commits and annotation updates do not touch
+		// the main .db, so skip checks need the composite stat.
+		info, err = parser.AntigravityFileInfo(file.Path)
+	default:
 		statPath := file.Path
 		if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
@@ -4253,7 +4381,7 @@ func (e *Engine) processAntigravity(
 		return processResult{skip: true}
 	}
 
-	sess, msgs, err := parser.ParseAntigravitySession(
+	sess, msgs, usageEvents, err := parser.ParseAntigravitySession(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {
@@ -4270,7 +4398,7 @@ func (e *Engine) processAntigravity(
 
 	return processResult{
 		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
+			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
 		},
 	}
 }
@@ -4284,7 +4412,7 @@ func (e *Engine) processAntigravityCLI(
 		return processResult{skip: true}
 	}
 
-	sess, msgs, parseStatus, err := parser.ParseAntigravityCLISessionWithStatus(
+	sess, msgs, usageEvents, parseStatus, err := parser.ParseAntigravityCLISessionWithStatus(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {
@@ -4303,8 +4431,9 @@ func (e *Engine) processAntigravityCLI(
 		needsRetry: parseStatus.NeedsRetry,
 		results: []parser.ParseResult{
 			{
-				Session:  *sess,
-				Messages: msgs,
+				Session:     *sess,
+				Messages:    msgs,
+				UsageEvents: usageEvents,
 			},
 		},
 	}
@@ -4778,6 +4907,7 @@ func (e *Engine) writeBatch(
 
 		replaceMessages := forceReplace || pw.forceReplace || pw.needsRetry ||
 			stale || pw.sess.Agent == parser.AgentOpenCode ||
+			pw.sess.Agent == parser.AgentAntigravity ||
 			pw.sess.Agent == parser.AgentAntigravityCLI
 
 		update, findings := computeSignalsAndSecrets(s, msgs)
@@ -4886,6 +5016,7 @@ func (e *Engine) writeBatchBulk(
 		}
 		replaceMessages := forceReplace || pw.forceReplace || pw.needsRetry ||
 			pw.sess.Agent == parser.AgentOpenCode ||
+			pw.sess.Agent == parser.AgentAntigravity ||
 			pw.sess.Agent == parser.AgentAntigravityCLI
 		tScan := time.Now()
 		update, findings := computeSignalsAndSecrets(s, msgs)
@@ -5406,17 +5537,16 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 	return pairAndFilter(msgs, blocked)
 }
 
+// toDBUsageEvents converts parser usage events for one session.
+// sessionID is the final ID after remote rewrites; parser-stamped
+// event session IDs predate the idPrefix and are ignored.
 func toDBUsageEvents(
 	sessionID string, events []parser.ParsedUsageEvent,
 ) []db.UsageEvent {
 	out := make([]db.UsageEvent, 0, len(events))
 	for _, ev := range events {
-		sid := ev.SessionID
-		if sid == "" {
-			sid = sessionID
-		}
 		out = append(out, db.UsageEvent{
-			SessionID:                sid,
+			SessionID:                sessionID,
 			MessageOrdinal:           ev.MessageOrdinal,
 			Source:                   ev.Source,
 			Model:                    ev.Model,
@@ -5665,6 +5795,13 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	if def.Type == parser.AgentAntigravityCLI {
 		info, err := parser.AntigravityCLIFileInfo(path)
+		if err != nil {
+			return 0
+		}
+		return info.ModTime().UnixNano()
+	}
+	if def.Type == parser.AgentAntigravity {
+		info, err := parser.AntigravityFileInfo(path)
 		if err != nil {
 			return 0
 		}

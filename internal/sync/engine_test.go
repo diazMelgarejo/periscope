@@ -4,9 +4,11 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	gosync "sync"
 	"sync/atomic"
 	"testing"
@@ -797,6 +799,300 @@ func TestApplyRemoteRewrites(t *testing.T) {
 			assert.Empty(t, diff, "ResultEvent SubagentSessionIDs %s", diff)
 		})
 	}
+}
+
+func TestToDBUsageEventsStampsFinalSessionID(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		events    []parser.ParsedUsageEvent
+		wantIDs   []string
+	}{
+		{
+			name:      "empty event session id gets final id",
+			sessionID: "antigravity:abc",
+			events: []parser.ParsedUsageEvent{
+				{Source: "generation", Model: "gemini"},
+			},
+			wantIDs: []string{"antigravity:abc"},
+		},
+		{
+			name:      "parser-stamped id matching final id is kept",
+			sessionID: "antigravity:abc",
+			events: []parser.ParsedUsageEvent{
+				{
+					SessionID: "antigravity:abc",
+					Source:    "generation",
+					Model:     "gemini",
+				},
+			},
+			wantIDs: []string{"antigravity:abc"},
+		},
+		{
+			name:      "remote prefix overrides parser-stamped id",
+			sessionID: "host~antigravity:abc",
+			events: []parser.ParsedUsageEvent{
+				{
+					SessionID: "antigravity:abc",
+					Source:    "generation",
+					Model:     "gemini",
+				},
+				{
+					SessionID: "antigravity:abc",
+					Source:    "generation",
+					Model:     "claude",
+				},
+			},
+			wantIDs: []string{
+				"host~antigravity:abc",
+				"host~antigravity:abc",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toDBUsageEvents(tt.sessionID, tt.events)
+			require.Len(t, got, len(tt.wantIDs))
+			for i, ev := range got {
+				assert.Equal(t, tt.wantIDs[i], ev.SessionID)
+			}
+		})
+	}
+}
+
+func TestWriteBatchRemoteIDPrefixUsageEvents(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database, idPrefix: "host~"}
+
+	ts := time.Unix(1700000000, 0).UTC()
+	pw := pendingWrite{
+		sess: parser.ParsedSession{
+			ID:           "antigravity:abc",
+			Project:      "proj",
+			Machine:      "host",
+			Agent:        parser.AgentAntigravity,
+			StartedAt:    ts,
+			EndedAt:      ts,
+			MessageCount: 1,
+		},
+		msgs: []parser.ParsedMessage{{
+			Role:      parser.RoleUser,
+			Content:   "hello",
+			Timestamp: ts,
+		}},
+		usageEvents: []parser.ParsedUsageEvent{{
+			// Parsers stamp the unprefixed session ID; the
+			// write path must replace it with the final
+			// remote-prefixed ID.
+			SessionID:    "antigravity:abc",
+			Source:       "generation",
+			Model:        "gemini",
+			InputTokens:  100,
+			OutputTokens: 50,
+			OccurredAt:   ts.Format(time.RFC3339Nano),
+		}},
+	}
+
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed, "no session writes may fail")
+	require.Equal(t, 1, written)
+
+	events, err := database.GetUsageEvents(
+		context.Background(), "host~antigravity:abc",
+	)
+	require.NoError(t, err, "GetUsageEvents")
+	require.Len(t, events, 1)
+	assert.Equal(t, "host~antigravity:abc", events[0].SessionID)
+	assert.Equal(t, "gemini", events[0].Model)
+	assert.Equal(t, 100, events[0].InputTokens)
+	assert.Equal(t, 50, events[0].OutputTokens)
+}
+
+// TestWriteBatchAntigravityReplacesMessages covers a live Antigravity
+// IDE session synced before its gen_metadata rows exist: the next sync
+// re-parses the same ordinals with model/token metadata attached, and
+// that enrichment must reach the stored message rows rather than being
+// dropped by the append-only write path.
+func TestWriteBatchAntigravityReplacesMessages(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+
+	ts := time.Unix(1700000000, 0).UTC()
+	mkWrite := func(withMeta bool) pendingWrite {
+		msg := parser.ParsedMessage{
+			Role:      parser.RoleAssistant,
+			Content:   "assistant reply",
+			Timestamp: ts,
+		}
+		if withMeta {
+			msg.Model = "Test Gemini 3.5"
+			msg.ContextTokens = 2400
+			msg.OutputTokens = 210
+			msg.HasContextTokens = true
+			msg.HasOutputTokens = true
+		}
+		return pendingWrite{
+			sess: parser.ParsedSession{
+				ID:           "antigravity:meta",
+				Project:      "proj",
+				Machine:      "m",
+				Agent:        parser.AgentAntigravity,
+				StartedAt:    ts,
+				EndedAt:      ts,
+				MessageCount: 1,
+			},
+			msgs: []parser.ParsedMessage{msg},
+		}
+	}
+
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{mkWrite(false)}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	written, _, failed = e.writeBatch(
+		[]pendingWrite{mkWrite(true)}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	msgs, err := database.GetMessages(
+		context.Background(), "antigravity:meta", 0, 10, true,
+	)
+	require.NoError(t, err, "GetMessages")
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "Test Gemini 3.5", msgs[0].Model,
+		"re-parsed model metadata must reach existing message rows")
+}
+
+// TestProcessAntigravityWALOnlyUpdateNotSkipped covers a live IDE
+// session whose gen_metadata commits land in the SQLite WAL: the main
+// .db file's size/mtime are unchanged, so the skip check must consult
+// the sidecar set or the session never reparses.
+func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+	ctx := context.Background()
+
+	root := t.TempDir()
+	convDir := filepath.Join(root, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	dbPath := filepath.Join(
+		convDir, "abcdabcd-1111-2222-3333-444455556666.db",
+	)
+	sqlDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(
+		`CREATE TABLE steps (idx integer, step_type integer, ` +
+			`step_payload blob, PRIMARY KEY (idx))`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	file := parser.DiscoveredFile{
+		Agent:   parser.AgentAntigravity,
+		Path:    dbPath,
+		Project: "proj",
+	}
+
+	res := e.processFile(ctx, file)
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.Len(t, res.results, 1)
+
+	pw := pendingWrite{
+		sess:        res.results[0].Session,
+		msgs:        res.results[0].Messages,
+		usageEvents: res.results[0].UsageEvents,
+	}
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	res = e.processFile(ctx, file)
+	require.True(t, res.skip, "unchanged session should skip")
+
+	// WAL-only update: the main .db is untouched.
+	walPath := dbPath + "-wal"
+	require.NoError(t, os.WriteFile(walPath, []byte("wal bytes"), 0o644))
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	walTime := info.ModTime().Add(5 * time.Second)
+	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
+
+	res = e.processFile(ctx, file)
+	assert.False(t, res.skip, "WAL-only update must trigger a reparse")
+}
+
+func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+	ctx := context.Background()
+
+	root := t.TempDir()
+	convDir := filepath.Join(root, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	id := "abcdabcd-1111-2222-3333-444455557777"
+	dbPath := filepath.Join(convDir, id+".db")
+	sqlDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(
+		`CREATE TABLE steps (idx integer, step_type integer, ` +
+			`step_payload blob, PRIMARY KEY (idx))`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	file := parser.DiscoveredFile{
+		Agent:   parser.AgentAntigravity,
+		Path:    dbPath,
+		Project: "proj",
+	}
+
+	res := e.processFile(ctx, file)
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.Len(t, res.results, 1)
+
+	pw := pendingWrite{
+		sess:        res.results[0].Session,
+		msgs:        res.results[0].Messages,
+		usageEvents: res.results[0].UsageEvents,
+	}
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	res = e.processFile(ctx, file)
+	require.True(t, res.skip, "unchanged session should skip")
+
+	// Brain-only update: the conversation DB files are untouched.
+	brainDir := filepath.Join(root, "brain", id)
+	require.NoError(t, os.MkdirAll(brainDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(brainDir, "task.md"),
+		[]byte("brain artifact body"), 0o644,
+	))
+
+	res = e.processFile(ctx, file)
+	require.False(t, res.skip,
+		"brain-only update must trigger a reparse")
+	require.Len(t, res.results, 1)
+	var found bool
+	for _, m := range res.results[0].Messages {
+		if strings.Contains(m.Content, "brain artifact body") {
+			found = true
+		}
+	}
+	assert.True(t, found,
+		"reparse must pick up the brain artifact message")
 }
 
 func TestShouldSkipFileWithIDPrefix(t *testing.T) {

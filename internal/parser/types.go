@@ -697,6 +697,45 @@ func accumulateMessageTokenUsage(
 	}
 }
 
+// applyUsageEventTokenTotals recomputes session token totals from the
+// usage-event set whenever events exist. Callers must only use it when
+// events are a superset of per-message token metadata — true for the
+// Antigravity gen_metadata parsers, where every token-bearing message
+// derives from a gen row that also emits an event and undecodable
+// steps emit events with no message. Deriving totals from events
+// therefore covers transcripts that dropped steps (sidecar wins,
+// undecodable rows) without double counting. Message-derived totals
+// are kept where the events are silent.
+func applyUsageEventTokenTotals(
+	sess *ParsedSession,
+	events []ParsedUsageEvent,
+) {
+	totalOutput := 0
+	peakContext := 0
+	hasOutput := false
+	hasContext := false
+	for _, ev := range events {
+		if ev.OutputTokens > 0 {
+			hasOutput = true
+			totalOutput += ev.OutputTokens
+		}
+		if ev.InputTokens > 0 {
+			hasContext = true
+			if ev.InputTokens > peakContext {
+				peakContext = ev.InputTokens
+			}
+		}
+	}
+	if hasOutput {
+		sess.HasTotalOutputTokens = true
+		sess.TotalOutputTokens = totalOutput
+	}
+	if hasContext {
+		sess.HasPeakContextTokens = true
+		sess.PeakContextTokens = peakContext
+	}
+}
+
 // InferTokenPresence determines whether context/output tokens were
 // present in a provider payload. It starts from explicit boolean
 // flags (and non-zero numeric values), then inspects tokenUsage JSON
