@@ -90,6 +90,38 @@ func TestAgProtoParseAndExtract(t *testing.T) {
 	assert.Equal(t, "Hi, what's up next?", strs[0])
 }
 
+// TestAgProtoTimestampNanosRange pins the nanos guard: the protobuf
+// Timestamp spec bounds nanos to [0, 1e9), and an out-of-range varint
+// cast to int32 could go negative and shift time.Unix results outside
+// the plausibility window callers check on seconds alone.
+func TestAgProtoTimestampNanosRange(t *testing.T) {
+	tests := []struct {
+		name   string
+		nanos  uint64
+		wantOK bool
+	}{
+		{"max valid nanos", 999_999_999, true},
+		{"one past the cap", 1_000_000_000, false},
+		{"int32-overflowing nanos", 4_000_000_000, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := encodePB([]pbField{
+				{num: 1, wire: pbWireVarint, varint: 1_779_326_586},
+				{num: 2, wire: pbWireVarint, varint: tt.nanos},
+			})
+			fields, err := agProtoParse(payload)
+			require.NoError(t, err, "parse")
+			sec, nanos, ok := agProtoTimestamp(fields)
+			assert.Equal(t, tt.wantOK, ok, "timestamp ok")
+			if tt.wantOK {
+				assert.Equal(t, int64(1_779_326_586), sec, "timestamp sec")
+				assert.Equal(t, int32(tt.nanos), nanos, "timestamp nanos")
+			}
+		})
+	}
+}
+
 // TestAgProtoLengthOverflow feeds a length-delimited field whose
 // declared length is near uint64-max. The pre-fix code computed
 // pos+ln in uint64 and wrapped, then sliced with int(ln) which
@@ -116,6 +148,42 @@ func TestAgProtoLengthOverflow(t *testing.T) {
 	}()
 	_, err := agProtoParse(payload)
 	require.Error(t, err, "expected error for oversized length")
+}
+
+// TestAgProtoFieldBudget verifies the total-fields cap: a flat run
+// of minimal two-byte varint fields amplifies into ~100-byte field
+// structs, so without the budget an unbounded blob could allocate
+// two orders of magnitude more memory than its size. Exhaustion
+// truncates instead of failing, so a payload past the budget keeps
+// its decoded prefix rather than losing all content.
+func TestAgProtoFieldBudget(t *testing.T) {
+	// One field per two bytes: tag 0x08 (field 1, varint), value 0.
+	dense := func(fields int) []byte {
+		return bytes.Repeat([]byte{0x08, 0x00}, fields)
+	}
+
+	within, err := agProtoParse(dense(1000))
+	require.NoError(t, err)
+	assert.Len(t, within, 1000)
+
+	truncated, err := agProtoParse(dense(agProtoMaxFields + 10))
+	require.NoError(t, err)
+	assert.Len(t, truncated, agProtoMaxFields,
+		"expected truncation at the field budget")
+
+	// Speculative nested re-parses consume the shared budget too: a
+	// small envelope around a dense payload must not bypass it. The
+	// exhausted child stays opaque (no Nested) and the field after
+	// it is truncated away, but the parse itself still succeeds.
+	fields, err := agProtoParse(encodePB([]pbField{
+		{num: 1, wire: pbWireBytes, bytes: dense(agProtoMaxFields)},
+		{num: 2, wire: pbWireVarint, varint: 1},
+	}))
+	require.NoError(t, err)
+	require.Len(t, fields, 1,
+		"expected the post-exhaustion field to be truncated")
+	assert.Nil(t, fields[0].Nested,
+		"expected the budget-exhausted child to stay opaque")
 }
 
 // TestAgProtoLooksLikePrefix exercises the prefix-tolerant
@@ -604,6 +672,25 @@ func TestDecodeAntigravityStepKeepsCleanAssistantText(t *testing.T) {
 	assert.NotContains(t, msg.Content, "mYseaoyPDcS6qtsP7c6Z6QE")
 	assert.NotContains(t, msg.Content, "toolAction")
 	assert.NotContains(t, msg.Content, "MODEL_PLACEHOLDER")
+}
+
+// TestDecodeAntigravityStepSanitizesNUL verifies that NUL bytes in
+// otherwise-valid content are replaced rather than the string (or
+// the whole message) being dropped: NUL-delimited tool output such
+// as `git ls-files -z` is realistic transcript content, while a NUL
+// that leaks into persisted text breaks `pg push` (SQLSTATE 22021).
+func TestDecodeAntigravityStepSanitizesNUL(t *testing.T) {
+	payload := encodePB([]pbField{
+		{
+			num: 17, wire: pbWireBytes,
+			bytes: []byte("file_a.go\x00file_b.go\x00file_c.go"),
+		},
+	})
+	msg, ok := decodeAntigravityStep(0, 2, payload)
+	require.True(t, ok, "NUL-bearing content must survive, not drop")
+	assert.NotContains(t, msg.Content, "\x00")
+	assert.Equal(t,
+		"file_a.go�file_b.go�file_c.go", msg.Content)
 }
 
 func TestMergeAntigravityDBHistoryMessagesAppendsMissingPrompts(t *testing.T) {
@@ -2317,6 +2404,18 @@ func TestExtractTokenUsageFalsePositiveGuards(t *testing.T) {
 				{num: 1, wire: pbWireVarint, varint: 1371},
 				{num: 2, wire: pbWireVarint, varint: 1234},
 				{num: 3, wire: pbWireBytes, bytes: []byte("not a varint")},
+				{num: 5, wire: pbWireVarint, varint: 2000},
+			},
+		},
+		{
+			// Output and reasoning are each within the cap, but the
+			// caller persists output+reasoning as billable output, so
+			// the sum must satisfy the cap too.
+			name: "decoy with folded output+reasoning above cap",
+			decoy: []pbField{
+				{num: 1, wire: pbWireVarint, varint: 1371},
+				{num: 2, wire: pbWireVarint, varint: 1_999_999},
+				{num: 3, wire: pbWireVarint, varint: 1_999_999},
 				{num: 5, wire: pbWireVarint, varint: 2000},
 			},
 		},
