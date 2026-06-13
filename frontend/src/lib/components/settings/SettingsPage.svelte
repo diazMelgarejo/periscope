@@ -31,7 +31,7 @@
     <h2 class="settings-title">Settings</h2>
   </div>
 
-  {#if settings.loading}
+  {#if settings.loading || !settings.loaded}
     <div class="settings-loading">Loading settings...</div>
   {:else if settings.needsAuth}
     <div class="auth-prompt">
@@ -89,7 +89,7 @@
       <AppearanceSettings />
       <AgentDirSettings />
       <TerminalSettings />
-      <WorktreeMappingSettings />
+      <WorktreeMappingSettings readOnly={settings.readOnly} />
       <GithubSettings />
       <RemoteSettings />
 

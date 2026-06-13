@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   getVersion: vi.fn(),
   checkForUpdate: vi.fn(),
   isRemoteConnection: vi.fn(),
+  setEventsAvailable: vi.fn(),
   ApiError: class MockGeneratedApiError extends Error {
     status: number;
 
@@ -49,6 +50,12 @@ vi.mock("../api/generated/index", () => ({
   },
   SyncService: {
     getApiV1SyncStatus: vi.fn(() => api.getSyncStatus()),
+  },
+}));
+
+vi.mock("./events.svelte.js", () => ({
+  events: {
+    setAvailable: api.setEventsAvailable,
   },
 }));
 
@@ -559,6 +566,54 @@ describe("SyncStore.remoteUnreachable", () => {
     expect(sync.remoteUnreachable).toBe(false);
     expect(sync.backendDegraded).toBe(true);
     expect(sync.backendDegradedMessage).toBe("sync not ready");
+  });
+
+  it("retries version mode detection after status recovers", async () => {
+    const s = sync as unknown as Record<string, unknown>;
+    s.serverVersion = null;
+    vi.mocked(api.getVersion)
+      .mockRejectedValueOnce(new Error("version temporarily unavailable"))
+      .mockResolvedValueOnce({
+        build_date: "",
+        commit: "abc123",
+        read_only: false,
+        version: "dev",
+      });
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+    });
+
+    await sync.loadVersion();
+
+    expect(api.setEventsAvailable).not.toHaveBeenCalled();
+
+    await sync.loadStatus();
+
+    expect(api.getVersion).toHaveBeenCalledTimes(2);
+    expect(api.setEventsAvailable).toHaveBeenCalledWith(true);
+  });
+
+  it("keeps status health when opportunistic version retry fails", async () => {
+    vi.mocked(api.isRemoteConnection).mockReturnValue(true);
+    const s = sync as unknown as Record<string, unknown>;
+    s.serverVersion = null;
+    s.remoteUnreachable = true;
+    s.backendDegraded = false;
+    s.backendDegradedMessage = null;
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+    });
+    vi.mocked(api.getVersion).mockRejectedValue(
+      new Error("version still unavailable"),
+    );
+
+    await sync.loadStatus();
+
+    expect(sync.remoteUnreachable).toBe(false);
+    expect(sync.backendDegraded).toBe(false);
+    expect(sync.backendDegradedMessage).toBeNull();
   });
 
   it("clears backend degraded when stats load succeeds", async () => {

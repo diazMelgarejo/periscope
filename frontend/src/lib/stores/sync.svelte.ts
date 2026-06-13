@@ -13,6 +13,7 @@ import {
   configureGeneratedClient,
   isRemoteConnection,
 } from "../api/runtime.js";
+import { events } from "./events.svelte.js";
 import type {
   SyncProgress,
   SyncStats,
@@ -139,6 +140,9 @@ class SyncStore {
       configureGeneratedClient();
       const status = await SyncService.getApiV1SyncStatus();
       this.markRemoteReachable(true);
+      if (this.serverVersion === null) {
+        await this.loadVersion({ updateBackendHealth: false });
+      }
       const newLastSync = status.last_sync || null;
       const isInitial = !this.statusHydrated;
       this.statusHydrated = true;
@@ -206,18 +210,24 @@ class SyncStore {
     }
   }
 
-  async loadVersion() {
+  async loadVersion(
+    opts: { updateBackendHealth?: boolean } = {},
+  ) {
+    const updateBackendHealth = opts.updateBackendHealth ?? true;
     try {
       configureGeneratedClient();
       this.serverVersion =
         await MetadataService.getApiV1Version() as VersionInfo;
+      events.setAvailable(this.serverVersion.read_only !== true);
       this.markRemoteReachable(true);
       this.versionMismatch = commitsDisagree(
         this.buildCommit,
         this.serverVersion.commit,
       );
     } catch (error) {
-      this.markBackendFailure(error);
+      if (updateBackendHealth) {
+        this.markBackendFailure(error);
+      }
       console.warn("Failed to load version info:", error);
     }
   }
