@@ -190,6 +190,53 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestPushSessionPreservesSourceMachine(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_source_machine_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "push-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	remoteSession := db.Session{
+		ID:           "remote-source-machine-1",
+		Project:      "proj",
+		Machine:      "remote-host",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	require.NoError(t, sync.pushSession(ctx, tx, remoteSession), "pushSession")
+	require.NoError(t, tx.Commit(), "Commit")
+
+	var got string
+	require.NoError(t, pg.QueryRow(
+		`SELECT machine FROM sessions WHERE id = $1`,
+		remoteSession.ID,
+	).Scan(&got), "read back machine")
+	assert.Equal(t, "remote-host", got)
+}
+
 // TestPushSyncsUsageEventsForZeroMessageSession verifies that a session
 // carrying token/cost accounting as a usage_event but no transcript
 // messages still has its usage_event pushed to PG. This is the shape of a
@@ -423,4 +470,349 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 	).Scan(&ctidAfter), "reading ctid after second push")
 	assert.Equal(t, ctidBefore, ctidAfter,
 		"fast path should skip rewriting a NUL-field session")
+}
+
+// TestPushIncrementalWithOnlyForeignMachineSessions verifies reset detection
+// does not misfire when every local session carries a machine value other than
+// s.machine (e.g. orphan-copied sessions kept from a previous machine name).
+// The push marker, not a per-machine row count, drives reset detection, so the
+// second incremental push is a no-op rather than a forced full re-push.
+func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_foreign_machine_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "new-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "foreign-machine-001"
+	sess := db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "old-host",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+
+	var machine string
+	require.NoError(t, pg.QueryRow(
+		`SELECT machine FROM sessions WHERE id = $1`, sessID,
+	).Scan(&machine), "reading pushed machine")
+	require.Equal(t, "old-host", machine, "source machine preserved")
+
+	var ctidBefore string
+	require.NoError(t, pg.QueryRow(
+		`SELECT ctid::text FROM messages
+		 WHERE session_id = $1 AND ordinal = 0`, sessID,
+	).Scan(&ctidBefore), "reading ctid before second push")
+
+	// Second incremental push with sync state intact. Reset detection counts
+	// machine = "new-host" plus "old-host", finds the row, and the fingerprint
+	// fast path skips the session entirely; the unchanged ctid proves the
+	// message row was left alone instead of being rewritten by a forced full.
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failures")
+	assert.Zero(t, res.SessionsPushed,
+		"unchanged foreign-machine session should not be re-pushed")
+
+	var ctidAfter string
+	require.NoError(t, pg.QueryRow(
+		`SELECT ctid::text FROM messages
+		 WHERE session_id = $1 AND ordinal = 0`, sessID,
+	).Scan(&ctidAfter), "reading ctid after second push")
+	assert.Equal(t, ctidBefore, ctidAfter,
+		"second incremental push must not rewrite the session")
+}
+
+// TestPushDetectsResetWhenCompetingMachineRowsExist verifies that a PG reset is
+// detected even when another pusher has repopulated rows under a machine value
+// this host also writes. The local session carries Machine "remote-host" (as a
+// remote host's sessions synced in over SSH would); after the first push the PG
+// rows and this host's push marker are removed and a competing "remote-host"
+// row is inserted, simulating the remote host re-pushing first after a shared
+// PG reset. A machine-count check would see the competing row and skip the full
+// push, leaving this host's session missing; the push marker is per-pusher, so
+// the reset is detected and the session is re-pushed.
+func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_reset_competing_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "this-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "remote-host~sess-1"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "remote-host",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+
+	// Simulate a PG reset where the real remote host re-pushed first: drop this
+	// host's rows and its push marker, then insert a competing "remote-host"
+	// row under a different id.
+	_, err = pg.Exec(`DELETE FROM sessions WHERE id = $1`, sessID)
+	require.NoError(t, err, "delete pushed session")
+	_, err = pg.Exec(
+		`DELETE FROM sync_metadata WHERE key LIKE 'push_marker:%'`,
+	)
+	require.NoError(t, err, "delete push marker")
+	_, err = pg.Exec(
+		`INSERT INTO sessions (id, machine, project, agent, created_at)
+		 VALUES ('remote-host-native-1', 'remote-host', 'proj', 'claude', NOW())`,
+	)
+	require.NoError(t, err, "insert competing remote-host row")
+
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failures")
+
+	var exists bool
+	require.NoError(t, pg.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)`, sessID,
+	).Scan(&exists), "checking re-pushed session")
+	assert.True(t, exists,
+		"reset must be detected and this host's session re-pushed")
+}
+
+// TestPushMarkerNotWrittenWhenResetRecoveryFails verifies the push marker is
+// written only after a push finalizes. When a reset is detected but the
+// recovery push fails before finalization, the marker must stay absent so the
+// next push re-detects the reset; otherwise the local watermark would remain at
+// the old value while PG holds a fresh marker, and reset-lost sessions would be
+// skipped indefinitely.
+func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_reset_recovery_fail_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "this-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "reset-recovery-1"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "this-host",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+
+	markerCount := func() int {
+		var n int
+		require.NoError(t, pg.QueryRow(
+			`SELECT COUNT(*) FROM sync_metadata
+			 WHERE key LIKE 'push_marker:%'`,
+		).Scan(&n), "counting push markers")
+		return n
+	}
+	require.Equal(t, 1, markerCount(), "marker present after first push")
+
+	// Simulate a PG reset: drop this host's row and marker, keeping the local
+	// watermark and boundary state so the session would otherwise be skipped.
+	_, err = pg.Exec(`DELETE FROM sessions WHERE id = $1`, sessID)
+	require.NoError(t, err, "delete pushed session")
+	_, err = pg.Exec(
+		`DELETE FROM sync_metadata WHERE key LIKE 'push_marker:%'`,
+	)
+	require.NoError(t, err, "delete push marker")
+	require.Equal(t, 0, markerCount(), "marker cleared for reset simulation")
+
+	// Sabotage the recovery push so it fails after reset detection but before
+	// finalization: drop a model_pricing column syncModelPricing reads. The
+	// reset branch re-runs EnsureSchema, but CREATE TABLE IF NOT EXISTS does
+	// not re-add a column to an existing table, so the failure persists.
+	_, err = pg.Exec(
+		`ALTER TABLE model_pricing DROP COLUMN cache_read_per_mtok`,
+	)
+	require.NoError(t, err, "drop model_pricing column")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.Error(t, err, "recovery push should fail at model pricing sync")
+	assert.Equal(t, 0, markerCount(),
+		"marker must not be written when recovery push fails")
+
+	// Repair the column; the next push must re-detect the reset (marker still
+	// absent) and re-push the session.
+	_, err = pg.Exec(
+		`ALTER TABLE model_pricing
+		 ADD COLUMN cache_read_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0`,
+	)
+	require.NoError(t, err, "restore model_pricing column")
+
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "recovery push after repair")
+	assert.Zero(t, res.Errors, "repaired push should report no failures")
+
+	var exists bool
+	require.NoError(t, pg.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)`, sessID,
+	).Scan(&exists), "checking re-pushed session")
+	assert.True(t, exists, "session must be re-pushed after reset recovery")
+	assert.Equal(t, 1, markerCount(), "marker restored after successful push")
+}
+
+// TestPushUpdatesSentinelMachineWhenSyncMachineChanges verifies that a session
+// stored with the "local" sentinel machine is re-pushed under the new fallback
+// when Sync.machine changes, rather than being skipped by a fingerprint that
+// ignored the resolved machine. The second push clears the local watermark so
+// the session is re-evaluated; without the resolved machine in the fingerprint
+// it would match and be skipped, leaving PG with the stale machine name.
+func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_sentinel_machine_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "host-a",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "sentinel-machine-1"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "local",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+
+	machine := func() string {
+		var m string
+		require.NoError(t, pg.QueryRow(
+			`SELECT machine FROM sessions WHERE id = $1`, sessID,
+		).Scan(&m), "reading machine")
+		return m
+	}
+	require.Equal(t, "host-a", machine(), "sentinel pushed under host-a")
+
+	// Rename: change the fallback machine and re-evaluate the session by
+	// clearing the watermark, mirroring any path that re-lists it.
+	sync.machine = "host-b"
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failures")
+	assert.Equal(t, "host-b", machine(),
+		"sentinel machine must follow the new fallback")
 }

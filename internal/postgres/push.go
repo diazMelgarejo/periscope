@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +17,14 @@ import (
 )
 
 const lastPushBoundaryStateKey = "last_push_boundary_state"
+
+// pushMarkerIDStateKey names the local sync-state entry holding this DB's
+// stable push-marker identifier. pushMarkerKeyPrefix prefixes that identifier
+// to form the PG sync_metadata key under which the marker row is stored.
+const (
+	pushMarkerIDStateKey = "pg_push_marker_id"
+	pushMarkerKeyPrefix  = "push_marker:"
+)
 
 // syncStateStore abstracts sync state read/write operations on the
 // local database. Used by push boundary state helpers.
@@ -87,22 +97,19 @@ func (s *Sync) Push(
 		}
 	}
 
-	// Coherence check: if the local watermark says we've
-	// pushed before but PG has zero sessions for this
-	// machine, the PG side was reset (schema dropped, DB
-	// recreated, etc.). Force a full push so all sessions
-	// are re-synced.
+	// Coherence check: if the local watermark says we've pushed
+	// before but this host's push marker is gone from PG, the PG side
+	// was reset (schema dropped, DB recreated, etc.). Force a full
+	// push so all sessions are re-synced.
 	if lastPush != "" {
-		pgCount, cErr := s.pgSessionCount(ctx)
+		markerExists, cErr := s.pgPushMarkerExists(ctx)
 		if cErr != nil {
 			return result, cErr
 		}
-		if pgCount == 0 {
+		if !markerExists {
 			log.Printf(
-				"pgsync: local watermark set but PG has "+
-					"0 sessions for machine %q; "+
-					"forcing full push",
-				s.machine,
+				"pgsync: local watermark set but PG push marker " +
+					"missing; PG was reset, forcing full push",
 			)
 			lastPush = ""
 			full = true
@@ -199,7 +206,8 @@ func (s *Sync) Push(
 	}
 	for id, sess := range sessionByID {
 		sessionFingerprints[id] = sessionPushFingerprint(
-			sess, usageFingerprints[id],
+			sess, pushedSessionMachine(sess, s.machine),
+			usageFingerprints[id],
 		)
 	}
 
@@ -244,6 +252,9 @@ func (s *Sync) Push(
 			); err != nil {
 				return result, err
 			}
+		}
+		if err := s.writePushMarker(ctx); err != nil {
+			return result, err
 		}
 		result.Duration = time.Since(start)
 		return result, nil
@@ -333,29 +344,87 @@ func (s *Sync) Push(
 		}
 	}
 
+	// Write the push marker only after the push and local finalization
+	// succeed. A reset-recovery push that fails before this point leaves
+	// the marker absent, so the next push re-detects the reset and retries
+	// rather than skipping the still-missing sessions.
+	if err := s.writePushMarker(ctx); err != nil {
+		return result, err
+	}
 	result.Duration = time.Since(start)
 	return result, nil
 }
 
-// pgSessionCount returns the number of sessions in PG for
-// this machine. Used to detect schema resets.
-func (s *Sync) pgSessionCount(
-	ctx context.Context,
-) (int, error) {
-	var count int
-	err := s.pg.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sessions WHERE machine = $1",
-		s.machine,
-	).Scan(&count)
+// pgPushMarkerExists reports whether this host's push marker is present in PG.
+// A missing marker while the local watermark is set means PG was reset (schema
+// dropped or recreated) since this host last pushed, so a full re-push is
+// needed. Counting rows by machine cannot detect this reliably: another host
+// pushing to the same PG can repopulate rows under a machine value this host
+// also writes -- a remote host's sessions synced in over SSH, or this host's
+// own renamed identity -- masking the loss of this host's own rows. The marker
+// is per-local-DB, so no other pusher can satisfy this check.
+func (s *Sync) pgPushMarkerExists(ctx context.Context) (bool, error) {
+	id, err := s.pushMarkerID()
+	if err != nil {
+		return false, err
+	}
+	var exists bool
+	err = s.pg.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = $1)`,
+		pushMarkerKeyPrefix+id,
+	).Scan(&exists)
 	if err != nil {
 		if isUndefinedTable(err) {
-			return 0, nil
+			return false, nil
 		}
-		return 0, fmt.Errorf(
-			"counting pg sessions: %w", err,
+		return false, fmt.Errorf(
+			"checking pg push marker: %w", err,
 		)
 	}
-	return count, nil
+	return exists, nil
+}
+
+// writePushMarker records this host's push marker in PG so a later push can
+// tell whether PG still holds the rows this host pushed. The stored value
+// carries the machine name for debugging only; presence of the row is what
+// reset detection consults.
+func (s *Sync) writePushMarker(ctx context.Context) error {
+	id, err := s.pushMarkerID()
+	if err != nil {
+		return err
+	}
+	if _, err := s.pg.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value)
+		 VALUES ($1, $2)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		pushMarkerKeyPrefix+id, s.machine,
+	); err != nil {
+		return fmt.Errorf("writing pg push marker: %w", err)
+	}
+	return nil
+}
+
+// pushMarkerID returns this local DB's stable push-marker identifier, creating
+// and persisting a random one on first use. It is independent of the machine
+// name, so a machine rename keeps the same marker, and unique per local DB, so
+// a different host pushing to the same PG cannot mask this host's reset.
+func (s *Sync) pushMarkerID() (string, error) {
+	id, err := s.local.GetSyncState(pushMarkerIDStateKey)
+	if err != nil {
+		return "", fmt.Errorf("reading push marker id: %w", err)
+	}
+	if id != "" {
+		return id, nil
+	}
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generating push marker id: %w", err)
+	}
+	id = hex.EncodeToString(buf)
+	if err := s.local.SetSyncState(pushMarkerIDStateKey, id); err != nil {
+		return "", fmt.Errorf("persisting push marker id: %w", err)
+	}
+	return id, nil
 }
 
 type batchResult struct {
@@ -636,13 +705,18 @@ func localSessionSyncMarker(sess db.Session) string {
 	return marker
 }
 
+// sessionPushFingerprint builds the change-detection fingerprint for a
+// session. pushedMachine is the value pushSession actually writes to PG
+// (pushedSessionMachine), not the raw sess.Machine: a "local"/empty sentinel
+// row is written under the fallback machine, so the fingerprint must track the
+// fallback to force a re-push when s.machine changes.
 func sessionPushFingerprint(
-	sess db.Session, usageEventFingerprint string,
+	sess db.Session, pushedMachine, usageEventFingerprint string,
 ) string {
 	fields := []string{
 		sess.ID,
 		sess.Project,
-		sess.Machine,
+		pushedMachine,
 		sess.Agent,
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
@@ -696,6 +770,16 @@ func sessionPushFingerprint(
 		fmt.Fprintf(&b, "%d:%s", len(f), f)
 	}
 	return b.String()
+}
+
+// pushedSessionMachine resolves the machine field for a PG row. Old rows
+// pushed before this fix with machine="local" will be repaired gradually as
+// each session is modified (message count change, etc.) and re-fingerprinted.
+func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
+	if sess.Machine != "" && sess.Machine != "local" {
+		return sess.Machine
+	}
+	return fallbackMachine
 }
 
 func stringValue(value *string) string {
@@ -895,7 +979,7 @@ func (s *Sync) pushSession(
 			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
 			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
 			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version`,
-		sess.ID, s.machine,
+		sess.ID, pushedSessionMachine(sess, s.machine),
 		sanitizePG(sess.Project),
 		sess.Agent,
 		nilStr(sess.FirstMessage),
