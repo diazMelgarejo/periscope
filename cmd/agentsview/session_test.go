@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +100,22 @@ func TestSessionGet_JSON(t *testing.T) {
 	assert.Equal(t, "proj", got["project"])
 }
 
+func TestSessionGet_JSONAlias(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	seedSession(t, dataDir, "s-json", "proj")
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "get", "s-json", "--json")
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got),
+		"stdout should be valid JSON: %q", out)
+	assert.Equal(t, "s-json", got["id"])
+	assert.Equal(t, "proj", got["project"])
+}
+
 func TestSessionGet_NotFound(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
@@ -182,6 +200,108 @@ func TestSessionList_FilterByProject(t *testing.T) {
 		"stdout should be valid JSON: %q", out)
 	require.Len(t, got.Sessions, 1)
 	assert.Equal(t, "s-a", got.Sessions[0]["id"])
+}
+
+func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	seedSession(t, dataDir, "local-session", "local")
+
+	var gotPath, gotProject string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotProject = r.URL.Query().Get("project")
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"sessions": [
+					{"id":"remote-session","project":"remote","agent":"claude"}
+				],
+				"total": 1
+			}`))
+		}))
+	defer ts.Close()
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "list", "--server", ts.URL, "--project", "remote",
+		"--json")
+	require.NoError(t, err)
+
+	var got struct {
+		Sessions []map[string]any `json:"sessions"`
+		Total    int              `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &got),
+		"stdout should be valid JSON: %q", out)
+	assert.Equal(t, "/api/v1/sessions", gotPath)
+	assert.Equal(t, "remote", gotProject)
+	assert.Equal(t, 1, got.Total)
+	require.Len(t, got.Sessions, 1)
+	assert.Equal(t, "remote-session", got.Sessions[0]["id"])
+}
+
+func TestSessionList_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(`auth_token = "local-secret"`),
+		0o600,
+	))
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Empty(t, r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+		}))
+	defer ts.Close()
+
+	_, err := executeCommand(newRootCommand(),
+		"session", "list", "--server", ts.URL, "--json")
+	require.NoError(t, err)
+}
+
+func TestSessionList_ServerFlagDoesNotLoadLocalConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(`not = valid = toml`),
+		0o600,
+	))
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+		}))
+	defer ts.Close()
+
+	_, err := executeCommand(newRootCommand(),
+		"session", "list", "--server", ts.URL, "--json")
+	require.NoError(t, err)
+}
+
+func TestSessionList_ServerTokenSendsBearer(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "remote-secret")
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "Bearer remote-secret",
+				r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+		}))
+	defer ts.Close()
+
+	_, err := executeCommand(newRootCommand(),
+		"session", "list", "--server", ts.URL, "--json")
+	require.NoError(t, err)
 }
 
 func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
@@ -604,21 +724,351 @@ func TestSessionExport_RejectsPGFlag(t *testing.T) {
 	assert.Contains(t, err.Error(), "--pg not supported")
 }
 
-// TestSessionUsage_RejectsServerFlag verifies that `session usage`
-// rejects the inherited --server flag instead of silently querying
-// the local SQLite archive. usage uses the direct token-use path
-// (not the SessionService layer), so a user explicitly targeting a
-// daemon must get the same "not yet implemented" error the other
-// session commands return — not stale or local-only data.
-func TestSessionUsage_RejectsServerFlag(t *testing.T) {
+func TestSessionUsage_ServerFlagUsesHTTP(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 
-	_, err := executeCommand(newRootCommand(),
-		"session", "usage", "some-id",
-		"--server", "http://localhost:9999")
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{
+					"id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project"
+				}`))
+			case "/api/v1/sessions/remote-session/usage":
+				gotPath = r.URL.Path
+				_, _ = w.Write([]byte(`{
+					"session_id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				t.Errorf("unexpected path: %s", r.URL.Path)
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", "remote-session", "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, "/api/v1/sessions/remote-session/usage", gotPath)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, "remote-session", out.SessionID)
+	assert.Equal(t, "remote-project", out.Project)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.True(t, out.ServerRunning)
+}
+
+func TestSessionUsage_ServerFlagResolvesBareID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	const bareID = "019da6a6-8c67-7c23-b102-ef48502852d0"
+	const canonicalID = "codex:" + bareID
+
+	var gotUsagePath string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/" + bareID:
+				http.NotFound(w, r)
+			case "/api/v1/sessions/" + canonicalID:
+				_, _ = w.Write([]byte(`{
+					"id": "` + canonicalID + `",
+					"agent": "codex",
+					"project": "remote-project"
+				}`))
+			case "/api/v1/sessions/" + canonicalID + "/usage":
+				gotUsagePath = r.URL.Path
+				_, _ = w.Write([]byte(`{
+					"session_id": "` + canonicalID + `",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", bareID, "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, code, err := sessionUsageDataForCommand(cmd, bareID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, canonicalID, out.SessionID)
+	assert.Equal(t, "/api/v1/sessions/"+canonicalID+"/usage", gotUsagePath)
+}
+
+func TestSessionUsage_ServerFlagResolvesKimiRawID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	const rawID = "project-hash:session-uuid"
+	const canonicalID = "kimi:" + rawID
+
+	var gotUsagePath string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/" + rawID:
+				http.NotFound(w, r)
+			case "/api/v1/sessions/" + canonicalID:
+				_, _ = w.Write([]byte(`{
+					"id": "` + canonicalID + `",
+					"agent": "kimi",
+					"project": "remote-project"
+				}`))
+			case "/api/v1/sessions/" + canonicalID + "/usage":
+				gotUsagePath = r.URL.Path
+				_, _ = w.Write([]byte(`{
+					"session_id": "` + canonicalID + `",
+					"agent": "kimi",
+					"project": "remote-project",
+					"total_output_tokens": 84,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["kimi-k2"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", rawID, "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, code, err := sessionUsageDataForCommand(cmd, rawID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, canonicalID, out.SessionID)
+	assert.Equal(t, "/api/v1/sessions/"+canonicalID+"/usage", gotUsagePath)
+}
+
+func TestSessionUsage_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(`auth_token = "local-secret"`),
+		0o600,
+	))
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Empty(t, r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{"id":"remote-session"}`))
+			case "/api/v1/sessions/remote-session/usage":
+				_, _ = w.Write([]byte(`{
+					"session_id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", "remote-session", "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, _, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+}
+
+func TestSessionUsage_ServerFlagDoesNotLoadLocalConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(`not = valid = toml`),
+		0o600,
+	))
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{"id":"remote-session"}`))
+			case "/api/v1/sessions/remote-session/usage":
+				_, _ = w.Write([]byte(`{
+					"session_id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", "remote-session", "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, _, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+}
+
+func TestSessionUsage_ServerTokenSendsBearer(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	tokenFile := filepath.Join(dataDir, "remote-token")
+	require.NoError(t, os.WriteFile(
+		tokenFile, []byte("remote-secret\n"), 0o600,
+	))
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "Bearer remote-secret",
+				r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{"id":"remote-session"}`))
+			case "/api/v1/sessions/remote-session/usage":
+				_, _ = w.Write([]byte(`{
+					"session_id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{
+		"session", "usage", "remote-session",
+		"--server", ts.URL,
+		"--server-token-file", tokenFile,
+	}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, _, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+}
+
+func TestSessionUsage_ServerHTTPClientHasTimeout(t *testing.T) {
+	oldClient := sessionUsageHTTPClient
+	sessionUsageHTTPClient = &http.Client{Timeout: 20 * time.Millisecond}
+	t.Cleanup(func() { sessionUsageHTTPClient = oldClient })
+
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{"id":"remote-session"}`))
+			case "/api/v1/sessions/remote-session/usage":
+				time.Sleep(200 * time.Millisecond)
+				_, _ = w.Write([]byte(`{"session_id":"remote-session"}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", "remote-session", "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	start := time.Now()
+	out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
+	elapsed := time.Since(start)
+
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--server not yet implemented")
+	assert.Nil(t, out)
+	assert.Equal(t, tokenUseExitErr, code)
+	assert.Less(t, elapsed, 150*time.Millisecond)
 }
 
 func TestSessionUsage_PGEnvUsesPGStore(t *testing.T) {
@@ -787,6 +1237,42 @@ func TestSessionSync_PGFlagRefusesWrite(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--pg is read-only")
 	assert.Contains(t, err.Error(), "write commands")
+}
+
+func TestSessionSync_ServerFlagTreatsPathShapedArgAsRemotePath(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(`not = valid = toml`),
+		0o600,
+	))
+
+	var got struct {
+		ID   string `json:"id"`
+		Path string `json:"path"`
+	}
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodPost, r.Method)
+			assert.Equal(t, "/api/v1/sessions/sync", r.URL.Path)
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"id": "remote-session",
+				"agent": "codex",
+				"project": "remote-project"
+			}`))
+		}))
+	defer ts.Close()
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "sync", "--server", ts.URL,
+		"/remote/session.jsonl", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, out, `"id":"remote-session"`)
+	assert.Empty(t, got.ID)
+	assert.Equal(t, "/remote/session.jsonl", got.Path)
 }
 
 // TestSessionSync_AgainstReadOnlyDaemon_Refuses verifies the CLI
