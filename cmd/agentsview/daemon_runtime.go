@@ -16,15 +16,19 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/kit/daemon"
 )
 
 const (
-	daemonService   = "agentsview"
-	runtimeReadOnly = "read_only"
-	runtimeHost     = "host"
-	runtimePort     = "port"
-	startProbeTick  = 250 * time.Millisecond
+	daemonService          = "agentsview"
+	runtimeReadOnly        = "read_only"
+	runtimeHost            = "host"
+	runtimePort            = "port"
+	runtimeCreateTime      = "create_time"
+	runtimeCaddyPID        = "caddy_pid"
+	runtimeCaddyCreateTime = "caddy_create_time"
+	startProbeTick         = 250 * time.Millisecond
 )
 
 // DaemonRuntime is the agentsview-specific view of a kit daemon runtime record.
@@ -40,10 +44,12 @@ func runtimeStore(dataDir string) daemon.RuntimeStore {
 }
 
 // WriteDaemonRuntime writes a shared kit daemon runtime record for the running
-// server. It returns the path written.
+// server. It returns the path written. The optional caddyPID records a managed
+// Caddy child so `serve stop` can terminate it if the server is force-killed
+// before it can stop Caddy itself.
 func WriteDaemonRuntime(
 	dataDir string, host string, port int, version string,
-	readOnly bool,
+	readOnly bool, caddyPID ...int,
 ) (string, error) {
 	ep := daemon.Endpoint{
 		Network: daemon.NetworkTCP,
@@ -55,7 +61,35 @@ func WriteDaemonRuntime(
 		runtimePort:     strconv.Itoa(port),
 		runtimeReadOnly: strconv.FormatBool(readOnly),
 	}
+	// Persist this process's OS create time so `serve stop` can confirm a
+	// PID still belongs to the recorded daemon (and was not reused) by
+	// matching create times exactly. Best-effort: if it cannot be read, stop
+	// falls back to ping confirmation only.
+	if ct, ok := processCreateTimeMillis(os.Getpid()); ok {
+		rec.Metadata[runtimeCreateTime] = strconv.FormatInt(ct, 10)
+	}
+	if len(caddyPID) > 0 && caddyPID[0] > 0 {
+		rec.Metadata[runtimeCaddyPID] = strconv.Itoa(caddyPID[0])
+		if ct, ok := processCreateTimeMillis(caddyPID[0]); ok {
+			rec.Metadata[runtimeCaddyCreateTime] = strconv.FormatInt(ct, 10)
+		}
+	}
 	return runtimeStore(dataDir).Write(rec)
+}
+
+// processCreateTimeMillis returns the OS-reported create time of pid in
+// milliseconds since the Unix epoch. ok is false when the process is gone or
+// its create time cannot be read.
+func processCreateTimeMillis(pid int) (int64, bool) {
+	proc, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return 0, false
+	}
+	created, err := proc.CreateTime()
+	if err != nil {
+		return 0, false
+	}
+	return created, true
 }
 
 // RemoveDaemonRuntime removes the current process's kit daemon runtime record.
@@ -185,6 +219,30 @@ func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
 		Host:     host,
 		ReadOnly: readOnly,
 	}
+}
+
+// liveDaemonRecords returns runtime records for agentsview daemons in dataDir
+// whose process is still alive. Unlike FindDaemonRuntime it does not require a
+// successful ping, so it can target a hung-but-alive server (e.g. for stop).
+func liveDaemonRecords(dataDir string) []daemon.RuntimeRecord {
+	migrateLegacyDaemonRuntimes(dataDir)
+
+	store := runtimeStore(dataDir)
+	_, _ = store.CleanupDead()
+	records, err := store.List()
+	if err != nil {
+		return nil
+	}
+	var alive []daemon.RuntimeRecord
+	for _, rec := range records {
+		if rec.Service != "" && rec.Service != daemonService {
+			continue
+		}
+		if daemon.ProcessAlive(rec.PID) {
+			alive = append(alive, rec)
+		}
+	}
+	return alive
 }
 
 func hasLiveDaemonRuntime(dataDir string, authToken ...string) bool {

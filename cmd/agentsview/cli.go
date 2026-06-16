@@ -87,6 +87,7 @@ func newRootCommand() *cobra.Command {
 }
 
 func newServeCommand() *cobra.Command {
+	var background bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Start server",
@@ -94,11 +95,50 @@ func newServeCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
+			if background {
+				// Acquire the launch lock before loading config; config
+				// loading writes config.toml and must be single-writer
+				// across concurrent launches.
+				runServeBackgroundCommand(cmd)
+				return
+			}
 			runServe(mustLoadConfig(cmd))
 		},
 	}
+	cmd.Flags().BoolVar(
+		&background,
+		"background",
+		false,
+		"Start server in the background and return to the shell",
+	)
 	config.RegisterServePFlags(cmd.Flags())
+	cmd.AddCommand(newServeStatusCommand())
+	cmd.AddCommand(newServeStopCommand())
 	return cmd
+}
+
+func newServeStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "status",
+		Short:        "Show whether a server is running and where to reach it",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			runServeStatus(mustLoadConfig(cmd))
+		},
+	}
+}
+
+func newServeStopCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "stop",
+		Short:        "Stop the running server",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			runServeStop(mustLoadConfig(cmd))
+		},
+	}
 }
 
 func newOpenAPICommand() *cobra.Command {
