@@ -30,6 +30,7 @@ type testEnv struct {
 	geminiDir         string
 	opencodeDir       string
 	kiloDir           string
+	mimocodeDir       string
 	forgeDir          string
 	piebaldDir        string
 	iflowDir          string
@@ -108,6 +109,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 
 	env := &testEnv{
 		geminiDir:         t.TempDir(),
+		mimocodeDir:       t.TempDir(),
 		forgeDir:          t.TempDir(),
 		piebaldDir:        t.TempDir(),
 		iflowDir:          t.TempDir(),
@@ -173,6 +175,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentGemini:         {env.geminiDir},
 			parser.AgentOpenCode:       opencodeDirs,
 			parser.AgentKilo:           kiloDirs,
+			parser.AgentMiMoCode:       {env.mimocodeDir},
 			parser.AgentForge:          {env.forgeDir},
 			parser.AgentPiebald:        {env.piebaldDir},
 			parser.AgentIflow:          {env.iflowDir},
@@ -3495,6 +3498,115 @@ func TestKiloStorageRewriteReplacesMessages(t *testing.T) {
 
 	assertMessageContent(
 		t, env.db, "kilo:"+sessionID, "rewritten kilo reply",
+	)
+}
+
+// TestMiMoCodeSessionDiffStorageWatcherEvents drives MiMoCode indexing
+// purely through SyncPaths watcher events so the path classifier is the
+// only route into the DB. The session JSON lives under
+// storage/session_diff, so classification must use the resolved session
+// subdir rather than the default storage/session. The follow-up part
+// rewrite exercises the message/part classification branch, which
+// resolves the session file under session_diff to advance the message.
+func TestMiMoCodeSessionDiffStorageWatcherEvents(t *testing.T) {
+	env := setupTestEnv(t)
+	storage := createMiMoCodeStorageFixture(t, env.mimocodeDir)
+	const sessionID = "mimo-storage-watch"
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/mimo-app", "MiMoCode Watch",
+		1704067200000, 1704067205000,
+	)
+	require.Contains(t, sessionPath,
+		filepath.Join("storage", "session_diff"),
+		"session JSON must live under storage/session_diff")
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"initial mimo reply", 1704067201000,
+	)
+
+	// A session-JSON create event under storage/session_diff must
+	// classify and index the session without any prior full sync.
+	env.engine.SyncPaths([]string{sessionPath})
+	assertSessionProject(t, env.db, "mimocode:"+sessionID, "mimo_app")
+	assertMessageContent(
+		t, env.db, "mimocode:"+sessionID, "initial mimo reply",
+	)
+
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"rewritten mimo reply", 1704067201000,
+	)
+	changed := time.Unix(1804067200, 0)
+	require.NoError(t, os.Chtimes(partPath, changed, changed))
+	env.engine.SyncPaths([]string{partPath})
+
+	assertMessageContent(
+		t, env.db, "mimocode:"+sessionID, "rewritten mimo reply",
+	)
+}
+
+// TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache covers the
+// shouldCacheSkip change: a MiMoCode session JSON under
+// storage/session_diff must never be skip-cached by its own mtime,
+// because its content depends on message/part files that change
+// independently. With the session subdir hard-coded to storage/session,
+// shouldCacheSkip would treat the session_diff file as cacheable, and a
+// stale skip-cache entry at an unchanged session mtime would suppress a
+// child-driven update.
+func TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache(t *testing.T) {
+	env := setupTestEnv(t)
+	storage := createMiMoCodeStorageFixture(t, env.mimocodeDir)
+	const sessionID = "mimo-storage-skip-cache"
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/mimo-app", "MiMoCode Skip Cache",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"initial mimo reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	assertMessageContent(
+		t, env.db, "mimocode:"+sessionID, "initial mimo reply",
+	)
+
+	// Seed the skip cache for the session file at its current mtime.
+	info, err := os.Stat(sessionPath)
+	require.NoError(t, err, "stat session path")
+	sessionMtime := info.ModTime()
+	env.engine.InjectSkipCache(map[string]int64{
+		sessionPath: sessionMtime.UnixNano(),
+	})
+
+	// Rewrite the part while holding the session JSON mtime constant,
+	// so a stale skip-cache entry keyed on the session path would
+	// suppress the update if session files were treated as cacheable.
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"rewritten mimo reply", 1704067201000,
+	)
+	require.NoError(t,
+		os.Chtimes(sessionPath, sessionMtime, sessionMtime),
+		"restore session mtime")
+
+	env.engine.SyncPaths([]string{partPath})
+
+	assertMessageContent(
+		t, env.db, "mimocode:"+sessionID, "rewritten mimo reply",
 	)
 }
 
