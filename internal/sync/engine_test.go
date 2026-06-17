@@ -1447,6 +1447,171 @@ func TestOpenCodeLegacyArchiveLooksIncomplete(t *testing.T) {
 	})
 }
 
+func TestVisualStudioCopilotArchiveDecisionMergesNewRowsWithArchiveOnlyRows(t *testing.T) {
+	stored := []db.Message{
+		{
+			Ordinal:       0,
+			Role:          "assistant",
+			Content:       "Run command: dotnet build",
+			ContentLength: len("Run command: dotnet build"),
+			Timestamp:     "2026-06-12T19:46:40Z",
+		},
+		{
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "Archived prompt.",
+			ContentLength: len("Archived prompt."),
+			Timestamp:     "2026-06-12T19:47:00Z",
+		},
+	}
+	parsed := []db.Message{
+		{
+			Ordinal:       0,
+			Role:          "assistant",
+			Content:       "Run command: dotnet build",
+			ContentLength: len("Run command: dotnet build"),
+			Timestamp:     "2026-06-12T19:46:40Z",
+		},
+		{
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "New follow-up.",
+			ContentLength: len("New follow-up."),
+			Timestamp:     "2026-06-12T19:47:20Z",
+		},
+	}
+
+	decision := visualStudioCopilotArchiveDecision(parsed, stored)
+
+	require.False(t, decision.preserve)
+	require.Len(t, decision.merged, 3)
+	assert.Equal(t, "Run command: dotnet build", decision.merged[0].Content)
+	assert.Equal(t, "Archived prompt.", decision.merged[1].Content)
+	assert.Equal(t, "New follow-up.", decision.merged[2].Content)
+	for i, msg := range decision.merged {
+		assert.Equal(t, i, msg.Ordinal)
+	}
+}
+
+func TestVisualStudioCopilotArchiveDecisionMatchesTimestampShiftedToolCall(t *testing.T) {
+	stored := []db.Message{
+		{
+			Ordinal:       0,
+			Role:          "assistant",
+			Content:       "Run command: dotnet build",
+			ContentLength: len("Run command: dotnet build"),
+			Timestamp:     "2026-06-12T19:46:40Z",
+			ToolCalls: []db.ToolCall{{
+				ToolName:  "run_command_in_terminal",
+				ToolUseID: "call_build",
+			}},
+		},
+		{
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "Archived prompt.",
+			ContentLength: len("Archived prompt."),
+			Timestamp:     "2026-06-12T19:47:00Z",
+		},
+	}
+	parsed := []db.Message{{
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "Run command: dotnet build",
+		ContentLength: len("Run command: dotnet build"),
+		Timestamp:     "2026-06-12T19:47:40Z",
+		ToolCalls: []db.ToolCall{{
+			ToolName:  "run_command_in_terminal",
+			ToolUseID: "call_build",
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID:     "call_build",
+				Source:        "visualstudio-copilot",
+				Status:        "completed",
+				Content:       "Build succeeded.",
+				ContentLength: len("Build succeeded."),
+			}},
+		}},
+	}}
+
+	decision := visualStudioCopilotArchiveDecision(parsed, stored)
+
+	require.False(t, decision.preserve)
+	require.Len(t, decision.merged, 2)
+	assert.Equal(t, "Run command: dotnet build", decision.merged[0].Content)
+	assert.Equal(t, "2026-06-12T19:46:40Z", decision.merged[0].Timestamp,
+		"fallback merge should preserve the archived transcript anchor")
+	require.Len(t, decision.merged[0].ToolCalls, 1)
+	require.Len(t, decision.merged[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "Build succeeded.",
+		decision.merged[0].ToolCalls[0].ResultEvents[0].Content)
+	assert.Equal(t, "Archived prompt.", decision.merged[1].Content)
+}
+
+func TestVisualStudioCopilotArchiveDecisionMergesOnlyTimestampShiftedToolCall(t *testing.T) {
+	stored := []db.Message{{
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "Run command: dotnet build",
+		ContentLength: len("Run command: dotnet build"),
+		Timestamp:     "2026-06-12T19:46:40Z",
+		ToolCalls: []db.ToolCall{{
+			ToolName:  "run_command_in_terminal",
+			ToolUseID: "call_build",
+		}},
+	}}
+	parsed := []db.Message{{
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "Run command: dotnet build",
+		ContentLength: len("Run command: dotnet build"),
+		Timestamp:     "2026-06-12T19:47:40Z",
+		ToolCalls: []db.ToolCall{{
+			ToolName:  "run_command_in_terminal",
+			ToolUseID: "call_build",
+		}},
+	}}
+
+	decision := visualStudioCopilotArchiveDecision(parsed, stored)
+
+	require.False(t, decision.preserve)
+	require.Len(t, decision.merged, 1)
+	assert.Equal(t, "2026-06-12T19:46:40Z", decision.merged[0].Timestamp)
+}
+
+func TestVisualStudioCopilotArchiveDecisionMatchesTimestampShiftedUserPrompt(t *testing.T) {
+	stored := []db.Message{
+		{
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "Archived prompt.",
+			ContentLength: len("Archived prompt."),
+			Timestamp:     "2026-06-12T19:46:40Z",
+		},
+		{
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "Archived answer.",
+			ContentLength: len("Archived answer."),
+			Timestamp:     "2026-06-12T19:47:00Z",
+		},
+	}
+	parsed := []db.Message{{
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "Archived prompt.",
+		ContentLength: len("Archived prompt."),
+		Timestamp:     "2026-06-12T19:47:40Z",
+	}}
+
+	decision := visualStudioCopilotArchiveDecision(parsed, stored)
+
+	require.False(t, decision.preserve)
+	require.Len(t, decision.merged, 2)
+	assert.Equal(t, "Archived prompt.", decision.merged[0].Content)
+	assert.Equal(t, "2026-06-12T19:46:40Z", decision.merged[0].Timestamp)
+	assert.Equal(t, "Archived answer.", decision.merged[1].Content)
+}
+
 // fakeEmitter records scopes passed to Emit. Thread-safe so it
 // can be called from engine goroutines under test.
 type fakeEmitter struct {
@@ -2184,4 +2349,30 @@ func TestToDBSessionCarriesSessionName(t *testing.T) {
 	}})
 	assert.Nil(t, s2.SessionName)
 	assert.Nil(t, s2.DisplayName)
+}
+
+// TestDiscoveredFileMtimeVisualStudioCopilotResolvesVirtualPath verifies that
+// the mtime helper resolves a <traceFile>#<conversationID> virtual path to its
+// physical trace before stat. Without resolution os.Stat fails on the virtual
+// path, so SyncAllSince's mtime filter cannot drop unchanged Visual Studio
+// conversations and re-syncs every one of them on each poll.
+func TestDiscoveredFileMtimeVisualStudioCopilotResolvesVirtualPath(t *testing.T) {
+	dir := t.TempDir()
+	tracePath := filepath.Join(
+		dir, "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
+	)
+	require.NoError(t, os.WriteFile(tracePath, []byte("{}\n"), 0o644))
+	info, err := os.Stat(tracePath)
+	require.NoError(t, err)
+
+	virtual := parser.VisualStudioCopilotVirtualPath(
+		tracePath, "4a8f63f6-7626-4416-a874-fc7bd2c3f005",
+	)
+	mtime, err := discoveredFileMtime(parser.DiscoveredFile{
+		Path:  virtual,
+		Agent: parser.AgentVSCopilot,
+	})
+	require.NoError(t, err,
+		"virtual path must resolve to the physical trace for stat")
+	assert.Equal(t, info.ModTime().UnixNano(), mtime)
 }
