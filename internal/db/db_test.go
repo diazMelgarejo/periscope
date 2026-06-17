@@ -1165,6 +1165,101 @@ func TestReplaceSessionMessages(t *testing.T) {
 	assert.Equal(t, "new1", got[0].Content, "content")
 }
 
+func TestInsertMessagesClassifiesAutomationFromUserTranscript(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	title := "Generated review title"
+	insertSession(t, d, "insert-review-title", "p", func(s *Session) {
+		s.FirstMessage = &title
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	require.NoError(t, d.InsertMessages([]Message{
+		userMsg("insert-review-title", 0,
+			"You are a code reviewer. Review the code changes shown below."),
+		asstMsg("insert-review-title", 1, "Review complete."),
+	}), "InsertMessages")
+
+	got, err := d.GetSession(ctx, "insert-review-title")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, got, "insert-review-title session")
+	assert.True(t, got.IsAutomated,
+		"automation should be classified from the first inserted user message")
+}
+
+func TestUpsertSessionPreservesTranscriptAutomation(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	title := "Generated review title"
+	insertSession(t, d, "upsert-review-title", "p", func(s *Session) {
+		s.FirstMessage = &title
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	require.NoError(t, d.InsertMessages([]Message{
+		userMsg("upsert-review-title", 0,
+			"You are a code reviewer. Review the code changes shown below."),
+		asstMsg("upsert-review-title", 1, "Review complete."),
+	}), "InsertMessages")
+
+	require.NoError(t, d.UpsertSession(Session{
+		ID:               "upsert-review-title",
+		Project:          "p",
+		Machine:          defaultMachine,
+		Agent:            defaultAgent,
+		FirstMessage:     &title,
+		MessageCount:     2,
+		UserMessageCount: 1,
+		IsAutomated:      true,
+	}), "UpsertSession")
+
+	got, err := d.GetSession(ctx, "upsert-review-title")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, got, "upsert-review-title session")
+	assert.True(t, got.IsAutomated,
+		"upsert should persist the transcript-derived automation flag")
+}
+
+func TestReplaceSessionMessagesClassifiesAutomationFromUserTranscript(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	title := "Generated review title"
+	insertSession(t, d, "review-title", "p", func(s *Session) {
+		s.FirstMessage = &title
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	require.NoError(t, d.ReplaceSessionMessages("review-title", []Message{
+		userMsg("review-title", 0,
+			"You are a code reviewer. Review the code changes shown below."),
+		asstMsg("review-title", 1, "Review complete."),
+	}), "ReplaceSessionMessages")
+
+	got, err := d.GetSession(ctx, "review-title")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, got, "review-title session")
+	assert.True(t, got.IsAutomated,
+		"automation should be classified from the first stored user message")
+
+	page, err := d.ListSessions(ctx, SessionFilter{
+		ExcludeAutomated: true,
+		Limit:            10,
+	})
+	require.NoError(t, err, "ListSessions")
+	assert.Empty(t, page.Sessions,
+		"automated transcript should be excluded even when first_message is a title")
+}
+
 // TestReplaceSessionMessagesPreservesPins verifies that pinned
 // messages survive a full message replacement (regression test for
 // the ON DELETE CASCADE bug: deleting messages used to cascade-delete
