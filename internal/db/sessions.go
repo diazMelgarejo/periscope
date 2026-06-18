@@ -296,6 +296,7 @@ type SessionFilter struct {
 	ExcludeOneShot   bool     // exclude sessions with user_message_count <= 1
 	ExcludeAutomated bool     // exclude sessions where is_automated = 1
 	IncludeChildren  bool     // include subagent sessions (for sidebar grouping)
+	IncludeOrphans   bool     // promote orphan child rows to sidebar roots
 	Outcome          []string // filter by outcome values
 	HealthGrade      []string // filter by health grade values
 	MinToolFailures  *int     // minimum tool_failure_signal_count
@@ -332,8 +333,6 @@ const activityExprSQLite = "CAST(strftime('%s', " +
 const sidebarActivityExprSQLiteS = "COALESCE(" +
 	"NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)"
 
-const sidebarChildRelationshipsSQL = "'subagent', 'fork', 'continuation'"
-
 func sidebarStarredRootCTE(enabled bool) string {
 	if !enabled {
 		return ""
@@ -351,6 +350,13 @@ func sidebarStarredRootJoin(enabled bool) string {
 		return ""
 	}
 	return "JOIN eligible_roots e ON e.id = t.root_id"
+}
+
+// buildCanonicalRootWhere returns a WHERE fragment that identifies canonical root
+// sessions for sidebar pagination. Child rows remain nested under their parent
+// unless IncludeOrphans explicitly promotes missing-parent child rows to roots.
+func buildCanonicalRootWhere(includeOrphans bool) string {
+	return BuildCanonicalRootWhere(SQLiteQueryDialect(), "sessions", includeOrphans)
 }
 
 // buildTerminationPredSQLite returns a WHERE fragment and args for
@@ -497,6 +503,7 @@ func (db *DB) GetSidebarSessionIndex(
 	ctx context.Context, f SessionFilter,
 ) (SidebarSessionIndex, error) {
 	f.IncludeChildren = true
+	f.IncludeOrphans = true
 
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return db.getSidebarSessionIndexPage(ctx, f)
@@ -580,18 +587,11 @@ func (db *DB) getSidebarSessionIndexPage(
 	}
 
 	rootFilter := f
-	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
-	rootWhere, rootArgs := buildSessionFilter(rootFilter)
-	canonicalRootWhere := `
-		NOT EXISTS (
-			SELECT 1
-			FROM sessions parent
-			WHERE parent.id = sessions.parent_session_id
-			  AND parent.deleted_at IS NULL
-			  AND sessions.relationship_type IN (` + sidebarChildRelationshipsSQL + `)
-		)`
+	rootFilter.IncludeChildren = false
+	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
+	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
 
 	var total int
 	var cur SessionCursor
