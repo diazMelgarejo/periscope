@@ -4289,6 +4289,97 @@ func TestCopyExcludedSessionsFrom(t *testing.T) {
 		"UpsertSession = %v, want ErrSessionExcluded", err)
 }
 
+func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
+	dir := t.TempDir()
+
+	// Source DB with no tables (legacy DB shape missing pg_sync_state).
+	srcPath := filepath.Join(dir, "src.db")
+	srcConn, err := sql.Open("sqlite3", srcPath)
+	require.NoError(t, err, "open src")
+	require.NoError(t, srcConn.Close(), "close src")
+
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "Open dst")
+	defer dstDB.Close()
+
+	// Seed a marker that should be preserved when source has none.
+	require.NoError(t, dstDB.SetSyncState(
+		"pg_push_marker_id", "marker-123",
+	), "seed destination sync state")
+
+	// Copy should be a no-op for legacy source and return nil.
+	err = dstDB.CopySyncStateFrom(srcPath)
+	require.NoError(t, err, "CopySyncStateFrom")
+
+	got, err := dstDB.GetSyncState("pg_push_marker_id")
+	require.NoError(t, err, "GetSyncState")
+	assert.Equal(t, "marker-123", got)
+}
+
+func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
+	dir := t.TempDir()
+
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err, "Open src")
+	require.NoError(t, srcDB.SetSyncState("pg_push_marker_id", "marker-123"),
+		"seed source marker")
+	require.NoError(t, srcDB.SetSyncState("last_sync_started_at", "old-start"),
+		"seed source started")
+	require.NoError(t, srcDB.SetSyncState("last_sync_finished_at", "old-finish"),
+		"seed source finished")
+	require.NoError(t, srcDB.Close(), "Close src")
+
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "Open dst")
+	defer dstDB.Close()
+	require.NoError(t, dstDB.SetSyncState("last_sync_started_at", "new-start"),
+		"seed destination started")
+	require.NoError(t, dstDB.SetSyncState("last_sync_finished_at", "new-finish"),
+		"seed destination finished")
+
+	err = dstDB.CopySyncStateFrom(srcPath)
+	require.NoError(t, err, "CopySyncStateFrom")
+
+	gotMarker, err := dstDB.GetSyncState("pg_push_marker_id")
+	require.NoError(t, err, "GetSyncState pg_push_marker_id")
+	assert.Equal(t, "marker-123", gotMarker)
+
+	gotStarted, err := dstDB.GetSyncState("last_sync_started_at")
+	require.NoError(t, err, "GetSyncState last_sync_started_at")
+	assert.Equal(t, "new-start", gotStarted)
+
+	gotFinished, err := dstDB.GetSyncState("last_sync_finished_at")
+	require.NoError(t, err, "GetSyncState last_sync_finished_at")
+	assert.Equal(t, "new-finish", gotFinished)
+}
+
+func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
+	dir := t.TempDir()
+
+	// Source is not a valid SQLite database, so probing state fails.
+	srcPath := filepath.Join(dir, "src.db")
+	require.NoError(t, os.WriteFile(srcPath, []byte("not sqlite"), 0o600),
+		"write invalid source")
+
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "Open dst")
+	defer dstDB.Close()
+	require.NoError(t, dstDB.SetSyncState("pg_push_marker_id", "safe"),
+		"seed destination sync state")
+
+	err = dstDB.CopySyncStateFrom(srcPath)
+	require.Error(t, err, "CopySyncStateFrom")
+	require.ErrorContains(t, err, "attaching source db")
+
+	got, err := dstDB.GetSyncState("pg_push_marker_id")
+	require.NoError(t, err, "GetSyncState")
+	assert.Equal(t, "safe", got)
+}
+
 func TestCopySessionMetadataFrom(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

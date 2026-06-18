@@ -352,6 +352,8 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 		schema:     schema,
 		schemaDone: true,
 	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
 
 	pending := "tool_call_pending"
 	sess := db.Session{
@@ -371,7 +373,7 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 		t.Helper()
 		tx, err := pg.BeginTx(ctx, nil)
 		require.NoError(t, err, "BeginTx")
-		if err := sync.pushSession(ctx, tx, s); err != nil {
+		if err := sync.pushSession(ctx, tx, s, markerID, nil); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("pushSession: %v", err)
 		}
@@ -435,7 +437,9 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
-	require.NoError(t, sync.pushSession(ctx, tx, remoteSession), "pushSession")
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	require.NoError(t, sync.pushSession(ctx, tx, remoteSession, markerID, nil), "pushSession")
 	require.NoError(t, tx.Commit(), "Commit")
 
 	var got string
@@ -1095,4 +1099,184 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 	assert.Zero(t, res.Errors, "second push should report no failures")
 	assert.Equal(t, "host-b", machine(),
 		"sentinel machine must follow the new fallback")
+}
+
+func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_legacy_marker_machine_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	const markerID = "legacy-marker-1"
+	require.NoError(t, localDB.SetSyncState("pg_push_marker_id", markerID),
+		"seed local push marker")
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "host-b",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "legacy-previous-machine-1"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "host-b",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value)
+		VALUES ($1, $2)
+	`, pushMarkerKeyPrefix+markerID, "host-a")
+	require.NoError(t, err, "seed previous marker machine")
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, sessID, "host-a", "", "proj", "claude")
+	require.NoError(t, err, "seed ownerless legacy session")
+
+	res, err := sync.Push(ctx, true, nil)
+	require.NoError(t, err, "Push")
+	assert.Zero(t, res.Errors, "push should report no failed sessions")
+	assert.Zero(t, res.SkippedConflicts,
+		"previous-marker-machine legacy row should be adopted")
+	assert.Equal(t, 1, res.SessionsPushed,
+		"legacy row should be counted as pushed")
+
+	var machine, ownerMarker string
+	require.NoError(t, pg.QueryRow(
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sessID,
+	).Scan(&machine, &ownerMarker), "reading adopted row")
+	assert.Equal(t, "host-b", machine)
+	assert.Equal(t, markerID, ownerMarker)
+
+	var markerMachine string
+	require.NoError(t, pg.QueryRow(
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		pushMarkerKeyPrefix+markerID,
+	).Scan(&markerMachine), "reading marker machine")
+	assert.Equal(t, "host-b", markerMachine)
+
+	var aliases string
+	require.NoError(t, pg.QueryRow(
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		pushMarkerMachineAliasesKeyPrefix+markerID,
+	).Scan(&aliases), "reading marker aliases")
+	assert.JSONEq(t, `["host-a"]`, aliases)
+
+	const laterSessID = "legacy-previous-machine-2"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           laterSessID,
+		Project:      "proj",
+		Machine:      "host-b",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession later legacy row")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     laterSessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "later",
+		ContentLength: 5,
+	}}), "InsertMessages later legacy row")
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, laterSessID, "host-a", "", "proj", "claude")
+	require.NoError(t, err, "seed later ownerless legacy session")
+
+	res, err = sync.Push(ctx, true, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failed sessions")
+	assert.Zero(t, res.SkippedConflicts,
+		"preserved marker alias should adopt later legacy row")
+
+	require.NoError(t, pg.QueryRow(
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`,
+		laterSessID,
+	).Scan(&machine, &ownerMarker), "reading later adopted row")
+	assert.Equal(t, "host-b", machine)
+	assert.Equal(t, markerID, ownerMarker)
+}
+
+func TestPushReportsSkippedConflicts(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_skipped_conflicts_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "machine-b",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "conflict-001"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "machine-b",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, sessID, "machine-a", "other-owner", "proj", "claude")
+	require.NoError(t, err, "insert conflicting owner")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+	assert.Zero(t, res.Errors, "push should not report failed sessions")
+	assert.Zero(t, res.SessionsPushed, "conflicting session should not be counted as pushed")
+	assert.Equal(t, 1, res.SkippedConflicts, "skipped conflicts should be observable in PushResult")
 }

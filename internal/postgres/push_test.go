@@ -28,8 +28,18 @@ func (s syncStateReaderStub) SetSyncState(
 	return nil
 }
 
+func (s syncStateReaderStub) GetOrCreateSyncState(
+	key, defaultValue string,
+) (string, error) {
+	if s.value != "" || s.err != nil {
+		return s.value, s.err
+	}
+	return defaultValue, nil
+}
+
 type syncStateStoreStub struct {
-	values map[string]string
+	values      map[string]string
+	createValue string
 }
 
 func (s *syncStateStoreStub) GetSyncState(
@@ -46,6 +56,38 @@ func (s *syncStateStoreStub) SetSyncState(
 	}
 	s.values[key] = value
 	return nil
+}
+
+func (s *syncStateStoreStub) GetOrCreateSyncState(
+	key, defaultValue string,
+) (string, error) {
+	if s.values == nil {
+		s.values = make(map[string]string)
+	}
+	if value := s.values[key]; value != "" {
+		return value, nil
+	}
+	if s.createValue != "" {
+		s.values[key] = s.createValue
+		return s.createValue, nil
+	}
+	s.values[key] = defaultValue
+	return defaultValue, nil
+}
+
+func TestPushMarkerIDReturnsInsertWinner(t *testing.T) {
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+	require.NoError(t, local.SetSyncState(pushMarkerIDStateKey, "winner-marker"))
+	sync := &Sync{local: local}
+
+	got, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	assert.Equal(t, "winner-marker", got)
+	stored, err := local.GetSyncState(pushMarkerIDStateKey)
+	require.NoError(t, err, "GetSyncState")
+	assert.Equal(t, "winner-marker", stored)
 }
 
 func TestReadPushBoundaryStateValidity(t *testing.T) {
@@ -126,7 +168,7 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 
-	fp1 := sessionPushFingerprint(base, base.Machine, "")
+	fp1 := sessionPushFingerprint(base, base.Machine, "", "")
 
 	tests := []struct {
 		name   string
@@ -191,13 +233,13 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			modified := tc.modify(base)
-			fp2 := sessionPushFingerprint(modified, modified.Machine, "")
+			fp2 := sessionPushFingerprint(modified, modified.Machine, "", "")
 			require.NotEqual(t, fp1, fp2,
 				"fingerprint should differ after %s", tc.name)
 		})
 	}
 
-	assert.Equal(t, fp1, sessionPushFingerprint(base, base.Machine, ""),
+	assert.Equal(t, fp1, sessionPushFingerprint(base, base.Machine, "", ""),
 		"identical sessions should produce identical fingerprints")
 }
 
@@ -214,8 +256,8 @@ func TestSessionPushFingerprintIncludesUsageEventFingerprint(
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 
-	withoutUsage := sessionPushFingerprint(base, base.Machine, "")
-	withUsage := sessionPushFingerprint(base, base.Machine, "usage-fp")
+	withoutUsage := sessionPushFingerprint(base, base.Machine, "", "")
+	withUsage := sessionPushFingerprint(base, base.Machine, "usage-fp", "")
 	assert.NotEqual(t, withoutUsage, withUsage,
 		"usage event fingerprint should affect session fingerprint")
 }
@@ -229,9 +271,9 @@ func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	fpA := sessionPushFingerprint(
-		sentinel, pushedSessionMachine(sentinel, "host-a"), "")
+		sentinel, pushedSessionMachine(sentinel, "host-a"), "", "")
 	fpB := sessionPushFingerprint(
-		sentinel, pushedSessionMachine(sentinel, "host-b"), "")
+		sentinel, pushedSessionMachine(sentinel, "host-b"), "", "")
 	assert.NotEqual(t, fpA, fpB,
 		"sentinel session fingerprint must change with the fallback machine")
 
@@ -243,9 +285,9 @@ func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	fp1 := sessionPushFingerprint(
-		real, pushedSessionMachine(real, "host-a"), "")
+		real, pushedSessionMachine(real, "host-a"), "", "")
 	fp2 := sessionPushFingerprint(
-		real, pushedSessionMachine(real, "host-b"), "")
+		real, pushedSessionMachine(real, "host-b"), "", "")
 	assert.Equal(t, fp1, fp2,
 		"a session with a real machine ignores the fallback")
 }
@@ -303,8 +345,8 @@ func TestSessionPushFingerprintNoFieldCollisions(
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	assert.NotEqual(t,
-		sessionPushFingerprint(s1, s1.Machine, ""),
-		sessionPushFingerprint(s2, s2.Machine, ""),
+		sessionPushFingerprint(s1, s1.Machine, "", ""),
+		sessionPushFingerprint(s2, s2.Machine, "", ""),
 		"length-prefixed fingerprints should not collide")
 }
 
@@ -385,7 +427,7 @@ func TestFinalizePushStateMergesPriorFingerprints(
 	require.NoError(t, finalizePushState(
 		store, cutoff, cycle2Sessions,
 		priorFingerprints,
-		map[string]string{"sess-002": sessionPushFingerprint(cycle2Sessions[0], cycle2Sessions[0].Machine, "")},
+		map[string]string{"sess-002": sessionPushFingerprint(cycle2Sessions[0], cycle2Sessions[0].Machine, "", "")},
 	))
 
 	raw := store.values[lastPushBoundaryStateKey]
