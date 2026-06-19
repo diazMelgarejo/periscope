@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
@@ -63,6 +64,49 @@ func newSessionExportCommand() *cobra.Command {
 					"source file not found for session %s", id,
 				)
 			}
+			// Aider stores many repo runs in one Markdown history file,
+			// with sessions keyed by a <history>#<idx> virtual path.
+			// Export only the selected run, not sibling runs from the
+			// same repository.
+			if historyPath, idx, ok :=
+				parser.ParseAiderVirtualPath(storedPath); ok {
+				rawID, ok := rawAiderSessionID(id)
+				if !ok {
+					return fmt.Errorf(
+						"stale aider source for session %s: invalid aider session id",
+						id,
+					)
+				}
+				if got, ok := parser.AiderRawIDAt(historyPath, idx); !ok || got != rawID {
+					if _, statErr := os.Stat(historyPath); statErr != nil {
+						if os.IsNotExist(statErr) {
+							return fmt.Errorf(
+								"source file not found: %s", historyPath,
+							)
+						}
+						return statErr
+					}
+					resolved, found := parser.AiderVirtualPathForRawID(
+						historyPath, rawID,
+					)
+					if !found {
+						return fmt.Errorf(
+							"stale aider source for session %s: %s no longer contains the archived run",
+							id, historyPath,
+						)
+					}
+					historyPath, idx, _ = parser.ParseAiderVirtualPath(resolved)
+				}
+				err := parser.WriteAiderRunMarkdown(
+					cmd.OutOrStdout(), historyPath, idx,
+				)
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf(
+						"source file not found: %s", historyPath,
+					)
+				}
+				return err
+			}
 			// A Visual Studio Copilot trace file holds spans for several
 			// conversations, so streaming the whole file would disclose
 			// unrelated conversations. Filter to the requested conversation.
@@ -93,4 +137,14 @@ func newSessionExportCommand() *cobra.Command {
 			return err
 		},
 	}
+}
+
+func rawAiderSessionID(sessionID string) (string, bool) {
+	def, ok := parser.AgentByPrefix(sessionID)
+	if !ok || def.Type != parser.AgentAider {
+		return "", false
+	}
+	_, rawID := parser.StripHostPrefix(sessionID)
+	rawID = strings.TrimPrefix(rawID, def.IDPrefix)
+	return rawID, rawID != ""
 }

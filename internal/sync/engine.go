@@ -1153,6 +1153,22 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// aider: <aiderRoot>/.../.aider.chat.history.md (rootless; any depth
+	// under the configured root).
+	if filepath.Base(path) == parser.AiderHistoryFileName() {
+		for _, aiderDir := range e.agentDirs[parser.AgentAider] {
+			if aiderDir == "" {
+				continue
+			}
+			if _, ok := isUnder(aiderDir, path); ok {
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: parser.AgentAider,
+				}, true
+			}
+		}
+	}
+
 	// Command Code: <projectsDir>/<slugified-cwd>/<session>.jsonl
 	for _, commandCodeDir := range e.agentDirs[parser.AgentCommandCode] {
 		if commandCodeDir == "" {
@@ -3935,6 +3951,10 @@ func (e *Engine) processFile(
 			statPath = dbPath
 		} else if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
 			statPath = tracePath
+		} else if historyPath, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
+			// aider stores "<historyFile>#<runIdx>"; stat the physical file
+			// so SyncSingleSession (live watcher / on-demand re-sync) works.
+			statPath = historyPath
 		}
 		info, err = os.Stat(statPath)
 	}
@@ -4055,6 +4075,8 @@ func (e *Engine) processFile(
 		res = e.processQwenPaw(file, info)
 	case parser.AgentGptme:
 		res = e.processGptme(file, info)
+	case parser.AgentAider:
+		res = e.processAider(file, info)
 	default:
 		res = processResult{
 			err: fmt.Errorf(
@@ -4105,6 +4127,16 @@ func (e *Engine) shouldCacheSkip(
 		}
 		if _, _, ok :=
 			parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentAider {
+		// A virtual aider path ("<historyFile>#<runIdx>") resolves to one
+		// run inside a shared physical file; let processAider own it so the
+		// generic per-file mtime cache cannot stand in for the per-run parse.
+		// The physical history file itself keeps the generic mtime skip: any
+		// write bumps the file mtime and re-parses every run.
+		if _, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
 			return false
 		}
 	}
@@ -5950,6 +5982,126 @@ func (e *Engine) processGptme(
 		results: []parser.ParseResult{
 			{Session: *sess, Messages: msgs},
 		},
+	}
+}
+
+// aiderFileUnchanged reports whether a physical aider history file is
+// unchanged since the last sync. Aider sessions are stored under virtual
+// "<history>#<idx>" paths, so the generic shouldSkipByPath (which looks the
+// physical path up in the DB) never matches and would re-parse, re-hash, and
+// re-write every run on every full/periodic sync. Mirror the per-virtual-path
+// skip the other multi-session agents use (cf. kiroSQLitePendingSessionIDs).
+//
+// The whole file is skipped only when EVERY expected run row is known
+// current: each run meta's virtual path must have a stored row whose size and
+// mtime match this file's and whose data version is current. Size is checked
+// alongside mtime so a same-mtime append/truncate is not wrongly skipped. If
+// any run row is missing (e.g. a previous batch wrote only some runs, or a new run was
+// appended whose row does not exist yet) or stale (an older data version, or
+// resynced after a data-version bump while siblings were not), the file is
+// re-parsed so the remaining sessions are repaired. Skipping on the first
+// matching row would strand those runs forever. A run-less or unreadable
+// file is treated as changed (never skipped) so it is retried.
+func (e *Engine) aiderFileUnchanged(path string, info os.FileInfo) bool {
+	metas, err := parser.ListAiderRunMetas(path)
+	if err != nil || len(metas) == 0 {
+		return false
+	}
+	mtime := info.ModTime().UnixNano()
+	size := info.Size()
+	current := db.CurrentDataVersion()
+	expected := 0
+	for _, m := range metas {
+		// Header-only runs produce no session row, so the fan-out never
+		// writes one for them; do not expect a stored row.
+		if !m.HasMessages {
+			continue
+		}
+		expected++
+		lookupPath := m.VirtualPath
+		if e.pathRewriter != nil {
+			lookupPath = e.pathRewriter(lookupPath)
+		}
+		storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+		if !ok || storedSize != size || storedMtime != mtime ||
+			e.db.GetDataVersionByPath(lookupPath) < current {
+			// This run is missing or stale: do not skip the file, so the
+			// fan-out re-parses and repairs every run. The size is compared
+			// alongside mtime so a same-mtime append/truncate (which leaves
+			// new or removed runs unsynced) is never wrongly skipped.
+			return false
+		}
+	}
+	// Skip only when at least one run was expected and all expected run rows
+	// are current. A file whose runs all lack turns produces no sessions, so
+	// there is nothing to skip-and-strand; re-parse it (cheap, capped read).
+	return expected > 0
+}
+
+// aiderIdentityPath returns the canonical history-file path used to derive
+// stable aider session IDs. During remote SSH sync the file is read from a
+// random temp extraction dir, so hashing the on-disk path would re-key the
+// run on every sync; rewriting it to its canonical remote path keeps the ID
+// stable. Returns "" for local sync (no pathRewriter), which makes the
+// parser fall back to the on-disk path -- the original local behavior.
+func (e *Engine) aiderIdentityPath(historyPath string) string {
+	if e.pathRewriter == nil {
+		return ""
+	}
+	return e.pathRewriter(historyPath)
+}
+
+func (e *Engine) processAider(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	// Virtual path "<historyFile>#<runIdx>": parse that one run only. Used
+	// when re-syncing a single session by its source path.
+	if historyPath, idx, ok := parser.ParseAiderVirtualPath(file.Path); ok {
+		sess, msgs, err := parser.ParseAiderRunWithID(
+			historyPath, e.aiderIdentityPath(historyPath), idx, e.machine,
+		)
+		if err != nil {
+			return processResult{err: err}
+		}
+		if sess == nil {
+			return processResult{}
+		}
+		if hash, err := ComputeFileHash(historyPath); err == nil {
+			sess.File.Hash = hash
+		}
+		return processResult{
+			results:      []parser.ParseResult{{Session: *sess, Messages: msgs}},
+			forceReplace: true,
+		}
+	}
+
+	// parse-diff: !e.forceParse disables the stored-state skip so a forced
+	// reparse re-reads already-synced aider files instead of skipping them.
+	if !e.forceParse && e.aiderFileUnchanged(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	// Physical history file: fan it out into one session per run. The file
+	// is read and split once. The whole file shares one content hash, so
+	// any write re-parses every run (acceptable: aider history is
+	// append-mostly and a single capped read).
+	results, err := parser.ParseAiderRunsWithID(
+		file.Path, e.aiderIdentityPath(file.Path), e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if len(results) == 0 {
+		return processResult{}
+	}
+	if hash, err := ComputeFileHash(file.Path); err == nil {
+		for i := range results {
+			results[i].Session.File.Hash = hash
+		}
+	}
+	return processResult{
+		results:      results,
+		forceReplace: true,
 	}
 }
 
@@ -8005,6 +8157,8 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 		}
 	}
 
+	bareID := strings.TrimPrefix(rawID, def.IDPrefix)
+
 	// Prefer stored file_path — it's authoritative and handles
 	// cases where the session ID doesn't match the filename.
 	// Resolve virtual paths (e.g. Visual Studio Copilot's
@@ -8012,12 +8166,20 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	// return the stored path so downstream parsing stays scoped to
 	// the requested conversation rather than the whole trace file.
 	if fp := e.db.GetSessionFilePath(sessionID); fp != "" {
-		if _, err := os.Stat(parser.ResolveSourceFilePath(fp)); err == nil {
+		if historyPath, idx, ok := parser.ParseAiderVirtualPath(fp); ok {
+			// aider's stored "<historyPath>#<idx>" is positional: an
+			// inserted or removed earlier run shifts the index onto a
+			// different session. Only trust the stored path when run idx
+			// still recomputes to the requested raw ID; otherwise fall
+			// through to FindSourceFunc, which re-resolves by raw ID.
+			if got, ok := parser.AiderRawIDAt(historyPath, idx); ok && got == bareID {
+				return fp
+			}
+		} else if _, err := os.Stat(parser.ResolveSourceFilePath(fp)); err == nil {
 			return fp
 		}
 	}
 
-	bareID := strings.TrimPrefix(rawID, def.IDPrefix)
 	for _, d := range e.agentDirs[def.Type] {
 		if f := def.FindSourceFunc(d, bareID); f != "" {
 			return f
