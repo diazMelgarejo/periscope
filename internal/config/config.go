@@ -384,6 +384,26 @@ func LoadMinimal() (Config, error) {
 	return cfg, nil
 }
 
+// LoadReadOnly builds a Config from defaults, env, and config.toml without
+// writing config migrations or generated secrets. Use it for diagnostic
+// commands that must not mutate user state.
+func LoadReadOnly() (Config, error) {
+	cfg, err := Default()
+	if err != nil {
+		return cfg, err
+	}
+	cfg.loadEnv()
+
+	if err := cfg.loadFileReadOnly(); err != nil {
+		return cfg, fmt.Errorf("loading config file: %w", err)
+	}
+	if err := finalize(&cfg); err != nil {
+		return cfg, err
+	}
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	return cfg, nil
+}
+
 func (c *Config) configPath() string {
 	return filepath.Join(c.DataDir, "config.toml")
 }
@@ -429,15 +449,59 @@ func (c *Config) migrateJSONToTOML() error {
 }
 
 func (c *Config) loadFile() error {
-	if err := c.migrateJSONToTOML(); err != nil {
-		return err
+	return c.loadFileWithMigration(true)
+}
+
+func (c *Config) loadFileReadOnly() error {
+	return c.loadFileWithMigration(false)
+}
+
+func (c *Config) loadFileWithMigration(migrate bool) error {
+	if migrate {
+		if err := c.migrateJSONToTOML(); err != nil {
+			return err
+		}
 	}
 
 	path := c.configPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
+		if migrate {
+			return nil
+		}
+		return c.loadLegacyJSONReadOnly()
+	} else if err != nil {
+		return fmt.Errorf("checking config: %w", err)
 	}
 
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+	return c.applyConfigTOML(string(data))
+}
+
+func (c *Config) loadLegacyJSONReadOnly() error {
+	data, err := os.ReadFile(c.jsonConfigPath())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading config.json: %w", err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return fmt.Errorf("parsing config.json: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
+		return fmt.Errorf("encoding config.json: %w", err)
+	}
+	return c.applyConfigTOML(buf.String())
+}
+
+func (c *Config) applyConfigTOML(data string) error {
 	var file struct {
 		GithubToken                    string                     `toml:"github_token"`
 		CursorSecret                   string                     `toml:"cursor_secret"`
@@ -459,7 +523,7 @@ func (c *Config) loadFile() error {
 		CustomModelPricing             map[string]CustomModelRate `toml:"custom_model_pricing"`
 		RemoteHosts                    []RemoteHost               `toml:"remote_hosts"`
 	}
-	meta, err := toml.DecodeFile(path, &file)
+	meta, err := toml.Decode(data, &file)
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
@@ -578,7 +642,7 @@ func (c *Config) loadFile() error {
 	// Parse config-file dir arrays for agents that have a
 	// ConfigKey. Only apply when not already set by env var.
 	var raw map[string]any
-	if _, err := toml.DecodeFile(path, &raw); err != nil {
+	if _, err := toml.Decode(data, &raw); err != nil {
 		return fmt.Errorf("parsing config raw: %w", err)
 	}
 	for _, def := range parser.Registry {
