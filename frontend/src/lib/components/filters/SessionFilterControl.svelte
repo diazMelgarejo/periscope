@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
+  import { hasSessionRouteDateIntent } from "../../stores/sessionRouteParams.js";
   import { starred } from "../../stores/starred.svelte.js";
   import {
     agentColor,
@@ -111,11 +113,15 @@
   function clearFilters() {
     onClearGroupMode?.();
     onClearExtra?.();
+    const clearDateYoke = hasSessionRouteDateIntent(
+      router.route,
+      router.params,
+    );
     if (sessions.hasActiveFilters && starred.filterOnly) {
       if (showStarred) starred.filterOnly = false;
-      sessions.clearSessionFilters();
+      sessions.clearSessionFilters({ clearDateYoke });
     } else if (sessions.hasActiveFilters) {
-      sessions.clearSessionFilters();
+      sessions.clearSessionFilters({ clearDateYoke });
     } else if (showStarred && starred.filterOnly) {
       starred.filterOnly = false;
       sessions.load();
