@@ -4142,10 +4142,14 @@ func (e *Engine) processFile(
 		cachedMtime, cached := e.skipCache[file.Path]
 		e.skipMu.RUnlock()
 		if cached && cachedMtime == mtime {
-			return processResult{
-				skip:      true,
-				mtime:     mtime,
-				cacheSkip: true,
+			if e.pathNeedsProjectReparse(file.Path) {
+				e.clearSkip(file.Path)
+			} else {
+				return processResult{
+					skip:      true,
+					mtime:     mtime,
+					cacheSkip: true,
+				}
 			}
 		}
 	}
@@ -4232,6 +4236,18 @@ func (e *Engine) processFile(
 	res.cacheSkip = cacheSkip
 	res.mtime = mtime
 	return res
+}
+
+func (e *Engine) pathNeedsProjectReparse(path string) bool {
+	if e == nil || e.db == nil {
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	project, ok := e.db.GetProjectByPath(lookupPath)
+	return ok && parser.NeedsProjectReparse(project)
 }
 
 func (e *Engine) shouldCacheSkip(
@@ -4794,6 +4810,10 @@ func (e *Engine) shouldSkipCodex(
 	if !ok || storedSize != info.Size() {
 		return false
 	}
+	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
+		parser.NeedsProjectReparse(project) {
+		return false
+	}
 	if e.db.GetDataVersionByPath(lookupPath) <
 		db.CurrentDataVersion() {
 		return false
@@ -4970,7 +4990,7 @@ func (e *Engine) processCodex(
 		return processResult{skip: true}
 	}
 
-	indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
+	projectNeedsReparse := e.pathNeedsProjectReparse(file.Path)
 	forceReplace := false
 
 	codexParseFn := func(
@@ -4983,14 +5003,17 @@ func (e *Engine) processCodex(
 	if res, ok := e.tryIncrementalJSONL(
 		file, info, parser.AgentCodex, codexParseFn,
 	); ok {
-		if !indexMtimeChanged {
-			return res
+		if !projectNeedsReparse {
+			indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
+			if !indexMtimeChanged {
+				return res
+			}
+			// The index title changed, so a full parse still needs to refresh
+			// session metadata. Keep any fallback signal discovered while probing
+			// appended bytes so existing rows rewritten by the full parse are not
+			// dropped by the append-only write path.
+			forceReplace = res.forceReplace
 		}
-		// The index title changed, so a full parse still needs to refresh
-		// session metadata. Keep any fallback signal discovered while probing
-		// appended bytes so existing rows rewritten by the full parse are not
-		// dropped by the append-only write path.
-		forceReplace = res.forceReplace
 	} else {
 		forceReplace = res.forceReplace
 	}
