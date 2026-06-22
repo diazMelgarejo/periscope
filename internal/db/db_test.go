@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -23,6 +24,112 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func reflectedFieldValue(v any, name string) reflect.Value {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return reflect.Value{}
+		}
+		rv = rv.Elem()
+	}
+	if !rv.IsValid() || rv.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	return rv.FieldByName(name)
+}
+
+func reflectedIntField(v any, name string) int {
+	f := reflectedFieldValue(v, name)
+	if !f.IsValid() || f.Kind() != reflect.Int {
+		return 0
+	}
+	return int(f.Int())
+}
+
+func reflectedStringField(v any, name string) string {
+	f := reflectedFieldValue(v, name)
+	if !f.IsValid() {
+		return ""
+	}
+	switch f.Kind() {
+	case reflect.String:
+		return f.String()
+	case reflect.Pointer:
+		if !f.IsNil() && f.Elem().Kind() == reflect.String {
+			return f.Elem().String()
+		}
+	}
+	return ""
+}
+
+func callUpdateSessionIncrementalCompat(
+	t *testing.T,
+	d *DB,
+	id string,
+	endedAt *string,
+	msgCount, userMsgCount int,
+	fileSize, fileMtime int64,
+	nextOrdinal int,
+	lastEntryUUID string,
+	totalOutputTokens, peakContextTokens int,
+	hasTotalOutputTokens, hasPeakContextTokens bool,
+) error {
+	t.Helper()
+
+	updateMethod := reflect.ValueOf(d).MethodByName("UpdateSessionIncremental")
+	require.True(t, updateMethod.IsValid(), "UpdateSessionIncremental")
+	if updateMethod.Type().NumIn() == 2 &&
+		updateMethod.Type().In(1).Kind() == reflect.Struct {
+		update := reflect.New(updateMethod.Type().In(1)).Elem()
+		if f := update.FieldByName("EndedAt"); f.IsValid() {
+			if endedAt == nil {
+				f.Set(reflect.Zero(f.Type()))
+			} else {
+				f.Set(reflect.ValueOf(endedAt))
+			}
+		}
+		update.FieldByName("MsgCount").SetInt(int64(msgCount))
+		update.FieldByName("UserMsgCount").SetInt(int64(userMsgCount))
+		update.FieldByName("FileSize").SetInt(fileSize)
+		update.FieldByName("FileMtime").SetInt(fileMtime)
+		if f := update.FieldByName("NextOrdinal"); f.IsValid() {
+			f.SetInt(int64(nextOrdinal))
+		}
+		if f := update.FieldByName("LastEntryUUID"); f.IsValid() {
+			f.SetString(lastEntryUUID)
+		}
+		update.FieldByName("TotalOutputTokens").SetInt(int64(totalOutputTokens))
+		update.FieldByName("PeakContextTokens").SetInt(int64(peakContextTokens))
+		update.FieldByName("HasTotalOutputTokens").SetBool(hasTotalOutputTokens)
+		update.FieldByName("HasPeakContextTokens").SetBool(hasPeakContextTokens)
+		results := updateMethod.Call([]reflect.Value{
+			reflect.ValueOf(id),
+			update,
+		})
+		if results[0].IsNil() {
+			return nil
+		}
+		return results[0].Interface().(error)
+	}
+
+	results := updateMethod.Call([]reflect.Value{
+		reflect.ValueOf(id),
+		reflect.ValueOf(endedAt),
+		reflect.ValueOf(msgCount),
+		reflect.ValueOf(userMsgCount),
+		reflect.ValueOf(fileSize),
+		reflect.ValueOf(fileMtime),
+		reflect.ValueOf(totalOutputTokens),
+		reflect.ValueOf(peakContextTokens),
+		reflect.ValueOf(hasTotalOutputTokens),
+		reflect.ValueOf(hasPeakContextTokens),
+	})
+	if results[0].IsNil() {
+		return nil
+	}
+	return results[0].Interface().(error)
+}
 
 const blockingCloseDriverName = "agentsview-blocking-close"
 
@@ -589,8 +696,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionCodexOpenCodeCwd(t *testing.T) {
-	assert.Equal(t, 48, CurrentDataVersion(),
-		"Codex and OpenCode cwd parsing requires a data version bump")
+	assert.Equal(t, 49, CurrentDataVersion(),
+		"incremental resume metadata requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
@@ -5135,6 +5242,8 @@ func TestGetSessionForIncremental(t *testing.T) {
 		require.True(t, ok, "expected to find session")
 		assert.Equal(t, "codex:inc-test", info.ID, "ID")
 		assert.Equal(t, int64(4096), info.FileSize, "FileSize")
+		assert.Equal(t, 0, reflectedIntField(info, "NextOrdinal"), "NextOrdinal")
+		assert.Equal(t, "", reflectedStringField(info, "LastEntryUUID"), "LastEntryUUID")
 		assert.Equal(t, 5, info.MsgCount, "MsgCount")
 		assert.Equal(t, 2, info.UserMsgCount, "UserMsgCount")
 		assert.Equal(t, 500, info.TotalOutputTokens, "TotalOutputTokens")
@@ -5185,17 +5294,29 @@ func TestGetSessionForIncremental(t *testing.T) {
 		assert.True(t, info.HasTotalOutputTokens, "HasTotalOutputTokens = false, want true")
 		assert.True(t, info.HasPeakContextTokens, "HasPeakContextTokens = false, want true")
 
-		err = d.UpdateSessionIncremental(
-			info.ID, nil, info.MsgCount+1, info.UserMsgCount,
-			info.FileSize+256, 200,
-			info.TotalOutputTokens+50, info.PeakContextTokens,
-			info.HasTotalOutputTokens, info.HasPeakContextTokens,
+		err = callUpdateSessionIncrementalCompat(
+			t,
+			d,
+			info.ID,
+			nil,
+			info.MsgCount+1,
+			info.UserMsgCount,
+			info.FileSize+256,
+			200,
+			3,
+			"entry-3",
+			info.TotalOutputTokens+50,
+			info.PeakContextTokens,
+			info.HasTotalOutputTokens,
+			info.HasPeakContextTokens,
 		)
 		requireNoError(t, err, "UpdateSessionIncremental legacy")
 
 		got, err := d.GetSessionFull(context.Background(), info.ID)
 		requireNoError(t, err, "GetSessionFull legacy")
 		require.NotNil(t, got, "legacy session missing after incremental")
+		assert.Equal(t, 3, reflectedIntField(got, "NextOrdinal"), "NextOrdinal")
+		assert.Equal(t, "entry-3", reflectedStringField(got, "LastEntryUUID"), "LastEntryUUID")
 		assert.True(t, got.HasTotalOutputTokens, "stored HasTotalOutputTokens = false, want true")
 		assert.True(t, got.HasPeakContextTokens, "stored HasPeakContextTokens = false, want true")
 	})
@@ -5229,8 +5350,21 @@ func TestUpdateSessionIncremental(t *testing.T) {
 
 	// Incremental update: bump counts and file metadata.
 	ended := "2024-01-15T10:30:00Z"
-	err := d.UpdateSessionIncremental(
-		"inc-update", &ended, 7, 3, 2048, 200, 500, 1600, true, true,
+	err := callUpdateSessionIncrementalCompat(
+		t,
+		d,
+		"inc-update",
+		&ended,
+		7,
+		3,
+		2048,
+		200,
+		9,
+		"uuid-9",
+		500,
+		1600,
+		true,
+		true,
 	)
 	requireNoError(t, err, "incremental update")
 
@@ -5245,6 +5379,8 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	assert.Equal(t, ended, *got.EndedAt, "EndedAt")
 	require.NotNil(t, got.FileSize, "FileSize nil")
 	assert.Equal(t, int64(2048), *got.FileSize, "FileSize")
+	assert.Equal(t, 9, reflectedIntField(got, "NextOrdinal"), "NextOrdinal")
+	assert.Equal(t, "uuid-9", reflectedStringField(got, "LastEntryUUID"), "LastEntryUUID")
 	assert.Equal(t, 500, got.TotalOutputTokens, "TotalOutputTokens")
 	assert.Equal(t, 1600, got.PeakContextTokens, "PeakContextTokens")
 	assert.True(t, got.HasTotalOutputTokens, "HasTotalOutputTokens = false, want true")
@@ -5261,6 +5397,74 @@ func TestUpdateSessionIncremental(t *testing.T) {
 		"RelationshipType cleared")
 	require.NotNil(t, got.FileHash, "FileHash cleared")
 	assert.Equal(t, "abc123", *got.FileHash, "FileHash")
+}
+
+func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "atomic-target", "proj")
+
+	_, err := d.getWriter().Exec(`
+		CREATE TRIGGER sessions_incremental_atomicity_abort
+		BEFORE UPDATE ON sessions
+		WHEN NEW.id = 'atomic-target'
+		BEGIN
+			SELECT RAISE(FAIL, 'atomicity proof trigger');
+		END;
+	`)
+	require.NoError(t, err, "create trigger")
+
+	msgsToWrite := []Message{asstMsg("atomic-target", 0, "should rollback")}
+	writeMethod := reflect.ValueOf(d).MethodByName("WriteSessionIncremental")
+	if writeMethod.IsValid() {
+		update := reflect.New(writeMethod.Type().In(2)).Elem()
+		update.FieldByName("MsgCount").SetInt(1)
+		update.FieldByName("UserMsgCount").SetInt(0)
+		update.FieldByName("FileSize").SetInt(128)
+		update.FieldByName("FileMtime").SetInt(10)
+		if f := update.FieldByName("NextOrdinal"); f.IsValid() {
+			f.SetInt(1)
+		}
+		results := writeMethod.Call([]reflect.Value{
+			reflect.ValueOf("atomic-target"),
+			reflect.ValueOf(msgsToWrite),
+			update,
+		})
+		if !results[0].IsNil() {
+			err = results[0].Interface().(error)
+		} else {
+			err = nil
+		}
+	} else {
+		err = d.InsertMessages(msgsToWrite)
+		require.NoError(t, err, "InsertMessages before non-atomic update")
+
+		updateMethod := reflect.ValueOf(d).MethodByName("UpdateSessionIncremental")
+		require.True(t, updateMethod.IsValid(), "UpdateSessionIncremental")
+		results := updateMethod.Call([]reflect.Value{
+			reflect.ValueOf("atomic-target"),
+			reflect.Zero(updateMethod.Type().In(1)),
+			reflect.ValueOf(1),
+			reflect.ValueOf(0),
+			reflect.ValueOf(int64(128)),
+			reflect.ValueOf(int64(10)),
+			reflect.ValueOf(0),
+			reflect.ValueOf(0),
+			reflect.ValueOf(false),
+			reflect.ValueOf(false),
+		})
+		if !results[0].IsNil() {
+			err = results[0].Interface().(error)
+		} else {
+			err = nil
+		}
+	}
+	require.Error(t, err, "expected session update trigger to fail")
+
+	msgs, getErr := d.GetMessages(
+		context.Background(), "atomic-target", 0, 10, true,
+	)
+	require.NoError(t, getErr, "GetMessages")
+	assert.Empty(t, msgs, "message rows should roll back with session metadata failure")
 }
 
 func TestSyncState_GetSetRoundtrip(t *testing.T) {

@@ -3911,6 +3911,8 @@ type incrementalUpdate struct {
 	userMsgCount         int // total (old + new)
 	fileSize             int64
 	fileMtime            int64
+	nextOrdinal          int
+	lastEntryUUID        string
 	totalOutputTokens    int // absolute (old + new)
 	peakContextTokens    int // absolute max(old, new)
 	hasTotalOutputTokens bool
@@ -4462,7 +4464,7 @@ func (e *Engine) processCowork(
 // error. The consumed count covers only complete, valid JSON
 // lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
-	path string, offset int64, startOrdinal int,
+	path string, offset int64, startOrdinal int, lastEntryUUID string,
 ) ([]parser.ParsedMessage, time.Time, int64, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
@@ -4517,6 +4519,14 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
+	// A prior sync that stored no message rows has no safe append
+	// boundary. Rewritten files can grow in place and keep the same
+	// identity, which makes a full-file replacement look like an
+	// append from the old file_size offset.
+	if inc.MsgCount == 0 {
+		return processResult{}, false
+	}
+
 	// If the file was replaced (different inode/device), fall
 	// back to a full parse so we don't append on top of stale
 	// state. Only check when both sides have a known identity
@@ -4538,13 +4548,8 @@ func (e *Engine) tryIncrementalJSONL(
 		}
 	}
 
-	maxOrd := e.db.MaxOrdinal(inc.ID)
-	if maxOrd < 0 {
-		return processResult{}, false
-	}
-
 	newMsgs, endedAt, consumed, err := parseFn(
-		file.Path, inc.FileSize, maxOrd+1,
+		file.Path, inc.FileSize, inc.NextOrdinal, inc.LastEntryUUID,
 	)
 	if err != nil {
 		if parser.IsIncrementalFullParseFallback(err) {
@@ -4588,6 +4593,8 @@ func (e *Engine) tryIncrementalJSONL(
 					userMsgCount:         inc.UserMsgCount,
 					fileSize:             newOffset,
 					fileMtime:            info.ModTime().UnixNano(),
+					nextOrdinal:          inc.NextOrdinal,
+					lastEntryUUID:        inc.LastEntryUUID,
 					totalOutputTokens:    inc.TotalOutputTokens,
 					peakContextTokens:    inc.PeakContextTokens,
 					hasTotalOutputTokens: inc.HasTotalOutputTokens,
@@ -4625,6 +4632,8 @@ func (e *Engine) tryIncrementalJSONL(
 	}
 
 	newUserCount := countUserMsgs(newMsgs)
+	nextOrdinal := nextParsedOrdinal(inc.NextOrdinal, newMsgs)
+	lastEntryUUID := lastParsedSourceUUID(inc.LastEntryUUID, newMsgs)
 
 	log.Printf(
 		"incremental %s %s: %d new message(s) "+
@@ -4657,6 +4666,8 @@ func (e *Engine) tryIncrementalJSONL(
 			userMsgCount:         inc.UserMsgCount + newUserCount,
 			fileSize:             newOffset,
 			fileMtime:            info.ModTime().UnixNano(),
+			nextOrdinal:          nextOrdinal,
+			lastEntryUUID:        lastEntryUUID,
 			totalOutputTokens:    totalOut,
 			peakContextTokens:    peakCtx,
 			hasTotalOutputTokens: hasTotalOut,
@@ -4859,7 +4870,7 @@ func (e *Engine) processCodex(
 	forceReplace := false
 
 	codexParseFn := func(
-		path string, offset int64, startOrd int,
+		path string, offset int64, startOrd int, _ string,
 	) ([]parser.ParsedMessage, time.Time, int64, error) {
 		return parser.ParseCodexSessionFrom(
 			path, offset, startOrd, false,
@@ -7623,26 +7634,25 @@ func (e *Engine) writeIncremental(
 		endedAt = &s
 	}
 
-	// Write messages first — only advance file_size when
-	// the insert succeeds so a failure is retried.
-	if err := e.writeMessages(
-		inc.sessionID, dbMsgs,
+	if err := e.db.WriteSessionIncremental(
+		inc.sessionID,
+		dbMsgs,
+		db.IncrementalSessionUpdate{
+			EndedAt:              endedAt,
+			MsgCount:             msgCount,
+			UserMsgCount:         userMsgCount,
+			FileSize:             inc.fileSize,
+			FileMtime:            inc.fileMtime,
+			NextOrdinal:          inc.nextOrdinal,
+			LastEntryUUID:        inc.lastEntryUUID,
+			TotalOutputTokens:    inc.totalOutputTokens,
+			PeakContextTokens:    inc.peakContextTokens,
+			HasTotalOutputTokens: inc.hasTotalOutputTokens,
+			HasPeakContextTokens: inc.hasPeakContextTokens,
+		},
 	); err != nil {
 		return fmt.Errorf(
-			"incremental messages %s: %w",
-			inc.sessionID, err,
-		)
-	}
-
-	if err := e.db.UpdateSessionIncremental(
-		inc.sessionID, endedAt,
-		msgCount, userMsgCount,
-		inc.fileSize, inc.fileMtime,
-		inc.totalOutputTokens, inc.peakContextTokens,
-		inc.hasTotalOutputTokens, inc.hasPeakContextTokens,
-	); err != nil {
-		return fmt.Errorf(
-			"incremental update %s: %w",
+			"incremental write %s: %w",
 			inc.sessionID, err,
 		)
 	}
@@ -8152,12 +8162,14 @@ func toDBSession(pw pendingWrite) db.Session {
 		// not persist this field; the caller bumps it via
 		// SetSessionDataVersion only after the message
 		// rewrite succeeds.
-		FilePath:   strPtr(pw.sess.File.Path),
-		FileSize:   int64Ptr(pw.sess.File.Size),
-		FileMtime:  int64Ptr(pw.sess.File.Mtime),
-		FileInode:  int64Ptr(pw.sess.File.Inode),
-		FileDevice: int64Ptr(pw.sess.File.Device),
-		FileHash:   strPtr(pw.sess.File.Hash),
+		FilePath:      strPtr(pw.sess.File.Path),
+		FileSize:      int64Ptr(pw.sess.File.Size),
+		FileMtime:     int64Ptr(pw.sess.File.Mtime),
+		NextOrdinal:   nextParsedOrdinal(0, pw.msgs),
+		LastEntryUUID: strPtr(lastParsedSourceUUID("", pw.msgs)),
+		FileInode:     int64Ptr(pw.sess.File.Inode),
+		FileDevice:    int64Ptr(pw.sess.File.Device),
+		FileHash:      strPtr(pw.sess.File.Hash),
 	}
 	if pw.sess.FirstMessage != "" {
 		s.FirstMessage = &pw.sess.FirstMessage
@@ -8262,6 +8274,26 @@ func countUserMsgs(msgs []parser.ParsedMessage) int {
 		}
 	}
 	return n
+}
+
+func nextParsedOrdinal(
+	current int, msgs []parser.ParsedMessage,
+) int {
+	if len(msgs) == 0 {
+		return current
+	}
+	return msgs[len(msgs)-1].Ordinal + 1
+}
+
+func lastParsedSourceUUID(
+	current string, msgs []parser.ParsedMessage,
+) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].SourceUUID != "" {
+			return msgs[i].SourceUUID
+		}
+	}
+	return current
 }
 
 // FindSourceFile locates the original source file for a
