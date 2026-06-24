@@ -15,6 +15,7 @@ import sessionItemSource from "./SessionItem.svelte?raw";
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
 import { starred } from "../../stores/starred.svelte.js";
+import { setLocale } from "../../i18n/index.js";
 import {
   ITEM_HEIGHT,
   OVERSCAN,
@@ -86,6 +87,7 @@ describe("SessionList filter dropdown", () => {
     ]);
     starred.filterOnly = false;
     starred.ids = new Set();
+    setLocale("en");
     localStorage.clear();
   });
 
@@ -140,6 +142,61 @@ describe("SessionList filter dropdown", () => {
     expect(filterButton?.title).toBe("Filter sessions");
     expect(filterButton?.getAttribute("aria-label")).toBe("Filters");
   });
+
+  it("renders translated sidebar filter controls and row actions", async () => {
+    setLocale("zh-CN");
+    sessions.agents = [
+      { name: "claude", session_count: 4 },
+      { name: "codex", session_count: 2 },
+    ];
+    sessions.machines = ["workstation"];
+    sessions.sessions = [
+      makeSession({
+        id: "translated-session",
+        display_name: "Translated row",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const filterButton = document.querySelector<HTMLButtonElement>(
+      ".filter-btn",
+    );
+    expect(filterButton).not.toBeNull();
+    expect(filterButton?.title).toBe("筛选会话");
+    expect(filterButton?.getAttribute("aria-label")).toBe("筛选器");
+
+    filterButton!.click();
+    await tick();
+
+    expect(document.body.textContent).toContain("显示");
+    expect(document.body.textContent).toContain("按 agent 分组");
+    expect(document.body.textContent).toContain("仅显示已固定");
+    expect(document.body.textContent).toContain("最近活跃");
+    expect(document.body.textContent).toContain("隐藏单轮");
+    expect(document.body.textContent).toContain("所有 agents");
+    expect(document.body.textContent).toContain("Machine");
+    expect(document.body.textContent).toContain("最少提示数");
+
+    const row = document.querySelector<HTMLElement>(".session-item");
+    expect(row).not.toBeNull();
+    row!.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 7,
+        clientY: 8,
+      }),
+    );
+    await tick();
+
+    expect(document.body.textContent).toContain("重命名");
+    expect(document.body.textContent).toContain("在新标签页打开");
+    expect(document.body.textContent).toContain("删除");
+  });
 });
 
 describe("SessionList visible hydration", () => {
@@ -174,6 +231,7 @@ describe("SessionList visible hydration", () => {
     ]);
     starred.filterOnly = false;
     starred.ids = new Set();
+    setLocale("en");
     localStorage.clear();
   });
 
