@@ -147,6 +147,33 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events (occurred_at);
 
+CREATE TABLE IF NOT EXISTS cursor_usage_events (
+    id BIGSERIAL PRIMARY KEY,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    model TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT '',
+    input_tokens INT NOT NULL DEFAULT 0,
+    output_tokens INT NOT NULL DEFAULT 0,
+    cache_write_tokens INT NOT NULL DEFAULT 0,
+    cache_read_tokens INT NOT NULL DEFAULT 0,
+    charged_cents DOUBLE PRECISION NOT NULL DEFAULT 0,
+    cursor_token_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
+    user_id TEXT NOT NULL DEFAULT '',
+    user_email TEXT NOT NULL DEFAULT '',
+    is_headless BOOLEAN NOT NULL DEFAULT FALSE,
+    dedup_key TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_usage_events_dedup
+    ON cursor_usage_events (dedup_key)
+    WHERE dedup_key != '';
+
+CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred
+    ON cursor_usage_events (occurred_at);
+
+CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model
+    ON cursor_usage_events (model);
+
 CREATE TABLE IF NOT EXISTS starred_sessions (
     session_id TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1405,6 +1432,15 @@ func inferTokenCoverage(
 }
 
 // CheckSchemaCompat verifies that the PG schema has all columns
+func pgHasTable(ctx context.Context, db *sql.DB, name string) bool {
+	var n int
+	err := db.QueryRowContext(ctx,
+		"SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1",
+		name,
+	).Scan(&n)
+	return err == nil && n == 1
+}
+
 // required by query paths. This is a read-only probe that works
 // against any PG role. Returns nil if compatible, or an error
 // describing what is missing.
@@ -1511,6 +1547,23 @@ func CheckSchemaCompat(
 		)
 	}
 	rows.Close()
+
+	if pgHasTable(ctx, db, "cursor_usage_events") {
+		rows, err = db.QueryContext(ctx,
+			`SELECT id, occurred_at, model, kind,
+				input_tokens, output_tokens,
+				cache_write_tokens, cache_read_tokens,
+				charged_cents, cursor_token_fee,
+				user_id, user_email, is_headless, dedup_key
+			 FROM cursor_usage_events LIMIT 0`)
+		if err != nil {
+			return fmt.Errorf(
+				"cursor_usage_events table missing required columns: %w",
+				err,
+			)
+		}
+		rows.Close()
+	}
 
 	rows, err = db.QueryContext(ctx,
 		`SELECT id, session_id, rule_name, confidence, location_kind,

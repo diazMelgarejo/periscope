@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -689,7 +690,7 @@ func appendUsageColumnBounds(
 	return where, args
 }
 
-func dailyUsageRowsSQLForBounds(
+func usageRowsSQLForBounds(
 	f UsageFilter, b usageBounds,
 ) (string, []any) {
 	if !b.bounded() {
@@ -775,13 +776,96 @@ func dailyUsageRowsSQLForBounds(
 }
 
 func usageRowQuery(f UsageFilter) (string, []any) {
-	rowsSQL, args := dailyUsageRowsSQLForBounds(f, usageBoundsForFilter(f))
+	rowsSQL, args := usageRowsSQLForBounds(f, usageBoundsForFilter(f))
 	query := dailyUsageRowSelectFromRows(rowsSQL)
 	return query, args
 }
 
 func topSessionsUsageRowQuery(f UsageFilter) (string, []any) {
 	return usageRowQuery(f)
+}
+
+const dailyCursorUsageRowsSQLTemplate = `
+SELECT
+	'' AS session_id,
+	NULL AS message_ordinal,
+	'cursor' AS usage_source,
+	cu.occurred_at AS ts,
+	cu.model,
+	'' AS token_usage,
+	cu.input_tokens,
+	cu.output_tokens,
+	cu.cache_write_tokens AS cache_creation_input_tokens,
+	cu.cache_read_tokens AS cache_read_input_tokens,
+	cu.charged_cents / 100.0 AS cost_usd,
+	'' AS claude_message_id,
+	'' AS claude_request_id,
+	'' AS source_uuid,
+	cu.dedup_key AS usage_dedup_key,
+	'' AS project,
+	'cursor' AS agent
+FROM cursor_usage_events cu
+WHERE %s`
+
+func cursorUsageRowsSQLForBounds(
+	f UsageFilter, b usageBounds,
+) (string, []any, bool) {
+	termPred, _ := buildUsageTerminationPredSQLite(f.Termination)
+	if f.Project != "" || f.ExcludeProject != "" ||
+		f.Machine != "" || f.MinUserMessages > 0 ||
+		f.ExcludeOneShot || termPred != "" ||
+		f.ActiveSince != "" {
+		return "", nil, false
+	}
+	if f.Agent != "" {
+		vals := strings.Split(f.Agent, ",")
+		for i := range vals {
+			vals[i] = strings.TrimSpace(vals[i])
+		}
+		if !slices.Contains(vals, "cursor") {
+			return "", nil, false
+		}
+	}
+	if f.ExcludeAgent != "" {
+		vals := strings.Split(f.ExcludeAgent, ",")
+		for i := range vals {
+			vals[i] = strings.TrimSpace(vals[i])
+		}
+		if slices.Contains(vals, "cursor") {
+			return "", nil, false
+		}
+	}
+
+	where := "cu.model != ''"
+	var args []any
+	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	if pred := automatedScopePredicate(scope, "cu.is_headless"); pred != "" {
+		where += "\n\tAND " + pred
+	}
+	where, args = f.appendUsageSourceFilterClauses(
+		where, args, "cu.model",
+	)
+	where, args = appendUsageColumnBounds(where, "cu.occurred_at", b, args)
+	rowsSQL := fmt.Sprintf(dailyCursorUsageRowsSQLTemplate, where)
+	return rowsSQL, args, true
+}
+
+func dailyUsageRowsSQLForBounds(
+	f UsageFilter, b usageBounds, hasCursorTable bool,
+) (string, []any) {
+	sessionRowsSQL, sessionArgs := usageRowsSQLForBounds(f, b)
+	if !hasCursorTable {
+		return sessionRowsSQL, sessionArgs
+	}
+	cursorRowsSQL, cursorArgs, ok := cursorUsageRowsSQLForBounds(f, b)
+	if !ok {
+		return sessionRowsSQL, sessionArgs
+	}
+	rowsSQL := sessionRowsSQL + "\n\nUNION ALL\n\n" + cursorRowsSQL
+	args := make([]any, 0, len(sessionArgs)+len(cursorArgs))
+	args = append(args, sessionArgs...)
+	args = append(args, cursorArgs...)
+	return rowsSQL, args
 }
 
 func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
@@ -1417,7 +1501,8 @@ func (db *DB) GetDailyUsage(
 	// long-lived sessions that span date boundaries are included.
 	// Pad by +/-14h to cover all timezone offsets; the actual
 	// date filtering happens post-query via localDate.
-	query, args := usageRowQuery(f)
+	query, args := dailyUsageRowsSQLForBounds(f, usageBoundsForFilter(f), db.hasCursorUsageTable())
+	query = dailyUsageRowSelectFromRows(query)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -1486,7 +1571,7 @@ func (db *DB) GetDailyUsage(
 			seen[key] = struct{}{}
 		}
 
-		if seenSessions != nil {
+		if seenSessions != nil && r.usageSource != "cursor" {
 			if _, ok := seenSessions[r.sessionID]; !ok {
 				seenSessions[r.sessionID] = UsageSessionInfo{
 					Project: r.project,

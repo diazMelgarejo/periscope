@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -665,6 +666,82 @@ func pgUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
 	))
 }
 
+const pgDailyCursorUsageRowsSQLTemplate = `
+SELECT
+	'' AS session_id,
+	NULL::INT AS message_ordinal,
+	'cursor' AS usage_source,
+	cu.occurred_at AS ts,
+	cu.model,
+	'' AS token_usage,
+	cu.input_tokens,
+	cu.output_tokens,
+	cu.cache_write_tokens AS cache_creation_input_tokens,
+	cu.cache_read_tokens AS cache_read_input_tokens,
+	cu.charged_cents / 100.0 AS cost_usd,
+	'' AS claude_message_id,
+	'' AS claude_request_id,
+	'' AS source_uuid,
+	cu.dedup_key AS usage_dedup_key,
+	'' AS project,
+	'cursor' AS agent
+FROM cursor_usage_events cu
+WHERE %s`
+
+func pgCursorUsageRowsSQLForBounds(
+	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
+) (string, bool) {
+	hasTermFilter := f.Termination != "" && f.Termination != "all"
+	if f.Project != "" || f.ExcludeProject != "" ||
+		f.Machine != "" || f.MinUserMessages > 0 ||
+		f.ExcludeOneShot || hasTermFilter || f.ActiveSince != "" {
+		return "", false
+	}
+	if f.Agent != "" {
+		vals := strings.Split(f.Agent, ",")
+		for i := range vals {
+			vals[i] = strings.TrimSpace(vals[i])
+		}
+		if !slices.Contains(vals, "cursor") {
+			return "", false
+		}
+	}
+	if f.ExcludeAgent != "" {
+		vals := strings.Split(f.ExcludeAgent, ",")
+		for i := range vals {
+			vals[i] = strings.TrimSpace(vals[i])
+		}
+		if slices.Contains(vals, "cursor") {
+			return "", false
+		}
+	}
+
+	where := "cu.model != ''"
+	scope := normalizePGAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	if pred := pgAutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
+		where += "\n\tAND " + pred
+	}
+	where = appendPGUsageSourceFilterClauses(
+		where, pb, f, "cu.model",
+	)
+	where = appendPGUsageColumnBounds(
+		where, "cu.occurred_at", b,
+	)
+	return fmt.Sprintf(pgDailyCursorUsageRowsSQLTemplate, where), true
+}
+
+func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter, hasCursorTable bool) string {
+	bounds := pgUsageBoundsForFilter(pb, f)
+	rowsSQL := pgDailyUsageRowsSQLForBounds(pb, f, bounds)
+	if hasCursorTable {
+		cursorRowsSQL, ok := pgCursorUsageRowsSQLForBounds(pb, f, bounds)
+		if ok {
+			rowsSQL += "\n\nUNION ALL\n\n" + cursorRowsSQL
+		}
+	}
+	return pgDailyUsageRowSelectFromRows(rowsSQL)
+}
+
 func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
 	return pgUsageRowQuery(pb, f)
 }
@@ -1042,7 +1119,7 @@ func (s *Store) GetDailyUsage(
 	rateResolver := newModelRateResolver(pricing)
 
 	pb := &paramBuilder{}
-	query := pgUsageRowQuery(pb, f)
+	query := pgDailyUsageRowQuery(pb, f, pgHasTable(ctx, s.pg, "cursor_usage_events"))
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -1099,7 +1176,7 @@ func (s *Store) GetDailyUsage(
 			seen[key] = struct{}{}
 		}
 
-		if seenSessions != nil {
+		if seenSessions != nil && r.usageSource != "cursor" {
 			if _, ok := seenSessions[r.sessionID]; !ok {
 				seenSessions[r.sessionID] = db.UsageSessionInfo{
 					Project: r.project,

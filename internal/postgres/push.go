@@ -187,6 +187,9 @@ func (s *Sync) Push(
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
 	}
+	if err := s.syncCursorUsageEvents(ctx); err != nil {
+		return result, err
+	}
 
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
 
@@ -2385,6 +2388,64 @@ func bulkInsertUsageEvents(
 	return nil
 }
 
+func bulkInsertCursorUsageEvents(
+	ctx context.Context, tx *sql.Tx, events []db.CursorUsageEvent,
+) error {
+	if len(events) == 0 {
+		return nil
+	}
+	const cursorBatch = 100
+	for i := 0; i < len(events); i += cursorBatch {
+		end := min(i+cursorBatch, len(events))
+		batch := events[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO cursor_usage_events (
+			occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		) VALUES `)
+		args := make([]any, 0, len(batch)*13)
+		for j, ev := range batch {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			p := j*13 + 1
+			fmt.Fprintf(&b,
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				p, p+1, p+2, p+3, p+4, p+5, p+6,
+				p+7, p+8, p+9, p+10, p+11, p+12,
+			)
+			occurredAt, ok := ParseSQLiteTimestamp(ev.OccurredAt)
+			if !ok {
+				return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
+			}
+			args = append(args,
+				occurredAt,
+				sanitizePG(ev.Model),
+				sanitizePG(ev.Kind),
+				ev.InputTokens,
+				ev.OutputTokens,
+				ev.CacheWriteTokens,
+				ev.CacheReadTokens,
+				ev.ChargedCents,
+				ev.CursorTokenFee,
+				sanitizePG(ev.UserID),
+				sanitizePG(ev.UserEmail),
+				ev.IsHeadless,
+				sanitizePG(ev.DedupKey),
+			)
+		}
+		b.WriteString(` ON CONFLICT DO NOTHING`)
+		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+			return fmt.Errorf("bulk inserting cursor_usage_events: %w", err)
+		}
+	}
+	return nil
+}
+
 // bulkInsertToolCalls inserts tool calls using multi-row VALUES.
 func bulkInsertToolCalls(
 	ctx context.Context, tx *sql.Tx,
@@ -2654,4 +2715,34 @@ func nilIfZero(n int) any {
 		return nil
 	}
 	return n
+}
+
+func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
+	// Cursor admin rows are global and unattributed, so project-filtered pushes
+	// cannot sync them honestly.
+	if s.isFiltered() {
+		return nil
+	}
+
+	events, err := s.local.GetCursorUsageEvents(ctx)
+	if err != nil {
+		return fmt.Errorf("loading local cursor usage events: %w", err)
+	}
+	if len(events) == 0 {
+		return nil
+	}
+
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning cursor usage sync tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing pg cursor usage sync: %w", err)
+	}
+	return nil
 }

@@ -455,6 +455,185 @@ func TestUsageQueriesUnionMessageAndUsageEvents(t *testing.T) {
 	require.Equal(t, 2, counts.ByProject["proj-b"], "counts: %#v", counts)
 }
 
+func TestGetDailyUsageIncludesCursorUsageEvents(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 0,
+		CacheReadTokens:  8901,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}}), "InsertCursorUsageEvents")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:       "2026-05-14",
+		To:         "2026-05-14",
+		Breakdowns: true,
+	})
+	require.NoError(t, err, "GetDailyUsage cursor")
+	require.Len(t, result.Daily, 1, "daily len =")
+
+	day := result.Daily[0]
+	assert.Equal(t, "2026-05-14", day.Date, "Date")
+	assert.Equal(t, 1234, day.InputTokens, "InputTokens")
+	assert.Equal(t, 567, day.OutputTokens, "OutputTokens")
+	assert.Equal(t, 0, day.CacheCreationTokens, "CacheCreationTokens")
+	assert.Equal(t, 8901, day.CacheReadTokens, "CacheReadTokens")
+	assert.InDelta(t, 0.1566, day.TotalCost, 1e-9, "TotalCost")
+	require.Equal(t, []string{"claude-4.6-opus-high-thinking"}, day.ModelsUsed)
+	require.Len(t, day.AgentBreakdowns, 1)
+	assert.Equal(t, "cursor", day.AgentBreakdowns[0].Agent)
+	assert.InDelta(t, 0.1566, day.AgentBreakdowns[0].Cost, 1e-9)
+	assert.Equal(t, 0, result.SessionCounts.Total, "cursor rows should not count as sessions")
+}
+
+func TestGetDailyUsageIncludesCursorUsageEventsWithSessionDefaults(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 0,
+		CacheReadTokens:  8901,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}}), "InsertCursorUsageEvents")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:             "2026-05-14",
+		To:               "2026-05-14",
+		Breakdowns:       true,
+		ExcludeAutomated: true,
+	})
+	require.NoError(t, err, "GetDailyUsage cursor with defaults")
+	require.Len(t, result.Daily, 1, "daily len =")
+	assert.Equal(t, 1234, result.Daily[0].InputTokens, "InputTokens")
+	assert.Equal(t, 0, result.SessionCounts.Total, "cursor rows should not count as sessions")
+}
+
+func TestGetDailyUsageSkipsCursorUsageEventsForExcludeOneShot(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 0,
+		CacheReadTokens:  8901,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}}), "InsertCursorUsageEvents")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:           "2026-05-14",
+		To:             "2026-05-14",
+		Breakdowns:     true,
+		ExcludeOneShot: true,
+	})
+	require.NoError(t, err, "GetDailyUsage cursor exclude one-shot")
+	assert.Empty(t, result.Daily, "daily entries should be empty")
+	assert.Zero(t, result.Totals.InputTokens, "InputTokens")
+	assert.Zero(t, result.SessionCounts.Total, "cursor rows should not count as sessions")
+}
+
+func TestGetDailyUsageSkipsCursorUsageEventsForTerminationFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "claude-sonnet-4-20250514",
+		InputPerMTok: 3.0, OutputPerMTok: 15.0,
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "clean-session", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-05-14T10:00:00Z")
+		s.TerminationStatus = new("clean")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "clean-session",
+		Ordinal:   0,
+		Role:      "assistant",
+		Timestamp: "2026-05-14T10:30:00Z",
+		Model:     "claude-sonnet-4-20250514",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":100,"output_tokens":40}`,
+		),
+	})
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:      "2026-05-14T10:05:00Z",
+		Model:           "claude-4.6-opus-high-thinking",
+		Kind:            "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:     1234,
+		OutputTokens:    567,
+		CacheReadTokens: 8901,
+		ChargedCents:    15.66,
+		CursorTokenFee:  3.32,
+		UserID:          "152683922",
+		UserEmail:       "member@example.com",
+	}}), "InsertCursorUsageEvents")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:        "2026-05-14",
+		To:          "2026-05-14",
+		Termination: "clean",
+	})
+	require.NoError(t, err, "GetDailyUsage clean termination")
+	require.Len(t, result.Daily, 1, "daily len =")
+	assert.Equal(t, 100, result.Totals.InputTokens, "InputTokens")
+	assert.Equal(t, 40, result.Totals.OutputTokens, "OutputTokens")
+	assert.Equal(t, 1, result.SessionCounts.Total, "SessionCounts.Total")
+}
+
+func TestInsertCursorUsageEventsDedupesByFingerprint(t *testing.T) {
+	d := testDB(t)
+
+	event := CursorUsageEvent{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 0,
+		CacheReadTokens:  8901,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{event}))
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{event}))
+
+	var count int
+	require.NoError(t, d.getReader().QueryRow(
+		"SELECT count(*) FROM cursor_usage_events",
+	).Scan(&count))
+	assert.Equal(t, 1, count, "duplicate fingerprint should be ignored")
+}
+
 // TestGetDailyUsage_CacheSavingsUsesPerModelRates pins down
 // that totals.CacheSavings is computed from each row's actual
 // per-model pricing, not a hard-coded proxy. A hard-coded

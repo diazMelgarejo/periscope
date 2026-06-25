@@ -845,6 +845,14 @@ func checkReadOnlySchemaCompatibility(conn *sql.DB) error {
 	return nil
 }
 
+func (db *DB) hasCursorUsageTable() bool {
+	var n int
+	err := db.getReader().QueryRow(
+		"SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events'",
+	).Scan(&n)
+	return err == nil && n == 1
+}
+
 // CheckDataVersion verifies that the database file, when present, was not
 // written by a newer agentsview binary. Older data versions are compatible
 // with startup because callers can run the normal non-destructive resync path.
@@ -1364,6 +1372,9 @@ func (db *DB) migrateColumns() error {
 	}
 
 	if err := db.ensureUsageEventsSchemaLocked(w); err != nil {
+		return err
+	}
+	if err := db.ensureCursorUsageEventsSchemaLocked(w); err != nil {
 		return err
 	}
 
