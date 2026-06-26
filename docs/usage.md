@@ -985,9 +985,21 @@ Gist**. The `p` shortcut publishes publicly.
 
 ![Publish modal](/assets/generated/screenshots/publish-modal.png)
 
-On first use, you'll be prompted to enter a GitHub personal
-access token with the `gist` scope. The token is saved to your
-config file and reused for future publishes.
+AgentsView prefers your existing GitHub CLI login for local
+publishing. If no token is saved in AgentsView and
+`AGENTSVIEW_GITHUB_TOKEN` is not set, it runs `gh auth token` and
+uses that token to create the gist. Run `gh auth login` once if
+the GitHub CLI is not authenticated yet.
+
+For remote or proxied AgentsView access, save a GitHub token in
+AgentsView before publishing. Remote requests do not use the server
+process environment or GitHub CLI credential as a fallback.
+
+If neither a saved token, `AGENTSVIEW_GITHUB_TOKEN`, nor
+`gh auth token` is available for local publishing, the publish
+modal prompts for a GitHub personal access token with the `gist`
+scope. That token is saved to your config file and reused for
+future publishes.
 
 !!! warning
     Secret gists are unlisted, not access-controlled: they don't

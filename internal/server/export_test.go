@@ -1231,6 +1231,90 @@ func TestCreateGistVisibility(t *testing.T) {
 	}
 }
 
+func TestResolveGitHubToken(t *testing.T) {
+	originalGhAuthTokenOutput := ghAuthTokenOutput
+	t.Cleanup(func() { ghAuthTokenOutput = originalGhAuthTokenOutput })
+
+	localCtx := context.WithValue(context.Background(), ctxKeyHumaRequestInfo,
+		requestInfo{RemoteAddr: "127.0.0.1:1234"})
+	remoteCtx := context.WithValue(context.Background(), ctxKeyHumaRequestInfo,
+		requestInfo{RemoteAddr: "127.0.0.1:1234", Forwarded: true})
+	tests := []struct {
+		name       string
+		ctx        context.Context
+		configured string
+		env        string
+		ghOutput   string
+		ghErr      error
+		want       string
+	}{
+		{
+			name:       "ConfiguredTokenWins",
+			ctx:        localCtx,
+			configured: " saved-token ",
+			env:        "env-token",
+			ghOutput:   "gh-token\n",
+			want:       "saved-token",
+		},
+		{
+			name:     "EnvFallback",
+			ctx:      localCtx,
+			env:      " env-token ",
+			ghOutput: "gh-token\n",
+			want:     "env-token",
+		},
+		{
+			name:     "GitHubCLIFallback",
+			ctx:      localCtx,
+			ghOutput: "gh-token\n",
+			want:     "gh-token",
+		},
+		{
+			name:  "MissingSources",
+			ctx:   localCtx,
+			ghErr: errors.New("gh missing"),
+			want:  "",
+		},
+		{
+			name:       "ConfiguredTokenAllowedForRemoteContext",
+			ctx:        remoteCtx,
+			configured: " saved-token ",
+			env:        "env-token",
+			ghOutput:   "gh-token\n",
+			want:       "saved-token",
+		},
+		{
+			name:     "EnvFallbackDeniedForRemoteContext",
+			ctx:      remoteCtx,
+			env:      " env-token ",
+			ghOutput: "gh-token\n",
+			want:     "",
+		},
+		{
+			name:     "GitHubCLIFallbackDeniedForRemoteContext",
+			ctx:      remoteCtx,
+			ghOutput: "gh-token\n",
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENTSVIEW_GITHUB_TOKEN", tt.env)
+			ghAuthTokenOutput = func(context.Context) ([]byte, error) {
+				if tt.ghErr != nil {
+					return nil, tt.ghErr
+				}
+				return []byte(tt.ghOutput), nil
+			}
+
+			got := resolveGitHubToken(tt.ctx, tt.configured)
+
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestValidateGithubToken(t *testing.T) {
 	t.Parallel()
 

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	stdlibsync "sync"
@@ -827,6 +828,10 @@ func withRemoteAddr(addr string) requestOpt {
 	return func(r *http.Request) { r.RemoteAddr = addr }
 }
 
+func withHeader(name, value string) requestOpt {
+	return func(r *http.Request) { r.Header.Set(name, value) }
+}
+
 func withBearer(token string) requestOpt {
 	return func(r *http.Request) {
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -1091,6 +1096,10 @@ type syncStatusResponse struct {
 
 type githubConfigResponse struct {
 	Configured bool `json:"configured"`
+}
+
+type settingsConfigResponse struct {
+	GithubConfigured bool `json:"github_configured"`
 }
 
 type uploadResponse struct {
@@ -2669,6 +2678,8 @@ func TestAuthRequiredProtectsPing(t *testing.T) {
 }
 
 func TestGetGithubConfig(t *testing.T) {
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
+	t.Setenv("PATH", t.TempDir())
 	te := setup(t)
 
 	w := te.get(t, "/api/v1/config/github")
@@ -2839,11 +2850,100 @@ func TestMarkdownSessionExport_DepthAllRecurses(t *testing.T) {
 }
 
 func TestPublishSession_NoToken(t *testing.T) {
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
+	t.Setenv("PATH", t.TempDir())
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 3)
 
 	w := te.post(t, "/api/v1/sessions/s1/publish", "{}")
 	assertStatus(t, w, http.StatusUnauthorized)
+}
+
+func TestGetGithubConfig_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/config/github")
+
+	assertStatus(t, w, http.StatusOK)
+	assert.JSONEq(t, `{"configured":true}`, w.Body.String())
+}
+
+func TestGetGithubConfig_DoesNotUseGitHubCLIAuthTokenFallbackForForwardedRequest(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+
+	w := te.wrappedRequest(http.MethodGet, "/api/v1/config/github",
+		withHeader("X-Forwarded-For", "203.0.113.10"))
+
+	assertStatus(t, w, http.StatusOK)
+	assert.JSONEq(t, `{"configured":false}`, w.Body.String())
+}
+
+func TestGetGithubConfig_UsesSavedGitHubTokenForForwardedRequest(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+	te.srv.SetGithubToken("saved-token")
+
+	w := te.wrappedRequest(http.MethodGet, "/api/v1/config/github",
+		withHeader("X-Forwarded-For", "203.0.113.10"))
+
+	assertStatus(t, w, http.StatusOK)
+	assert.JSONEq(t, `{"configured":true}`, w.Body.String())
+}
+
+func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/settings")
+
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[settingsConfigResponse](t, w)
+	assert.True(t, resp.GithubConfigured)
+}
+
+func TestPublishSession_DoesNotUseGitHubCLIAuthTokenFallbackForForwardedRequest(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 3)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/publish",
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+
+	assertStatus(t, w, http.StatusUnauthorized)
+}
+
+func useGitHubCLIAuthTokenStub(t *testing.T) {
+	t.Helper()
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
+	binDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		ghPath := filepath.Join(binDir, "gh.cmd")
+		require.NoError(t, os.WriteFile(ghPath, []byte(`@echo off
+if "%1"=="auth" if "%2"=="token" (
+  echo gh-token-from-cli
+  exit /b 0
+)
+exit /b 1
+`), 0o644))
+		t.Setenv("PATH", binDir)
+		return
+	}
+	ghPath := filepath.Join(binDir, "gh")
+	require.NoError(t, os.WriteFile(ghPath, []byte(`#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
+  printf 'gh-token-from-cli\n'
+  exit 0
+fi
+exit 1
+`), 0o755))
+	t.Setenv("PATH", binDir)
 }
 
 func TestSetGithubConfig_InvalidInput(t *testing.T) {
