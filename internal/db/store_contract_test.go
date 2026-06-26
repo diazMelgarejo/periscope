@@ -367,13 +367,16 @@ func contractAnalyticsTrendsAndUsage(
 		Timezone: "UTC",
 	})
 	require.NoError(t, err)
-	require.Equal(t, 5, summary.TotalSessions)
-	require.Equal(t, 13, summary.TotalMessages)
-	require.Equal(t, 440, summary.TotalOutputTokens)
-	require.Equal(t, 4, summary.TokenReportingSessions)
+	// The subagent child (contract-alpha-child) is now counted in the
+	// summary aggregate: +1 claude session, +1 message, +70 output
+	// tokens. The fork/automated/deleted rows stay excluded as before.
+	require.Equal(t, 6, summary.TotalSessions)
+	require.Equal(t, 14, summary.TotalMessages)
+	require.Equal(t, 510, summary.TotalOutputTokens)
+	require.Equal(t, 5, summary.TokenReportingSessions)
 	require.Equal(t, 3, summary.ActiveProjects)
 	require.Equal(t, 4, summary.ActiveDays)
-	require.Equal(t, 2, summary.Agents["claude"].Sessions)
+	require.Equal(t, 3, summary.Agents["claude"].Sessions)
 
 	noAutomation, err := store.GetAnalyticsSummary(ctx, AnalyticsFilter{
 		From:             "2026-01-09",
@@ -381,7 +384,43 @@ func contractAnalyticsTrendsAndUsage(
 		ExcludeAutomated: true,
 	})
 	require.NoError(t, err)
-	require.Equal(t, 4, noAutomation.TotalSessions)
+	require.Equal(t, 5, noAutomation.TotalSessions)
+
+	// With one-shot exclusion on (the summary endpoint default), the
+	// one-shot subagent child must still be counted (workflow subagents
+	// are inherently one-shot) while one-shot root sessions drop. This
+	// exercises OneShotExclusionSQL on every backend, including PG.
+	//
+	// Kept rows: alpha (3 user msgs, 320 tok), gamma (2 user, 60 tok),
+	// automated (roborev, kept via is_automated, 0 tok), and the subagent
+	// child (1 user, 70 tok, kept via the subagent exemption). Dropped:
+	// beta and old (one-shot roots). Exact totals are asserted so a
+	// regression that re-excludes the subagent — which would give 3
+	// sessions / 380 tokens — fails loudly rather than passing a looser
+	// bound that the surviving root sessions already satisfy.
+	oneShotExcluded, err := store.GetAnalyticsSummary(ctx, AnalyticsFilter{
+		From:           "2026-01-09",
+		To:             "2026-01-12",
+		Timezone:       "UTC",
+		ExcludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 4, oneShotExcluded.TotalSessions,
+		"one-shot roots drop; subagent child stays")
+	require.Equal(t, 450, oneShotExcluded.TotalOutputTokens,
+		"includes the subagent child's 70 tokens (380 would mean dropped)")
+	require.Equal(t, 3, oneShotExcluded.TokenReportingSessions)
+
+	// Distribution surfaces stay root-only: the subagent child must NOT
+	// be counted in session-shape, so its short duration cannot skew the
+	// distributions. It is one fewer session than the summary aggregate.
+	shape, err := store.GetAnalyticsSessionShape(ctx, AnalyticsFilter{
+		From:     "2026-01-09",
+		To:       "2026-01-12",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 5, shape.Count)
 
 	activity, err := store.GetAnalyticsActivity(ctx, AnalyticsFilter{
 		From:     "2026-01-09",
@@ -420,6 +459,8 @@ func contractAnalyticsTrendsAndUsage(
 	require.NoError(t, err)
 	require.Equal(t, "day", trends.Granularity)
 	require.Equal(t, 2, trends.Series[0].Total)
+	// Trends is a distribution surface (root-only), so the subagent
+	// child's message is not counted here.
 	require.Equal(t, 13, trends.MessageCount)
 
 	daily, err := store.GetDailyUsage(ctx, UsageFilter{
@@ -769,6 +810,7 @@ func seedStoreContractSQLite(
 			startedAt:    "2026-01-10T12:02:30Z",
 			endedAt:      "2026-01-10T12:03:00Z",
 			userMessages: 1,
+			outputTokens: 70,
 			parentID:     fixture.alphaID,
 			relationship: "subagent",
 			messages: []Message{

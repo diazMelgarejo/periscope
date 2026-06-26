@@ -95,7 +95,7 @@ func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
 	ctx := t.Context()
 	from := time.Now().Add(-24 * time.Hour)
 	to := time.Now().Add(1 * time.Hour)
-	rows, err := d.loadSessionsInWindow(ctx, StatsFilter{}, from, to)
+	rows, err := d.loadSessionsInWindow(ctx, StatsFilter{}, from, to, false)
 	require.NoError(t, err, "loadSessionsInWindow")
 	byID := map[string]bool{}
 	for _, r := range rows {
@@ -368,12 +368,18 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 	assert.Equal(t, 2, stats.Totals.SessionsAutomation,
 		"sessions_automation")
 	assert.Equal(t, 3, stats.Totals.SessionsHuman, "sessions_human")
-	// Invariant: human + automation must equal all.
+	// Invariant: human + automation + subagent must equal all. This
+	// fixture has no subagents, so subagent is 0 and the partition still
+	// reduces to human + automation.
+	assert.Equal(t, 0, stats.Totals.SessionsSubagent,
+		"sessions_subagent (no subagents seeded)")
 	assert.Equal(t, stats.Totals.SessionsAll,
-		stats.Totals.SessionsHuman+stats.Totals.SessionsAutomation,
-		"invariant: human (%d) + automation (%d) != all (%d)",
+		stats.Totals.SessionsHuman+stats.Totals.SessionsAutomation+
+			stats.Totals.SessionsSubagent,
+		"invariant: human (%d) + automation (%d) + subagent (%d) != all (%d)",
 		stats.Totals.SessionsHuman,
 		stats.Totals.SessionsAutomation,
+		stats.Totals.SessionsSubagent,
 		stats.Totals.SessionsAll)
 	assert.Equal(t, 161, stats.Totals.UserMessagesTotal,
 		"user_messages_total")
@@ -412,6 +418,98 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 		"filters.projects_excluded must be non-nil slice")
 
 	assert.NotEmpty(t, stats.GeneratedAt, "generated_at")
+}
+
+// TestGetSessionStats_SubagentTotals verifies the two-bucket split in
+// the stats pipeline: subagent sessions (e.g. workflow subagents) count
+// toward the additive token/session totals, but stay out of the
+// distribution and human-vs-automation breakdowns so their short,
+// signal-less shape does not skew those. The subagent here is one-shot
+// (userMsgs 1) and short, like a real workflow subagent.
+func TestGetSessionStats_SubagentTotals(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// One multi-turn root session (10 user msgs, 20 messages, ~100 min,
+	// 1000 output tokens) and one one-shot subagent (1 user msg, 5
+	// messages, ~8 min, 400 output tokens). Both agent "claude" so the
+	// agent-portfolio assertions reconcile against the totals.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "root", agent: "claude", userMsgs: 10, messageCount: 20,
+		startedAt: hoursAgo(5), durationMin: 100,
+		totalOutputTok: 1000, hasTotalOutputToks: true,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "agent-x", agent: "claude", userMsgs: 1, messageCount: 5,
+		startedAt: hoursAgo(5), durationMin: 8,
+		totalOutputTok: 400, hasTotalOutputToks: true,
+		relationshipType: "subagent",
+	})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	require.NoError(t, err, "GetSessionStats")
+
+	// Additive totals include the subagent.
+	assert.Equal(t, 2, stats.Totals.SessionsAll, "sessions_all")
+	assert.Equal(t, 25, stats.Totals.MessagesTotal, "messages_total")
+	assert.Equal(t, 11, stats.Totals.UserMessagesTotal,
+		"user_messages_total")
+
+	// SessionsHuman stays root-only: a subagent is not a human session.
+	assert.Equal(t, 1, stats.Totals.SessionsHuman, "sessions_human")
+	assert.Equal(t, 0, stats.Totals.SessionsAutomation,
+		"sessions_automation")
+	// The subagent lands in its own bucket so the partition holds.
+	assert.Equal(t, 1, stats.Totals.SessionsSubagent, "sessions_subagent")
+	assert.Equal(t, stats.Totals.SessionsAll,
+		stats.Totals.SessionsHuman+stats.Totals.SessionsAutomation+
+			stats.Totals.SessionsSubagent,
+		"invariant: all == human + automation + subagent")
+
+	// Distributions stay root-only: only the root session is in the
+	// user-messages histogram, so its bucket counts sum to 1, not 2.
+	gotN := 0
+	for _, b := range stats.Distributions.UserMessages.ScopeAll.Buckets {
+		gotN += b.Count
+	}
+	assert.Equal(t, 1, gotN,
+		"user-messages distribution must exclude the subagent")
+
+	// Duration distribution likewise root-only (subagent's 8 min absent).
+	durN := 0
+	for _, b := range stats.Distributions.DurationMinutes.ScopeAll.Buckets {
+		durN += b.Count
+	}
+	assert.Equal(t, 1, durN,
+		"duration distribution must exclude the subagent")
+
+	// Agent portfolio all-session maps count the subagent so they
+	// reconcile with the inclusive totals; the _human maps stay
+	// root-only (a subagent is not human).
+	ap := stats.AgentPortfolio
+	assert.Equal(t, 2, ap.BySessions["claude"], "by_sessions counts subagent")
+	assert.Equal(t, 25, ap.ByMessages["claude"], "by_messages counts subagent")
+	assert.Equal(t, int64(1400), ap.ByTokens["claude"],
+		"by_tokens counts subagent spend (1000 + 400)")
+	assert.Equal(t, 1, ap.BySessionsHuman["claude"],
+		"by_sessions_human stays root-only")
+	assert.Equal(t, int64(1000), ap.ByTokensHuman["claude"],
+		"by_tokens_human excludes the subagent")
+
+	// Reconciliation: the all-session agent-portfolio sums must equal
+	// the (subagent-inclusive) totals. These would have caught the
+	// per-panel undercount.
+	sumSessions, sumMessages := 0, 0
+	for _, v := range ap.BySessions {
+		sumSessions += v
+	}
+	for _, v := range ap.ByMessages {
+		sumMessages += v
+	}
+	assert.Equal(t, stats.Totals.SessionsAll, sumSessions,
+		"sum(by_sessions) must equal sessions_all")
+	assert.Equal(t, stats.Totals.MessagesTotal, sumMessages,
+		"sum(by_messages) must equal messages_total")
 }
 
 func Test_computeTotalsAndArchetypes_flagAuthority(t *testing.T) {

@@ -105,6 +105,52 @@ type AnalyticsFilter struct {
 	AutomatedScope     string // "", "human", "all", or "automated"
 	ActiveSince        string // ISO timestamp cutoff
 	Termination        string // "", "clean", or "unclean"
+	// IncludeSubagents counts subagent sessions (including workflow
+	// subagents) in token/session aggregates. It is opt-in and set only
+	// on the sum/count surfaces GetAnalyticsSummary and
+	// GetAnalyticsProjects. Distribution surfaces (session-shape,
+	// velocity, timing) leave it false so short subagent sessions do not
+	// skew them. Fork rows stay excluded regardless because their tokens
+	// overlap a root.
+	IncludeSubagents bool
+}
+
+// RelationshipExclusionSQL returns the relationship_type predicate for
+// analytics aggregation. The default excludes subagent and fork rows
+// (matching the session list). When IncludeSubagents is set, subagent
+// rows are counted while fork rows stay excluded to avoid
+// double-counting tokens that overlap their root session. Exported so
+// the PostgreSQL and DuckDB analytics builders apply the same rule.
+func (f AnalyticsFilter) RelationshipExclusionSQL() string {
+	return RelationshipExclusionSQL(f.IncludeSubagents, "")
+}
+
+// RelationshipExclusionSQL is the single source of truth for the
+// relationship_type analytics predicate, shared by the analytics
+// builders (AnalyticsFilter) and the stats pipeline (StatsFilter).
+// colPrefix qualifies the column for callers that alias the sessions
+// table (e.g. "s."); pass "" for an unqualified column. fork rows are
+// always excluded; subagents are excluded unless includeSubagents.
+func RelationshipExclusionSQL(includeSubagents bool, colPrefix string) string {
+	col := colPrefix + "relationship_type"
+	if includeSubagents {
+		return col + " NOT IN ('fork')"
+	}
+	return col + " NOT IN ('subagent', 'fork')"
+}
+
+// OneShotExclusionSQL wraps the one-shot exclusion predicate so it does
+// not drop subagent rows when subagents are being counted. Workflow
+// subagents are inherently one-shot (a single orchestrator prompt
+// yields one result) but represent real work, so the one-shot filter
+// would otherwise re-hide exactly the sessions IncludeSubagents is
+// meant to surface. Exported so the PostgreSQL and DuckDB builders
+// apply the same rule. base must be a self-contained boolean clause.
+func (f AnalyticsFilter) OneShotExclusionSQL(base string) string {
+	if f.IncludeSubagents {
+		return "(" + base + " OR relationship_type = 'subagent')"
+	}
+	return base
 }
 
 // location loads the timezone or returns UTC on error.
@@ -196,7 +242,7 @@ func (f AnalyticsFilter) buildWhereWithDate(
 ) (string, []any) {
 	preds := []string{
 		"message_count > 0",
-		"relationship_type NOT IN ('subagent', 'fork')",
+		f.RelationshipExclusionSQL(),
 		"deleted_at IS NULL",
 	}
 	var args []any
@@ -264,9 +310,11 @@ func (f AnalyticsFilter) buildWhereWithDate(
 	if f.ExcludeOneShot {
 		if scope != "human" {
 			preds = append(preds,
-				"(user_message_count > 1 OR is_automated = 1)")
+				f.OneShotExclusionSQL(
+					"(user_message_count > 1 OR is_automated = 1)"))
 		} else {
-			preds = append(preds, "user_message_count > 1")
+			preds = append(preds,
+				f.OneShotExclusionSQL("user_message_count > 1"))
 		}
 	}
 	if pred := automatedScopePredicate(scope, "is_automated"); pred != "" {
@@ -594,6 +642,9 @@ type AnalyticsSummary struct {
 func (db *DB) GetAnalyticsSummary(
 	ctx context.Context, f AnalyticsFilter,
 ) (AnalyticsSummary, error) {
+	// The summary is a token/session aggregate, so subagent sessions
+	// (including workflow subagents) are counted here.
+	f.IncludeSubagents = true
 	if !f.canUseSQLiteTimeSQL() {
 		return db.getAnalyticsSummaryGo(ctx, f)
 	}
@@ -1338,6 +1389,9 @@ type ProjectsAnalyticsResponse struct {
 func (db *DB) GetAnalyticsProjects(
 	ctx context.Context, f AnalyticsFilter,
 ) (ProjectsAnalyticsResponse, error) {
+	// Per-project session/token breakdown is an aggregate, so subagent
+	// sessions (including workflow subagents) are counted here.
+	f.IncludeSubagents = true
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhere(dateCol)

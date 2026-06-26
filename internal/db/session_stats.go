@@ -44,7 +44,17 @@ func (db *DB) GetSessionStats(
 		return nil, fmt.Errorf("resolving window: %w", err)
 	}
 
-	rows, err := db.loadSessionsInWindow(ctx, f, from, to)
+	// Root-only rows drive every consumer (distributions, velocity,
+	// timing, the human/automation split, archetypes, outcomes), so
+	// short signal-less subagents do not skew shape or per-session
+	// metrics. A second, subagent-inclusive load supplies the additive
+	// token/session totals, where subagent spend is real and belongs in
+	// the headline numbers.
+	rows, err := db.loadSessionsInWindow(ctx, f, from, to, false)
+	if err != nil {
+		return nil, err
+	}
+	rowsWithSubagents, err := db.loadSessionsInWindow(ctx, f, from, to, true)
 	if err != nil {
 		return nil, err
 	}
@@ -66,11 +76,26 @@ func (db *DB) GetSessionStats(
 	}
 
 	computeTotalsAndArchetypes(stats, rows)
+	// Override the additive totals to count subagents. Archetypes and
+	// the human/automation split computed above stay root-only: a
+	// subagent is not a human or automation session and carries no
+	// shape signal. SessionsAll counts every row in the inclusive set;
+	// the message totals sum across it. SessionsHuman/SessionsAutomation
+	// are intentionally left as computeTotalsAndArchetypes set them.
+	applySubagentInclusiveTotals(stats, rowsWithSubagents)
 	computeDistributions(stats, rows)
 
+	// Root-only IDs drive the distribution surfaces (velocity, temporal).
+	// The inclusive IDs drive the additive all-session aggregates
+	// (tool_mix, model_mix.by_tokens) so they count subagent spend and
+	// reconcile with the subagent-inclusive Totals.
 	sessionIDs := make([]string, 0, len(rows))
 	for _, r := range rows {
 		sessionIDs = append(sessionIDs, r.id)
+	}
+	sessionIDsAll := make([]string, 0, len(rowsWithSubagents))
+	for _, r := range rowsWithSubagents {
+		sessionIDsAll = append(sessionIDsAll, r.id)
 	}
 	accum, err := populateVelocityAccumulator(ctx, db, sessionIDs, tz)
 	if err != nil {
@@ -79,14 +104,14 @@ func (db *DB) GetSessionStats(
 	computeVelocity(stats, accum)
 
 	if err := db.computeToolAndModelMix(
-		ctx, stats, sessionIDs,
+		ctx, stats, sessionIDsAll,
 	); err != nil {
 		return nil, fmt.Errorf(
 			"computing tool/model mix: %w", err,
 		)
 	}
 
-	computeAgentPortfolio(stats, rows)
+	computeAgentPortfolio(stats, rowsWithSubagents, rows)
 
 	if err := db.computeCacheEconomics(ctx, stats, rows); err != nil {
 		return nil, fmt.Errorf(
@@ -383,14 +408,23 @@ type sessionStatsRow struct {
 // by started_at within [from, to).
 func (db *DB) loadSessionsInWindow(
 	ctx context.Context, f StatsFilter, from, to time.Time,
+	includeSubagents bool,
 ) ([]sessionStatsRow, error) {
 	// Use the same COALESCE(NULLIF(started_at, ''), created_at)
 	// expression as the rest of the analytics code so sessions whose
 	// started_at is missing (parser couldn't infer a start time) are
 	// still attributed to the window via their created_at fallback.
+	//
+	// includeSubagents selects which row set this is: the root-only set
+	// (default, drives distributions/shape/velocity and the human vs
+	// automation split) or the subagent-inclusive set (drives the
+	// additive token/session totals). Fork rows stay excluded in both
+	// because their tokens overlap their root session. The predicate is
+	// the same one the analytics builders use, via the shared helper, so
+	// the two paths can't drift.
 	preds := []string{
 		"message_count > 0",
-		"relationship_type NOT IN ('subagent', 'fork')",
+		RelationshipExclusionSQL(includeSubagents, ""),
 		"deleted_at IS NULL",
 		"COALESCE(NULLIF(started_at, ''), created_at) >= ?",
 		"COALESCE(NULLIF(started_at, ''), created_at) < ?",
@@ -586,6 +620,33 @@ func computeTotalsAndArchetypes(
 	s.Archetypes.PrimaryHuman = pickMaxLabel(humanMax, []string{
 		"marathon", "deep", "standard", "quick",
 	})
+}
+
+// applySubagentInclusiveTotals overrides the additive token/session
+// totals with sums over the subagent-inclusive row set. It is called
+// after computeTotalsAndArchetypes (which ran on the root-only rows) so
+// the archetypes and the human/automation split stay root-only while
+// the headline totals count subagent spend. Only the strictly additive
+// fields are overridden; SessionsHuman and SessionsAutomation are not,
+// since a subagent is neither.
+func applySubagentInclusiveTotals(
+	s *SessionStats, rows []sessionStatsRow,
+) {
+	var sessions, messages, userMessages int
+	for _, r := range rows {
+		sessions++
+		messages += r.messageCount
+		userMessages += r.userMessageCount
+	}
+	s.Totals.SessionsAll = sessions
+	s.Totals.MessagesTotal = messages
+	s.Totals.UserMessagesTotal = userMessages
+	// SessionsHuman and SessionsAutomation were set from the root-only
+	// rows and exclude subagents. The remainder is the subagent count,
+	// which keeps the partition sessions_all == human + automation +
+	// subagent intact.
+	s.Totals.SessionsSubagent =
+		sessions - s.Totals.SessionsHuman - s.Totals.SessionsAutomation
 }
 
 // pickMaxLabel returns the key with the strictly highest count.
@@ -793,14 +854,21 @@ func safeMean(sum float64, n int) float64 {
 // flag is set. Without that guard, agents whose token coverage is
 // missing (default 0) would be indistinguishable from agents that
 // truly produced no output tokens.
-func computeAgentPortfolio(s *SessionStats, rows []sessionStatsRow) {
+//
+// The all-session maps (by_sessions/by_messages/by_tokens) are built
+// from rowsAll so they count subagent spend and reconcile with the
+// subagent-inclusive Totals. The _human maps are built from rowsRoot:
+// a subagent is not a human session, and (since subagents are also not
+// is_automated) folding them via the !isAutomated gate would wrongly
+// inflate the human variants. rowsRoot already excludes subagents, so
+// the human accumulation uses it directly.
+func computeAgentPortfolio(
+	s *SessionStats, rowsAll, rowsRoot []sessionStatsRow,
+) {
 	bySessions := map[string]int{}
 	byMessages := map[string]int{}
 	byTokens := map[string]int64{}
-	bySessionsHuman := map[string]int{}
-	byMessagesHuman := map[string]int{}
-	byTokensHuman := map[string]int64{}
-	for _, r := range rows {
+	for _, r := range rowsAll {
 		if r.agent == "" {
 			continue
 		}
@@ -809,12 +877,18 @@ func computeAgentPortfolio(s *SessionStats, rows []sessionStatsRow) {
 		if r.hasTotalOutputTokens {
 			byTokens[r.agent] += r.totalOutputTokens
 		}
-		if !r.isAutomated {
-			bySessionsHuman[r.agent]++
-			byMessagesHuman[r.agent] += r.messageCount
-			if r.hasTotalOutputTokens {
-				byTokensHuman[r.agent] += r.totalOutputTokens
-			}
+	}
+	bySessionsHuman := map[string]int{}
+	byMessagesHuman := map[string]int{}
+	byTokensHuman := map[string]int64{}
+	for _, r := range rowsRoot {
+		if r.agent == "" || r.isAutomated {
+			continue
+		}
+		bySessionsHuman[r.agent]++
+		byMessagesHuman[r.agent] += r.messageCount
+		if r.hasTotalOutputTokens {
+			byTokensHuman[r.agent] += r.totalOutputTokens
 		}
 	}
 	s.AgentPortfolio.BySessions = bySessions

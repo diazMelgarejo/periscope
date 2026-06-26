@@ -1,10 +1,15 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
-// The test fixture seeds 10 root sessions with messages (including
-// the duration UX showcase and recent-edits fixture), plus subagent,
-// fork, and empty sessions that must be excluded.
+// The test fixture seeds 10 root sessions with messages (including the
+// duration UX showcase and recent-edits fixture), plus 3 subagent
+// sessions, 1 fork, and 1 empty session. Navigation surfaces (session
+// list, status bar) show only the 10 root sessions. The analytics
+// summary additionally counts the 3 subagents, whose messages and
+// tokens are real spend, so it shows 13. Forks and empty sessions are
+// excluded everywhere.
 const EXPECTED_ROOT_SESSIONS = 10;
+const EXPECTED_ANALYTICS_SESSIONS = 13; // 10 root + 3 subagents
 
 test.describe("Session count consistency", () => {
   let sp: SessionsPage;
@@ -14,7 +19,7 @@ test.describe("Session count consistency", () => {
     await sp.goto();
   });
 
-  test("session list, analytics summary, and status bar show the same count", async ({
+  test("navigation counts agree and analytics counts subagents on top", async ({
     page,
   }) => {
     // 1. Session list header count
@@ -55,11 +60,14 @@ test.describe("Session count consistency", () => {
       10,
     );
 
-    // Each view must show exactly the expected root session count.
-    // This catches both drift between views AND regressions where
-    // all three silently include subagent/fork/empty sessions.
+    // Navigation surfaces (list, status bar) show only root sessions
+    // and must agree. The analytics summary counts subagents on top, so
+    // it is higher by exactly the subagent count. Forks and empty
+    // sessions stay excluded everywhere.
     expect(listCount, "session list").toBe(EXPECTED_ROOT_SESSIONS);
     expect(statsCount, "status bar").toBe(EXPECTED_ROOT_SESSIONS);
-    expect(analyticsCount, "analytics summary").toBe(EXPECTED_ROOT_SESSIONS);
+    expect(analyticsCount, "analytics summary").toBe(
+      EXPECTED_ANALYTICS_SESSIONS,
+    );
   });
 });

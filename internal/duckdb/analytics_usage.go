@@ -134,7 +134,10 @@ func duckBuildAnalyticsWhere(
 	q := func(col string) string { return tablePrefix + col }
 	preds := []string{
 		q("message_count") + " > 0",
-		q("relationship_type") + " NOT IN ('subagent', 'fork')",
+		// Mirror the SQLite analytics filter: count subagents only on
+		// opt-in sum/count surfaces; fork rows stay excluded always. The
+		// shared helper qualifies the column with tablePrefix directly.
+		db.RelationshipExclusionSQL(f.IncludeSubagents, tablePrefix),
 		q("deleted_at") + " IS NULL",
 	}
 	var args []any
@@ -176,10 +179,20 @@ func duckBuildAnalyticsWhere(
 	scope := duckNormalizeAutomatedScope(
 		f.AutomatedScope, f.ExcludeAutomated)
 	if f.ExcludeOneShot {
+		// Exempt subagents from one-shot exclusion when counting them,
+		// mirroring db.AnalyticsFilter.OneShotExclusionSQL. Workflow
+		// subagents are inherently one-shot but represent real work.
+		oneShot := func(base string) string {
+			if f.IncludeSubagents {
+				return "(" + base + " OR " +
+					q("relationship_type") + " = 'subagent')"
+			}
+			return base
+		}
 		if scope != "human" {
-			preds = append(preds, "("+q("user_message_count")+" > 1 OR "+q("is_automated")+" = TRUE)")
+			preds = append(preds, oneShot("("+q("user_message_count")+" > 1 OR "+q("is_automated")+" = TRUE)"))
 		} else {
-			preds = append(preds, q("user_message_count")+" > 1")
+			preds = append(preds, oneShot(q("user_message_count")+" > 1"))
 		}
 	}
 	if pred := duckAutomatedScopePredicate(
@@ -440,6 +453,8 @@ func round1(v float64) float64 { return math.Round(v*10) / 10 }
 func (s *Store) GetAnalyticsSummary(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.AnalyticsSummary, error) {
+	// Sum/count aggregate: count subagent sessions (mirrors SQLite).
+	f.IncludeSubagents = true
 	where, args := duckBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	localDate, localDateArgs := duckAnalyticsLocalDateExpr(
@@ -894,6 +909,8 @@ func duckBuildHeatmapEntries(
 func (s *Store) GetAnalyticsProjects(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ProjectsAnalyticsResponse, error) {
+	// Per-project aggregate: count subagent sessions (mirrors SQLite).
+	f.IncludeSubagents = true
 	sessions, err := s.analyticsSessions(ctx, f)
 	if err != nil {
 		return db.ProjectsAnalyticsResponse{}, err
