@@ -27,6 +27,11 @@ type schemaProbeRows struct {
 	next    int
 }
 
+type schemaProbeQueryError struct {
+	contains string
+	err      error
+}
+
 type schemaProbeState struct {
 	mu                  sync.Mutex
 	informationQueries  int
@@ -34,8 +39,11 @@ type schemaProbeState struct {
 	alterTableExecs     []string
 	currentSchema       string
 	existingColumnNames map[string][]string
+	existingTables      map[string]bool
+	existingIndexes     map[string]bool
 	maxDataVersion      int
 	maxDataVersionErr   error
+	queryErrors         []schemaProbeQueryError
 }
 
 var (
@@ -115,7 +123,43 @@ func (c *schemaProbeConn) QueryContext(
 	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
+	for _, queryErr := range c.state.queryErrors {
+		if strings.Contains(
+			normalized,
+			strings.ToLower(queryErr.contains),
+		) {
+			return nil, queryErr.err
+		}
+	}
 	switch {
+	case strings.Contains(normalized, "information_schema.tables"):
+		name := ""
+		if len(args) > 0 {
+			if v, ok := args[0].Value.(string); ok {
+				name = v
+			}
+		}
+		if c.state.existingTables[name] {
+			return &schemaProbeRows{
+				columns: []string{"exists"},
+				values:  [][]driver.Value{{int64(1)}},
+			}, nil
+		}
+		return &schemaProbeRows{columns: []string{"exists"}}, nil
+	case strings.Contains(normalized, "pg_indexes"):
+		name := ""
+		if len(args) > 0 {
+			if v, ok := args[0].Value.(string); ok {
+				name = v
+			}
+		}
+		if c.state.existingIndexes[name] {
+			return &schemaProbeRows{
+				columns: []string{"exists"},
+				values:  [][]driver.Value{{int64(1)}},
+			}, nil
+		}
+		return &schemaProbeRows{columns: []string{"exists"}}, nil
 	case strings.Contains(normalized, "information_schema.columns"):
 		c.state.mu.Lock()
 		c.state.informationQueries++
@@ -292,6 +336,161 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 		"expected too-new data version error")
 	assert.Equal(t, 0, state.execCount(),
 		"EnsureSchema must not mutate PG before data-version refusal")
+}
+
+func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.existingTables = map[string]bool{
+		"model_pricing":       true,
+		"cursor_usage_events": true,
+	}
+	state.existingIndexes = map[string]bool{
+		"idx_cursor_usage_events_dedup": true,
+	}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	executed := strings.ToLower(state.executedSQL())
+	assert.NotContains(t, executed, "create index",
+		"compatible PG schema must skip index DDL")
+	assert.NotContains(t, executed, "alter index",
+		"compatible PG schema must skip index DDL")
+	assert.NotContains(t, executed, "create table",
+		"compatible PG schema must skip table DDL")
+	assert.Equal(t, 0, state.alterTableExecCount(),
+		"compatible PG schema must not run column migrations")
+	assert.Contains(t, executed, "insert into sync_metadata",
+		"compatible PG schema must still run row-level data repairs")
+}
+
+func TestCheckSchemaCompatIgnoresPushOnlySchema(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{
+		{contains: "owner_marker", err: errors.New(
+			`ERROR: column "owner_marker" does not exist (SQLSTATE 42703)`)},
+		{contains: "from sync_metadata", err: errors.New(
+			`ERROR: relation "sync_metadata" does not exist (SQLSTATE 42P01)`)},
+	}
+
+	require.NoError(t, CheckSchemaCompat(context.Background(), pg),
+		"read compatibility must not require push-only schema")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	state.existingTables = map[string]bool{
+		"model_pricing":       true,
+		"cursor_usage_events": true,
+	}
+	state.existingIndexes = map[string]bool{
+		"idx_cursor_usage_events_dedup": true,
+	}
+	// Read-compatible with tables and index present, but the push-only
+	// owner_marker column is absent, so the push fast path must fall back
+	// to EnsureSchema.
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "owner_marker",
+		err: errors.New(
+			`ERROR: column "owner_marker" does not exist (SQLSTATE 42703)`),
+	}}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"missing push-only column must fall back to migration DDL")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	// Read-compatible, and cursor_usage_events present, but model_pricing
+	// absent: the read probe passes yet a push would fail on model_pricing,
+	// so the fast path must fall back to EnsureSchema.
+	state.existingTables = map[string]bool{
+		"cursor_usage_events": true,
+	}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"missing push-written table must fall back to migration DDL")
+	assert.Contains(t, strings.ToLower(state.executedSQL()),
+		"create table",
+		"fallback must create missing push tables")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	// Tables present but the cursor dedup unique index is absent, so the
+	// read probe passes yet ON CONFLICT DO NOTHING would not dedup cursor
+	// usage rows. The fast path must fall back to EnsureSchema.
+	state.existingTables = map[string]bool{
+		"model_pricing":       true,
+		"cursor_usage_events": true,
+	}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"missing dedup index must fall back to migration DDL")
+	assert.Contains(t, strings.ToLower(state.executedSQL()),
+		"idx_cursor_usage_events_dedup",
+		"fallback must recreate the cursor dedup index")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenSchemaIncompatible(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "data_version",
+		err: errors.New(
+			`ERROR: column "data_version" does not exist (SQLSTATE 42703)`,
+		),
+	}}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"incompatible PG schema should fall back to migration DDL")
 }
 
 func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {

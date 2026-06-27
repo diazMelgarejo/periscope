@@ -952,6 +952,28 @@ func backfillIsAutomatedPG(
 	return nil
 }
 
+// runSchemaDataRepairsPG runs the non-DDL correctness repairs that
+// EnsureSchema performs: it recomputes is_automated and backfills
+// token-coverage flags. These issue only row-level writes, so the
+// compatible-schema fast path can run them without the index and
+// column DDL that can block concurrent pg serve reads (issue #887).
+func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
+	if err := backfillIsAutomatedPG(ctx, db); err != nil {
+		return err
+	}
+	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)
+	if err != nil {
+		return err
+	}
+	if !runRepair {
+		return nil
+	}
+	if err := backfillTokenCoverageFlags(ctx, db); err != nil {
+		return err
+	}
+	return markTokenCoverageRepairDone(ctx, db)
+}
+
 func batchUpdateAutomatedPG(
 	ctx context.Context, pg *sql.DB,
 	ids []string, val bool,
@@ -1441,6 +1463,18 @@ func pgHasTable(ctx context.Context, db *sql.DB, name string) bool {
 	return err == nil && n == 1
 }
 
+// pgHasIndex reports whether an index of the given name exists in the
+// current schema.
+func pgHasIndex(ctx context.Context, db *sql.DB, name string) bool {
+	var n int
+	err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM pg_indexes
+		 WHERE schemaname = current_schema() AND indexname = $1`,
+		name,
+	).Scan(&n)
+	return err == nil && n == 1
+}
+
 // required by query paths. This is a read-only probe that works
 // against any PG role. Returns nil if compatible, or an error
 // describing what is missing.
@@ -1448,9 +1482,7 @@ func CheckSchemaCompat(
 	ctx context.Context, db *sql.DB,
 ) error {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, created_at, deleted_at, updated_at,
-			termination_status, secret_leak_count, secrets_rules_version,
-			session_name
+		`SELECT updated_at, `+pgSessionCols+`
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -1471,8 +1503,15 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT is_system, model, token_usage, context_tokens,
-			output_tokens, has_context_tokens, has_output_tokens
+		`SELECT session_id, ordinal, role, content, thinking_text,
+			timestamp, has_thinking, has_tool_use,
+			content_length, is_system, model, token_usage,
+			context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens,
+			claude_message_id, claude_request_id,
+			source_type, source_subtype, source_uuid,
+			source_parent_uuid, is_sidechain,
+			is_compact_boundary
 		 FROM messages LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -1576,6 +1615,56 @@ func CheckSchemaCompat(
 	}
 	rows.Close()
 	return nil
+}
+
+// checkPushSchemaCompat verifies schema elements that only push needs:
+// the sync_metadata table and sessions.owner_marker. pg serve never reads
+// these, so they live outside CheckSchemaCompat (which gates read-only
+// serve startup) and are checked only on the push fast path.
+func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx,
+		`SELECT key, value FROM sync_metadata LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sync_metadata table missing required columns: %w", err)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT owner_marker FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing owner_marker: %w", err)
+	}
+	rows.Close()
+	return nil
+}
+
+// pushSchemaCurrent reports whether the PG schema has everything a push
+// needs. CheckSchemaCompat covers the read paths but does not require the
+// push-only sync_metadata table or sessions.owner_marker (verified by
+// checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
+// or cursor_usage_events (written by syncCursorUsageEvents), so probe those
+// explicitly. It also requires the cursor dedup index, which the cursor usage
+// insert relies on for ON CONFLICT dedup. When any of these is missing the
+// caller must run EnsureSchema so push migrates the schema instead of failing
+// or duplicating rows.
+func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
+	if err := CheckSchemaCompat(ctx, db); err != nil {
+		return false
+	}
+	if err := checkPushSchemaCompat(ctx, db); err != nil {
+		return false
+	}
+	if !pgHasTable(ctx, db, "model_pricing") ||
+		!pgHasTable(ctx, db, "cursor_usage_events") {
+		return false
+	}
+	// bulkInsertCursorUsageEvents dedups via a targetless ON CONFLICT
+	// DO NOTHING, which only suppresses duplicates when this partial
+	// unique index exists. Fall back to EnsureSchema when it is missing
+	// so repeated pushes cannot duplicate cursor usage rows.
+	return pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup")
 }
 
 // CheckDataVersionCompat rejects PG datasets containing rows written by a
