@@ -2001,10 +2001,13 @@ func TestGetSessionStats_Temporal_EmptyWindowEmptySlice(t *testing.T) {
 	assert.NotNil(t, stats.Temporal.HourlyUTC,
 		"hourly_utc must be a non-nil empty slice, got nil")
 	assert.Len(t, stats.Temporal.HourlyUTC, 0, "hourly_utc: got len")
-	// Reporter timezone should still be populated (claim in the spec).
-	assert.NotEmpty(t, stats.Temporal.ReporterTimezone,
-		"reporter_timezone must be populated even when "+
-			"hourly_utc is empty")
+	// Reporter timezone may now be empty when the host only exposes the
+	// Local sentinel; otherwise it must still be a loadable IANA name.
+	if stats.Temporal.ReporterTimezone != "" {
+		_, tzErr := time.LoadLocation(stats.Temporal.ReporterTimezone)
+		assert.NoError(t, tzErr,
+			"reporter_timezone must stay loadable when populated")
+	}
 	// JSON encoding must emit [] not null.
 	raw, err := json.Marshal(stats.Temporal.HourlyUTC)
 	require.NoError(t, err, "json.Marshal")
@@ -2033,6 +2036,8 @@ func TestReporterTimezone_Precedence(t *testing.T) {
 			_ = os.Unsetenv("TZ")
 		}
 	})
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
 
 	// Filter wins over env.
 	err := os.Setenv("TZ", "Europe/Berlin")
@@ -2045,12 +2050,18 @@ func TestReporterTimezone_Precedence(t *testing.T) {
 	assert.Equal(t, "Europe/Berlin",
 		reporterTimezone(StatsFilter{}), "env wins")
 
-	// No filter, no env → time.Local fallback.
+	// No filter, no env, valid local name → local wins.
 	err = os.Unsetenv("TZ")
 	require.NoError(t, err, "unset TZ")
-	got := reporterTimezone(StatsFilter{})
-	assert.NotEmpty(t, got, "time.Local fallback: got empty string")
-	assert.Equal(t, time.Local.String(), got, "time.Local fallback")
+	time.Local = time.FixedZone("America/New_York", -5*60*60)
+	assert.Equal(t, "America/New_York",
+		reporterTimezone(StatsFilter{}),
+		"valid local name should pass through")
+
+	// No filter, no env, Local sentinel → emit empty fallback.
+	time.Local = time.FixedZone("Local", 0)
+	assert.Equal(t, "", reporterTimezone(StatsFilter{}),
+		"Local sentinel should not be published")
 }
 
 func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
