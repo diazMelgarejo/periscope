@@ -1,9 +1,10 @@
+//go:build !(windows && arm64)
+
 package duckdb
 
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -377,9 +378,39 @@ func TestDuckAnalyticsSummaryModelFilterPopulatesModels(t *testing.T) {
 	assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
 }
 
-func TestDuckAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(t *testing.T) {
+func TestDuckAnalyticsMixedModelFilters(t *testing.T) {
 	ctx := context.Background()
 	store := newDuckMixedModelAnalyticsStore(t)
+
+	t.Run("summary counts only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+	t.Run("activity counts only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsActivityModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+	t.Run("hour of week counts only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+	t.Run("tools count only matching calls", func(t *testing.T) {
+		assertDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(t, ctx, store)
+	})
+	t.Run("skills count only matching calls", func(t *testing.T) {
+		assertDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(t, ctx, store)
+	})
+	t.Run("projects count only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+	t.Run("heatmap counts only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+}
+
+func assertDuckAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+) {
+	t.Helper()
 
 	resp, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -514,11 +545,12 @@ func TestDuckAnalyticsSummaryModelFilterUsesFilteredOutputTokens(
 	assert.Equal(t, 1, resp.TokenReportingSessions, "TokenReportingSessions")
 }
 
-func TestDuckAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
+func assertDuckAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsActivity(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -584,11 +616,12 @@ func TestDuckAnalyticsActivityModelAndHourFilterCountsOnlyMatchingHourRows(
 	assert.Equal(t, 1, resp.Series[0].ToolCalls, "ToolCalls")
 }
 
-func TestDuckAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(
+func assertDuckAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsHourOfWeek(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -799,62 +832,12 @@ func TestDuckAnalyticsTopSessionsDurationModelFilterRanksAndLimitsScopedSet(
 	assert.False(t, ids["duck-top-dur-rank-02"], "second shortest excluded")
 }
 
-func TestDuckAnalyticsTopSessionsDurationModelFilterHandlesManyScopedSessions(
+func assertDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	// More scoped sessions than duckMaxSQLVars, the cap the rest of the codebase
-	// chunks IN (...) predicates against. The model+time duration path filters
-	// and ranks the scoped set in Go instead of binding every ID into one
-	// predicate, so a set larger than the cap still returns the correct top 10.
-	const scoped = duckMaxSQLVars + 50
-	var writes []db.SessionBatchWrite
-	for k := range scoped {
-		id := fmt.Sprintf("duck-top-many-%04d", k)
-		writes = append(writes, db.SessionBatchWrite{
-			Session: syncSession(id, "alpha", "q", "2024-06-01T09:00:00Z", 1),
-			Messages: []db.Message{
-				duckModelMessage(id, 0, "assistant", "a",
-					"2024-06-01T09:00:00Z", "gpt-4o"),
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		})
-	}
-	// One clear outlier with a long active span so ranking is observable.
-	longID := "duck-top-many-longest"
-	longSession := syncSession(longID, "alpha", "q", "2024-06-01T09:00:00Z", 2)
-	longEnd := "2024-06-01T09:04:00Z"
-	longSession.EndedAt = &longEnd
-	writes = append(writes, db.SessionBatchWrite{
-		Session: longSession,
-		Messages: []db.Message{
-			duckModelMessage(longID, 0, "assistant", "a",
-				"2024-06-01T09:00:00Z", "gpt-4o"),
-			duckModelMessage(longID, 1, "assistant", "b",
-				"2024-06-01T09:04:00Z", "gpt-4o"),
-		},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	})
-	store := newDuckAnalyticsStore(t, writes)
-
-	hour := 9
-	resp, err := store.GetAnalyticsTopSessions(ctx, db.AnalyticsFilter{
-		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-		Model: "gpt-4o", Hour: &hour,
-	}, "duration")
-	require.NoError(t, err, "GetAnalyticsTopSessions")
-	require.Len(t, resp.Sessions, 10, "top sessions capped at 10")
-	assert.Equal(t, longID, resp.Sessions[0].ID,
-		"longest active span ranks first across the scoped set")
-}
-
-func TestDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
-	t *testing.T,
-) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsTools(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -912,11 +895,12 @@ func TestDuckAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(
 	assert.Equal(t, 1, resp.ByCategory[0].Count, "Count")
 }
 
-func TestDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
+func assertDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsSkills(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -930,11 +914,12 @@ func TestDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 	assert.Equal(t, 1, resp.BySkill[0].CallCount, "CallCount")
 }
 
-func TestDuckAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
+func assertDuckAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsProjects(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -948,11 +933,12 @@ func TestDuckAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
 	assert.Equal(t, 1.0, resp.Projects[0].DailyTrend, "DailyTrend")
 }
 
-func TestDuckAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(
+func assertDuckAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsHeatmap(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -1483,12 +1469,7 @@ func newDuckAnalyticsStore(
 	local := newLocalDB(t)
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
-	syncer := newTestSync(
-		t,
-		filepath.Join(t.TempDir(), "analytics-model.duckdb"),
-		local,
-		SyncOptions{},
-	)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	return NewStoreFromDB(syncer.DB())

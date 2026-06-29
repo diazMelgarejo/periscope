@@ -1,3 +1,5 @@
+//go:build !(windows && arm64)
+
 package duckdb
 
 import (
@@ -46,17 +48,17 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		})
 	}
 
+	store := setup(t)
+
 	t.Run("blank model returns nil", func(t *testing.T) {
-		s := setup(t)
-		scope, err := s.resolveAnalyticsMessageScope(
+		scope, err := store.resolveAnalyticsMessageScope(
 			context.Background(), []string{sessionA}, db.AnalyticsFilter{}, false)
 		require.NoError(t, err)
 		assert.Nil(t, scope)
 	})
 
 	t.Run("selected model pairs user+assistant; other model yields none", func(t *testing.T) {
-		s := setup(t)
-		scope, err := s.resolveAnalyticsMessageScope(
+		scope, err := store.resolveAnalyticsMessageScope(
 			context.Background(), []string{sessionA, sessionB},
 			db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
@@ -71,8 +73,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("TimingBySession returns one entry per matched row", func(t *testing.T) {
-		s := setup(t)
-		scope, err := s.resolveAnalyticsMessageScope(
+		scope, err := store.resolveAnalyticsMessageScope(
 			context.Background(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
@@ -80,8 +81,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("deduplicates sessionIDs", func(t *testing.T) {
-		s := setup(t)
-		scope, err := s.resolveAnalyticsMessageScope(
+		scope, err := store.resolveAnalyticsMessageScope(
 			context.Background(), []string{sessionA, sessionA},
 			db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
@@ -90,9 +90,8 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("hour filter drops non-matching rows", func(t *testing.T) {
-		s := setup(t)
 		h := 14 // rows are at 09:00 UTC
-		scope, err := s.resolveAnalyticsMessageScope(
+		scope, err := store.resolveAnalyticsMessageScope(
 			context.Background(), []string{sessionA},
 			db.AnalyticsFilter{Model: model, Hour: &h, Timezone: "UTC"}, false)
 		require.NoError(t, err)
@@ -101,8 +100,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("includeContent=false leaves content empty", func(t *testing.T) {
-		s := setup(t)
-		scope, err := s.resolveAnalyticsMessageScope(
+		scope, err := store.resolveAnalyticsMessageScope(
 			context.Background(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
@@ -114,8 +112,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("includeContent=true populates content", func(t *testing.T) {
-		s := setup(t)
-		scope, err := s.resolveAnalyticsMessageScope(
+		scope, err := store.resolveAnalyticsMessageScope(
 			context.Background(), []string{sessionA}, db.AnalyticsFilter{Model: model}, true)
 		require.NoError(t, err)
 		require.NotNil(t, scope)

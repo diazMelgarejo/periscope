@@ -2397,29 +2397,41 @@ func TestVelocityChunkedQuery(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	// Seed >500 sessions to exercise chunked IN-clause logic.
-	const n = 600
+	// Seed >maxSQLVars sessions to exercise chunked IN-clause logic.
+	const n = maxSQLVars + 1
+	writes := make([]SessionBatchWrite, 0, n)
 	for i := range n {
 		id := fmt.Sprintf("chunk-%d", i)
-		insertSession(t, d, id, "proj", func(s *Session) {
-			s.StartedAt = new("2024-06-01T09:00:00Z")
-			s.MessageCount = 2
-			s.Agent = "claude"
+		writes = append(writes, SessionBatchWrite{
+			Session: Session{
+				ID:               id,
+				Project:          "proj",
+				Machine:          defaultMachine,
+				Agent:            "claude",
+				MessageCount:     2,
+				UserMessageCount: 1,
+				StartedAt:        new("2024-06-01T09:00:00Z"),
+				FirstMessage:     new("q"),
+			},
+			Messages: []Message{
+				{
+					SessionID: id, Ordinal: 0, Role: "user",
+					Content: "q", ContentLength: 1,
+					Timestamp: "2024-06-01T09:00:00Z",
+				},
+				{
+					SessionID: id, Ordinal: 1,
+					Role:    "assistant",
+					Content: "a", ContentLength: 1,
+					Timestamp: "2024-06-01T09:00:10Z",
+				},
+			},
 		})
-		insertMessages(t, d,
-			Message{
-				SessionID: id, Ordinal: 0, Role: "user",
-				Content: "q", ContentLength: 1,
-				Timestamp: "2024-06-01T09:00:00Z",
-			},
-			Message{
-				SessionID: id, Ordinal: 1,
-				Role:    "assistant",
-				Content: "a", ContentLength: 1,
-				Timestamp: "2024-06-01T09:00:10Z",
-			},
-		)
 	}
+	result, err := d.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	require.Equal(t, n, result.WrittenSessions)
+	require.Equal(t, 2*n, result.WrittenMessages)
 
 	// Velocity must not fail even with >500 sessions
 	resp, err := d.GetAnalyticsVelocity(ctx, baseFilter())
@@ -3389,52 +3401,66 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 	})
 
 	t.Run("ByDurationRanksByActiveDurationInGoFallback", func(t *testing.T) {
+		writes := make([]SessionBatchWrite, 0, 202)
 		for i := range 201 {
 			id := fmt.Sprintf("dst-wall-%03d", i)
-			insertSession(t, d, id, "project-dst", func(s *Session) {
-				s.StartedAt = Ptr("2026-03-10T09:00:00Z")
-				s.EndedAt = Ptr("2026-03-10T11:00:00Z")
-				s.MessageCount = 3
+			writes = append(writes, SessionBatchWrite{
+				Session: Session{
+					ID:               id,
+					Project:          "project-dst",
+					Machine:          defaultMachine,
+					Agent:            defaultAgent,
+					StartedAt:        Ptr("2026-03-10T09:00:00Z"),
+					EndedAt:          Ptr("2026-03-10T11:00:00Z"),
+					MessageCount:     3,
+					UserMessageCount: 2,
+				},
+				Messages: []Message{
+					userMsgAt(id, 0, "noop", "2026-03-10T09:00:00Z"),
+					func() Message {
+						m := asstMsgAt(
+							id,
+							1,
+							"idle wait",
+							"2026-03-10T10:59:00Z",
+						)
+						m.HasToolUse = true
+						return m
+					}(),
+					userMsgAt(id, 2, "done", "2026-03-10T11:00:00Z"),
+				},
 			})
-			insertMessages(
-				t,
-				d,
-				userMsgAt(id, 0, "noop", "2026-03-10T09:00:00Z"),
+		}
+		writes = append(writes, SessionBatchWrite{
+			Session: Session{
+				ID:               "dst-actively-working",
+				Project:          "project-dst",
+				Machine:          defaultMachine,
+				Agent:            defaultAgent,
+				StartedAt:        Ptr("2026-03-10T09:30:00Z"),
+				EndedAt:          Ptr("2026-03-10T09:50:00Z"),
+				MessageCount:     3,
+				UserMessageCount: 2,
+			},
+			Messages: []Message{
+				userMsgAt("dst-actively-working", 0, "start", "2026-03-10T09:30:00Z"),
 				func() Message {
 					m := asstMsgAt(
-						id,
+						"dst-actively-working",
 						1,
-						"idle wait",
-						"2026-03-10T10:59:00Z",
+						"tooling",
+						"2026-03-10T09:35:00Z",
 					)
 					m.HasToolUse = true
 					return m
 				}(),
-				userMsgAt(id, 2, "done", "2026-03-10T11:00:00Z"),
-			)
-		}
-
-		insertSession(t, d, "dst-actively-working", "project-dst", func(s *Session) {
-			s.StartedAt = Ptr("2026-03-10T09:30:00Z")
-			s.EndedAt = Ptr("2026-03-10T09:50:00Z")
-			s.MessageCount = 3
+				userMsgAt("dst-actively-working", 2, "finish", "2026-03-10T09:50:00Z"),
+			},
 		})
-		insertMessages(
-			t,
-			d,
-			userMsgAt("dst-actively-working", 0, "start", "2026-03-10T09:30:00Z"),
-			func() Message {
-				m := asstMsgAt(
-					"dst-actively-working",
-					1,
-					"tooling",
-					"2026-03-10T09:35:00Z",
-				)
-				m.HasToolUse = true
-				return m
-			}(),
-			userMsgAt("dst-actively-working", 2, "finish", "2026-03-10T09:50:00Z"),
-		)
+		result, err := d.WriteSessionBatchAtomic(writes)
+		require.NoError(t, err)
+		require.Equal(t, len(writes), result.WrittenSessions)
+		require.Equal(t, 3*len(writes), result.WrittenMessages)
 
 		resp, err := d.GetAnalyticsTopSessions(ctx, AnalyticsFilter{
 			Project:  "project-dst",
