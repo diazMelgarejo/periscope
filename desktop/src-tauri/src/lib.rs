@@ -355,6 +355,7 @@ fn sidecar_env() -> Vec<(OsString, OsString)> {
     let skip_login_shell = std::env::var_os("AGENTSVIEW_DESKTOP_SKIP_LOGIN_SHELL_ENV");
     let should_probe =
         should_probe_login_shell(skip_login_shell.as_ref(), cfg!(target_os = "windows"));
+    let is_windows = cfg!(target_os = "windows");
 
     build_sidecar_env(
         std::env::vars_os().collect(),
@@ -365,7 +366,8 @@ fn sidecar_env() -> Vec<(OsString, OsString)> {
         },
         read_desktop_env_file(),
         std::env::var_os("AGENTSVIEW_DESKTOP_PATH"),
-        cfg!(target_os = "windows"),
+        is_windows,
+        is_windows,
     )
 }
 
@@ -421,11 +423,12 @@ fn build_sidecar_env(
     desktop_file: Vec<(OsString, OsString)>,
     forced_path: Option<OsString>,
     case_insensitive_keys: bool,
+    is_windows: bool,
 ) -> Vec<(OsString, OsString)> {
     let mut merged = BTreeMap::new();
     merge_env_pairs(&mut merged, inherited, case_insensitive_keys);
     merge_env_pairs(&mut merged, login_shell, case_insensitive_keys);
-    merge_env_pairs(&mut merged, desktop_file, case_insensitive_keys);
+    merge_desktop_env_pairs(&mut merged, desktop_file, case_insensitive_keys, is_windows);
 
     if let Some(path) = forced_path {
         merged.insert(
@@ -435,6 +438,35 @@ fn build_sidecar_env(
     }
 
     merged.into_iter().collect()
+}
+
+fn merge_desktop_env_pairs(
+    dest: &mut BTreeMap<OsString, OsString>,
+    pairs: Vec<(OsString, OsString)>,
+    case_insensitive_keys: bool,
+    is_windows: bool,
+) {
+    for (k, v) in pairs {
+        let translated = translate_desktop_env_value(v, is_windows);
+        dest.insert(normalize_env_key(k.as_os_str(), case_insensitive_keys), translated);
+    }
+}
+
+fn translate_desktop_env_value(value: OsString, is_windows: bool) -> OsString {
+    if !is_windows {
+        return value;
+    }
+    let Some(v) = value.to_str() else {
+        return value;
+    };
+    let Some((distro, unix_path)) = v.strip_prefix("wsl:").and_then(|value| value.split_once(":/"))
+    else {
+        return value;
+    };
+    if distro.is_empty() || distro.contains(':') || unix_path.is_empty() || unix_path.starts_with('/') {
+        return value;
+    }
+    OsString::from(format!(r"\\wsl.localhost\{distro}\{unix_path}").replace('/', "\\"))
 }
 
 fn merge_env_pairs(
@@ -2586,6 +2618,7 @@ mode:    writable
             vec![(OsString::from("HOME"), OsString::from("/desktop"))],
             Some(OsString::from("/custom/path")),
             false,
+            false,
         );
         let map: HashMap<_, _> = merged.into_iter().collect();
         assert_eq!(
@@ -2606,6 +2639,7 @@ mode:    writable
             vec![],
             Some(OsString::from("C")),
             true,
+            false,
         );
         let map: HashMap<_, _> = merged.into_iter().collect();
         assert_eq!(map.len(), 1);
@@ -2633,6 +2667,100 @@ mode:    writable
             Some(&OsString::from("bar"))
         );
         assert!(!map.contains_key(&OsString::from("BADLINE")));
+    }
+
+    #[test]
+    fn merge_desktop_env_pairs_preserves_non_marker_windows_values() {
+        let merged = build_sidecar_env(
+            Vec::new(),
+            Vec::new(),
+            vec![(OsString::from("HOME"), OsString::from("/base"))],
+            None,
+            false,
+            true,
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
+        assert_eq!(map.get(&OsString::from("HOME")), Some(&OsString::from("/base")));
+    }
+
+    #[test]
+    fn merge_desktop_env_pairs_translates_windows_wsl_marker() {
+        let merged = build_sidecar_env(
+            Vec::new(),
+            Vec::new(),
+            vec![(
+                OsString::from("CODEX_SESSIONS_DIR"),
+                OsString::from("wsl:Ubuntu:/home/me/.codex/sessions"),
+            )],
+            None,
+            false,
+            true,
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
+        assert_eq!(
+            map.get(&OsString::from("CODEX_SESSIONS_DIR")),
+            Some(&OsString::from(r"\\wsl.localhost\Ubuntu\home\me\.codex\sessions"))
+        );
+    }
+
+    #[test]
+    fn merge_desktop_env_pairs_preserves_malformed_wsl_marker() {
+        let merged = build_sidecar_env(
+            Vec::new(),
+            Vec::new(),
+            vec![(
+                OsString::from("CODEX_SESSIONS_DIR"),
+                OsString::from("wsl::/home/me/.codex/sessions"),
+            )],
+            None,
+            false,
+            true,
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
+        assert_eq!(
+            map.get(&OsString::from("CODEX_SESSIONS_DIR")),
+            Some(&OsString::from("wsl::/home/me/.codex/sessions"))
+        );
+    }
+
+    #[test]
+    fn merge_desktop_env_pairs_preserves_extra_colon_in_wsl_marker() {
+        let merged = build_sidecar_env(
+            Vec::new(),
+            Vec::new(),
+            vec![(
+                OsString::from("CODEX_SESSIONS_DIR"),
+                OsString::from("wsl:Ubuntu:C:/tmp"),
+            )],
+            None,
+            false,
+            true,
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
+        assert_eq!(
+            map.get(&OsString::from("CODEX_SESSIONS_DIR")),
+            Some(&OsString::from("wsl:Ubuntu:C:/tmp"))
+        );
+    }
+
+    #[test]
+    fn merge_desktop_env_pairs_preserves_url_like_wsl_marker() {
+        let merged = build_sidecar_env(
+            Vec::new(),
+            Vec::new(),
+            vec![(
+                OsString::from("CODEX_SESSIONS_DIR"),
+                OsString::from("wsl:http://example"),
+            )],
+            None,
+            false,
+            true,
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
+        assert_eq!(
+            map.get(&OsString::from("CODEX_SESSIONS_DIR")),
+            Some(&OsString::from("wsl:http://example"))
+        );
     }
 
     #[test]
