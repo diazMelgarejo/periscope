@@ -63,6 +63,7 @@ export interface Session {
   // Detail-only fields (from enriched detail response)
   health_score_basis?: string[] | null;
   health_penalties?: Record<string, number> | null;
+  transcript_fidelity?: string;
   created_at: string;
 }
 

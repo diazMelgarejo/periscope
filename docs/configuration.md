@@ -270,24 +270,29 @@ per-request token usage.
 used both SQLite databases and AES-encrypted `.pb` files.
 AgentsView reads whichever source is richest, in this order:
 
-1. **SQLite trajectory database.** Newer Antigravity CLI
-   releases write `conversations/<uuid>.db`. AgentsView opens
-   the database read-only and parses the trajectory steps
-   directly. If both `conversations/<uuid>.db` and
-   `conversations/<uuid>.pb` exist, the SQLite database wins.
-   Change detection also factors in `<uuid>.db-wal` and
-   `<uuid>.db-shm` so active sessions resync as SQLite sidecar
-   files move.
-2. **Decrypted trajectory sidecar.** For older encrypted
-   `.pb` sessions, if a `<uuid>.trajectory.json` file sits
-   next to the `.pb` file (under `conversations/` or
-   `implicit/`), AgentsView uses it as the source of truth for
-   messages, tool calls, and tool results. These sidecars are
+1. **Decrypted trajectory sidecar.** For either format, if a
+   `<uuid>.trajectory.json` file sits next to the source `.db`
+   or `.pb` file (under `conversations/` or `implicit/`) and
+   covers the session, AgentsView uses it as the source of
+   truth for the full structured transcript — messages, tool
+   calls, tool results, reasoning, and diffs. This is the
+   highest-fidelity source for both formats. These sidecars are
    written out-of-process by
    [agy-reader](https://github.com/mjacobs/agy-reader), which
    performs the decryption; AgentsView reads the resulting
    plain JSON as untrusted input and needs no
    `ANTIGRAVITY_KEY` in this mode.
+2. **SQLite trajectory database.** Newer Antigravity CLI
+   releases write `conversations/<uuid>.db`. Without a covering
+   sidecar (above), AgentsView opens the database read-only and
+   decodes the trajectory steps directly. This direct decode is
+   heuristic: it recovers prompts and tool-call names but not
+   full structured tool results, reasoning, or diffs — a
+   degraded **summary mode** transcript. If both
+   `conversations/<uuid>.db` and `conversations/<uuid>.pb`
+   exist, the SQLite database wins. Change detection also
+   factors in `<uuid>.db-wal` and `<uuid>.db-shm` so active
+   sessions resync as SQLite sidecar files move.
 3. **In-process `.pb` decryption.** With no sidecar present,
    set `ANTIGRAVITY_KEY` (base64-encoded AES key, 16/24/32
    bytes after decoding) before starting AgentsView and it
@@ -298,8 +303,11 @@ AgentsView reads whichever source is richest, in this order:
    only `history.jsonl` and the `brain/` summaries — enough
    to populate session metadata and a high-level transcript.
 
-Install `agy-reader` when you want high-resolution transcripts
-for older encrypted `.pb` sessions:
+Any session not backed by a covering sidecar — heuristic `.db`
+decode, in-process `.pb` decryption, or plaintext summary mode —
+shows a "Summary mode" badge in the detail header. Install
+`agy-reader` when you want high-resolution transcripts for `.db`
+and `.pb` sessions alike:
 
 ```bash
 go install github.com/mjacobs/agy-reader@latest

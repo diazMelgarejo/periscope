@@ -241,6 +241,10 @@ import (
 // classification, so historical skill usage is backfilled on
 // re-parse.)
 //
+// (57: Antigravity-CLI transcript fidelity classification. Re-parsing
+// populates transcript_fidelity ("full"/"summary") on existing
+// Antigravity CLI rows so sessions built from summary transcripts are
+// distinguishable from full-fidelity captures.)
 // (55: Kimi session-level usage events and native step.end model
 // backfill. Re-parsing persists estimated usage events for existing
 // aggregate-only Kimi sessions and preserves explicit native event
@@ -261,7 +265,7 @@ import (
 // (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 56
+const dataVersion = 57
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1197,6 +1201,10 @@ func (db *DB) migrateColumns() error {
 		{
 			"sessions", "source_version",
 			"ALTER TABLE sessions ADD COLUMN source_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "transcript_fidelity",
+			"ALTER TABLE sessions ADD COLUMN transcript_fidelity TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"sessions", "parser_malformed_lines",

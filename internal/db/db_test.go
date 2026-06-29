@@ -701,8 +701,13 @@ func TestCurrentDataVersionKimiUsageEvents(t *testing.T) {
 }
 
 func TestCurrentDataVersionGoalContextFiltering(t *testing.T) {
-	assert.Equal(t, 56, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 56,
 		"Codex goal-context filtering requires a data version bump")
+}
+
+func TestCurrentDataVersionTranscriptFidelity(t *testing.T) {
+	assert.Equal(t, 57, CurrentDataVersion(),
+		"antigravity-cli transcript fidelity requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
