@@ -72,6 +72,23 @@ func (b *httpBackend) Get(
 	return &out, nil
 }
 
+func (b *httpBackend) FindSessionIDsByPartial(
+	ctx context.Context, partial string, limit int,
+) ([]string, error) {
+	q := url.Values{}
+	q.Set("partial", partial)
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out struct {
+		IDs []string `json:"ids"`
+	}
+	if err := b.getJSON(ctx, "/api/v1/session-ids/resolve?"+q.Encode(), &out); err != nil {
+		return nil, err
+	}
+	return out.IDs, nil
+}
+
 func (b *httpBackend) List(
 	ctx context.Context, f ListFilter,
 ) (*SessionList, error) {
@@ -278,12 +295,39 @@ func (b *httpBackend) Watch(
 	return out, nil
 }
 
-// Stats is not yet implemented over HTTP; the daemon currently has
-// no /stats endpoint. Subsequent tasks may add one.
 func (b *httpBackend) Stats(
-	_ context.Context, _ StatsFilter,
+	ctx context.Context, f StatsFilter,
 ) (*SessionStats, error) {
-	return nil, errors.New("stats over HTTP backend: not yet implemented")
+	q := url.Values{}
+	setIfNotEmpty := func(k, v string) {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	setIfNotEmpty("since", f.Since)
+	setIfNotEmpty("until", f.Until)
+	setIfNotEmpty("agent", f.Agent)
+	setIfNotEmpty("timezone", f.Timezone)
+	for _, p := range f.IncludeProjects {
+		q.Add("include_project", p)
+	}
+	for _, p := range f.ExcludeProjects {
+		q.Add("exclude_project", p)
+	}
+	q.Set("include_git_outcomes", strconv.FormatBool(f.IncludeGitOutcomes))
+	q.Set("include_github_outcomes", strconv.FormatBool(f.IncludeGitHubOutcomes))
+
+	var out SessionStats
+	err := b.getJSON(ctx, "/api/v1/session-stats?"+q.Encode(), &out)
+	if errors.Is(err, errHTTPNotImplemented) {
+		return nil, fmt.Errorf(
+			"stats: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (b *httpBackend) Search(

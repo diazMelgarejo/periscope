@@ -160,10 +160,8 @@ func runServeBackground(
 				}
 				fatal("serve background: %v", err)
 			}
-			decision = decideServeDaemonReplacementAfterExternalStartup(
-				cfg, opts, decision,
-			)
 		}
+		decision = refreshServeDaemonReplacementDecision(cfg, opts, decision)
 		switch decision.Action {
 		case serveReplacementNone:
 		case serveReplacementUseExisting:
@@ -356,6 +354,9 @@ probeDaemon:
 				}
 				goto probeDaemon
 			}
+			if serveReplacementTargetChanged(*cfg, rt) {
+				goto probeDaemon
+			}
 			adoptDaemonRuntimeLaunchOptions(cfg, rt)
 			if err := stopDaemonRuntimeForUpgrade(*cfg, rt); err != nil {
 				return nil, fmt.Errorf(
@@ -384,6 +385,9 @@ probeDaemon:
 				if err != nil {
 					return nil, err
 				}
+				goto probeDaemon
+			}
+			if serveReplacementTargetChanged(*cfg, rt) {
 				goto probeDaemon
 			}
 			adoptDaemonRuntimeLaunchOptions(cfg, rt)
@@ -426,6 +430,9 @@ probeDaemon:
 					if err != nil {
 						return nil, err
 					}
+					goto probeDaemon
+				}
+				if serveReplacementTargetChanged(*cfg, rt) {
 					goto probeDaemon
 				}
 				adoptDaemonRuntimeLaunchOptions(cfg, rt)
@@ -551,13 +558,18 @@ func waitForExternalServeStartupBeforeReplacement(
 	return true, nil
 }
 
-func decideServeDaemonReplacementAfterExternalStartup(
+func refreshServeDaemonReplacementDecision(
 	cfg config.Config,
 	opts serveReplacementOptions,
 	original serveReplacementDecision,
 ) serveReplacementDecision {
 	if !opts.Replace {
-		return decideServeDaemonReplacement(cfg, opts)
+		decision := decideServeDaemonReplacement(cfg, opts)
+		if decision.Runtime == nil &&
+			replacementTargetStillStopConfirmed(cfg, original.Runtime) {
+			return original
+		}
+		return decision
 	}
 	decision := decideServeDaemonReplacement(
 		cfg, serveReplacementOptions{},
@@ -566,7 +578,27 @@ func decideServeDaemonReplacementAfterExternalStartup(
 		!sameDaemonReplacementTarget(original.Runtime, decision.Runtime) {
 		return decision
 	}
+	if decision.Runtime == nil &&
+		replacementTargetStillStopConfirmed(cfg, original.Runtime) {
+		return original
+	}
 	return decideServeDaemonReplacement(cfg, opts)
+}
+
+func serveReplacementTargetChanged(
+	cfg config.Config, original *DaemonRuntime,
+) bool {
+	decision := decideServeDaemonReplacement(cfg, serveReplacementOptions{})
+	if decision.Runtime == nil {
+		return !replacementTargetStillStopConfirmed(cfg, original)
+	}
+	return !sameDaemonReplacementTarget(original, decision.Runtime)
+}
+
+func replacementTargetStillStopConfirmed(
+	cfg config.Config, original *DaemonRuntime,
+) bool {
+	return original != nil && stopTargetConfirmed(original.Record, cfg.AuthToken)
 }
 
 func sameDaemonReplacementTarget(a, b *DaemonRuntime) bool {

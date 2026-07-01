@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net/http"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestGradeCell(t *testing.T) {
@@ -238,6 +241,141 @@ func TestPrintHealthDetail(t *testing.T) {
 	} {
 		assert.Contains(t, out, want, "output missing %q", want)
 	}
+}
+
+func TestHealthListFilterIncludesAllSessions(t *testing.T) {
+	got := healthListFilter(7)
+
+	assert.Equal(t, 7, got.Limit)
+	assert.True(t, got.IncludeOneShot)
+	assert.True(t, got.IncludeAutomated)
+}
+
+func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "test.db"))
+	require.NoError(t, err, "open db")
+	t.Cleanup(func() { database.Close() })
+
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "abcdef1234567890", Project: "p", Machine: "m",
+		Agent: "claude", MessageCount: 1,
+	}), "upsert one-shot session")
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewDirectBackend(database, nil),
+		"abcdef12",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "abcdef1234567890", got)
+}
+
+func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "test.db"))
+	require.NoError(t, err, "open db")
+	t.Cleanup(func() { database.Close() })
+
+	parentID := "parent-session"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: parentID, Project: "p", Machine: "m", Agent: "claude",
+		MessageCount: 2, UserMessageCount: 2,
+	}), "upsert parent session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "child-session", Project: "p", Machine: "m", Agent: "codex",
+		MessageCount: 2, UserMessageCount: 2,
+		ParentSessionID: &parentID, RelationshipType: "subagent",
+	}), "upsert child session")
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewDirectBackend(database, nil),
+		"child-session",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "child-session", got)
+}
+
+func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "test.db"))
+	require.NoError(t, err, "open db")
+	t.Cleanup(func() { database.Close() })
+
+	for i := range maxHealthLimit {
+		started := fmt.Sprintf("2026-04-15T12:%02d:%02dZ", i/60, i%60)
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID:      fmt.Sprintf("newer-session-%03d", i),
+			Project: "p", Machine: "m", Agent: "claude",
+			MessageCount: 1, StartedAt: &started,
+		}), "upsert newer session")
+	}
+	oldStarted := "2020-01-01T00:00:00Z"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "old-partial-target", Project: "p", Machine: "m",
+		Agent: "codex", MessageCount: 1, StartedAt: &oldStarted,
+	}), "upsert old partial target")
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewDirectBackend(database, nil),
+		"partial-target",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "old-partial-target", got)
+}
+
+func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
+	var gotQuery string
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/session-ids/resolve": func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query().Get("partial")
+			writeJSONResponse(w, `{"ids":["old-partial-target"]}`)
+		},
+	})
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewHTTPBackend(ts.URL, "", false),
+		"partial-target",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "partial-target", gotQuery)
+	assert.Equal(t, "old-partial-target", got)
+}
+
+func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "test.db"))
+	require.NoError(t, err, "open db")
+	t.Cleanup(func() { database.Close() })
+
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "abcdef12", Project: "p", Machine: "m",
+		Agent: "claude", MessageCount: 1,
+	}), "upsert exact session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "abcdef1234567890", Project: "p", Machine: "m",
+		Agent: "codex", MessageCount: 1,
+	}), "upsert short-id collision")
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewDirectBackend(database, nil),
+		"abcdef12",
+	)
+
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), "ambiguous")
+	assert.Contains(t, err.Error(), "abcdef1234567890")
 }
 
 func TestResolveSessionID(t *testing.T) {

@@ -138,10 +138,6 @@ func registerStatsFlags(
 		"Include GitHub PR outcome stats via gh (implies --include-git-outcomes)")
 }
 
-// openStatsService opens a read-only SessionService scoped to the local SQLite
-// archive. The stats command deliberately bypasses resolveService
-// (and the HTTP daemon transport) because the daemon does not yet
-// expose a /stats endpoint.
 func openStatsService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
@@ -149,14 +145,18 @@ func openStatsService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	d, err := openReadOnlyDB(cfg)
+	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
 	if err != nil {
-		return nil, nil, fmt.Errorf("opening db: %w", err)
+		return nil, nil, err
 	}
-	cleanup := func() { d.Close() }
-	// Pass a typed *db.DB so directBackend.Stats has the local handle
-	// it needs; engine is nil because the CLI never syncs.
-	return service.NewDirectBackend(d, nil), cleanup, nil
+	if tr.Mode == transportHTTP && tr.ReadOnly {
+		d, err := openReadOnlyDB(cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("opening db: %w", err)
+		}
+		return service.NewDirectBackend(d, nil), func() { d.Close() }, nil
+	}
+	return newService(cfg, tr)
 }
 
 // printStatsHuman renders a human-readable summary of a SessionStats
