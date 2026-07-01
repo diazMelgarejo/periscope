@@ -3,6 +3,21 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.35.2
+<small>2026-06-30</small>
+
+**Bug fixes**
+
+- Fix **PostgreSQL push sync** so skipped ownership conflicts no longer block
+  the session-alias backfill marker.
+
+**Acknowledgements**
+
+- Thanks to [leejuhanKr](https://github.com/leejuhanKr) for fixing PostgreSQL
+  push sync behavior around skipped ownership conflicts.
+
+---
+
 ## 0.35.1
 <small>2026-06-30</small>
 
