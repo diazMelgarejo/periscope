@@ -231,6 +231,47 @@ func (f UsageFilter) appendUsageSessionFilterClauses(
 	return where, args
 }
 
+// appendUsageMatchingActivityClauses requires the session to have at
+// least one row that GetUsageMatchingSessionCount's bounded branch would
+// count: an assistant, non-synthetic message (model optional — some
+// Copilot assistant messages parse before a model name is known) or a
+// usage_events row with a model. Model/ExcludeModel narrow those same
+// rows. Seeding the EXISTS subqueries with the matching eligibility
+// predicates keeps the unbounded branch's semantics aligned with the
+// bounded branch's per-row predicates, so the same filter matches the
+// same sessions whether or not a date range is set.
+func (f UsageFilter) appendUsageMatchingActivityClauses(
+	where string, args []any,
+) (string, []any) {
+	var messageArgs []any
+	messageWhere, messageArgs := f.appendUsageSourceFilterClauses(
+		usageMatchingMessageSourceEligibility, messageArgs, "m.model",
+	)
+	var eventArgs []any
+	eventWhere, eventArgs := f.appendUsageSourceFilterClauses(
+		usageEventSourceEligibility, eventArgs, "ue.model",
+	)
+
+	where += `
+	AND (
+		EXISTS (
+			SELECT 1
+			FROM messages m
+			WHERE m.session_id = s.id
+				AND ` + messageWhere + `
+		)
+		OR EXISTS (
+			SELECT 1
+			FROM usage_events ue
+			WHERE ue.session_id = s.id
+				AND ` + eventWhere + `
+		)
+	)`
+	args = append(args, messageArgs...)
+	args = append(args, eventArgs...)
+	return where, args
+}
+
 func buildUsageTerminationPredSQLite(status string) (string, []any) {
 	if status == "" || status == "all" {
 		return "", nil
@@ -307,6 +348,25 @@ const usageMessageEligibility = `
 const usageMessageSourceEligibility = `
     m.token_usage != ''
     AND m.model != ''
+    AND m.model != '<synthetic>'`
+
+// usageMatchingMessageEligibility is usageMessageEligibility with the
+// token-presence requirement removed and the model-presence requirement
+// relaxed to a role check. GetUsageMatchingSessionCount counts sessions
+// that have usage-shaped activity even when the agent (e.g. Copilot)
+// never records per-message tokens or, for some assistant messages, a
+// model name, so it must not gate on m.token_usage or m.model != ” the
+// way every token/cost query does; Model/ExcludeModel filters are applied
+// separately and still narrow the match when set. Do not reuse this for
+// usageRowQuery or its callers — see the usageMessageEligibility doc
+// comment above.
+const usageMatchingMessageEligibility = `
+    m.role = 'assistant'
+    AND m.model != '<synthetic>'
+    AND s.deleted_at IS NULL`
+
+const usageMatchingMessageSourceEligibility = `
+    m.role = 'assistant'
     AND m.model != '<synthetic>'`
 
 const usageEventEligibility = `
@@ -748,7 +808,19 @@ func usageRowsSQLForBounds(
 		return rowsSQL, args
 	}
 
-	messageTimestampSourceWhere := usageMessageSourceEligibility +
+	return usageBoundedRowsSQL(
+		f, b, usageMessageSourceEligibility, usageMessageEligibility)
+}
+
+// usageBoundedRowsSQL builds the bounded-branch CTE row source shared by
+// usageRowsSQLForBounds (token-eligible rows) and
+// usageMatchingSessionRowsSQLForBounds (relaxed matching rows). The two
+// callers differ only in the message eligibility predicates.
+func usageBoundedRowsSQL(
+	f UsageFilter, b usageBounds,
+	messageSourceEligibility, messageEligibility string,
+) (string, []any) {
+	messageTimestampSourceWhere := messageSourceEligibility +
 		"\n\tAND m.timestamp IS NOT NULL" +
 		"\n\tAND m.timestamp != ''"
 	var messageTimestampArgs []any
@@ -775,7 +847,7 @@ func usageRowsSQLForBounds(
 		f.appendUsageSessionFilterClauses(
 			usageSessionEligibility, eventTimestampJoinArgs)
 
-	messageFallbackWhere := usageMessageEligibility +
+	messageFallbackWhere := messageEligibility +
 		"\n\tAND NULLIF(m.timestamp, '') IS NULL"
 	var messageFallbackArgs []any
 	messageFallbackWhere, messageFallbackArgs =
@@ -814,6 +886,19 @@ func usageRowsSQLForBounds(
 	args = append(args, messageFallbackArgs...)
 	args = append(args, eventFallbackArgs...)
 	return rowsSQL, args
+}
+
+// usageMatchingSessionRowsSQLForBounds is usageRowsSQLForBounds's bounded
+// branch built from the relaxed usageMatchingMessageEligibility predicates,
+// so GetUsageMatchingSessionCount only relaxes the token-usage and
+// model-presence requirements and keeps the same per-row
+// Model/ExcludeModel filtering as the normal bounded path.
+func usageMatchingSessionRowsSQLForBounds(
+	f UsageFilter, b usageBounds,
+) (string, []any) {
+	return usageBoundedRowsSQL(
+		f, b,
+		usageMatchingMessageSourceEligibility, usageMatchingMessageEligibility)
 }
 
 func usageRowQuery(f UsageFilter) (string, []any) {
@@ -2403,4 +2488,63 @@ func (db *DB) GetUsageSessionCounts(
 	}
 
 	return out, nil
+}
+
+// GetUsageMatchingSessionCount counts sessions that match the usage filter
+// even when they have no token-bearing usage rows. Bounded ranges are
+// resolved against the timestamps of the sessions' messages/usage_events
+// rows (falling back to s.started_at for rows with no timestamp of their
+// own), the same shape usageRowsSQLForBounds uses, so a session whose
+// started_at/ended_at fall outside the window but whose message activity
+// falls inside it is still counted.
+func (db *DB) GetUsageMatchingSessionCount(
+	ctx context.Context, f UsageFilter,
+) (int, error) {
+	bounds := usageBoundsForFilter(f)
+
+	if !bounds.bounded() {
+		where, args := f.appendUsageSessionFilterClauses(usageSessionEligibility, nil)
+		where, args = f.appendUsageMatchingActivityClauses(where, args)
+
+		var count int
+		err := db.getReader().QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM sessions s WHERE `+where, args...).Scan(&count)
+		if err != nil {
+			return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+		}
+		return count, nil
+	}
+
+	rowsSQL, args := usageMatchingSessionRowsSQLForBounds(f, bounds)
+	rows, err := db.getReader().QueryContext(
+		ctx, dailyUsageRowSelectFromRows(rowsSQL), args...)
+	if err != nil {
+		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+	}
+	defer rows.Close()
+
+	loc := f.location()
+	seen := make(map[string]struct{})
+	for rows.Next() {
+		r, err := scanDailyUsageRow(rows)
+		if err != nil {
+			return 0, fmt.Errorf("scanning matching usage session: %w", err)
+		}
+		date := localDate(r.ts, loc)
+		if date == "" {
+			continue
+		}
+		if f.From != "" && date < f.From {
+			continue
+		}
+		if f.To != "" && date > f.To {
+			continue
+		}
+		seen[r.sessionID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
+	}
+	return len(seen), nil
 }
