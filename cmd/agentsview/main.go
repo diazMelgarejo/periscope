@@ -132,6 +132,8 @@ func runServe(cfg config.Config, opts serveOptions) {
 	// with no lock and no runtime record during startup.
 	MarkDaemonStarting(cfg.DataDir)
 	defer UnmarkDaemonStarting(cfg.DataDir)
+	startupProgress := newStartupStateWriter(cfg.DataDir, time.Now)
+	startupProgress.SetPhase("opening database")
 
 	database, writeLock := mustOpenWriteDB(context.Background(), cfg)
 	runtimeRecordDataDir := ""
@@ -188,12 +190,14 @@ func runServe(cfg config.Config, opts serveOptions) {
 		})
 
 		if database.NeedsResync() {
-			signalsCovered := runInitialResync(ctx, engine)
+			startupProgress.SetPhase("full resync")
+			signalsCovered := runInitialResync(ctx, engine, startupProgress)
 			if ctx.Err() == nil {
 				finishInitialResync(database, signalsCovered)
 			}
 		} else {
-			runInitialSync(ctx, engine)
+			startupProgress.SetPhase("initial sync")
+			runInitialSync(ctx, engine, startupProgress)
 		}
 		if ctx.Err() != nil {
 			return
@@ -225,12 +229,14 @@ func runServe(cfg config.Config, opts serveOptions) {
 		go startPeriodicSync(ctx, cfg, engine, database, idleTracker, validRemotes, broadcaster)
 	}
 
-	// Seed model_pricing after any resync swap so the new DB
-	// file (which doesn't carry pricing across the swap) is
-	// populated before the dashboard starts answering
-	// requests. Synchronous fallback upsert so the first
-	// usage page load does not observe an empty table;
-	// background LiteLLM refresh follows immediately.
+	// Seed model_pricing so a fresh database (first run, or a
+	// resync whose pricing copy failed) is populated before
+	// the dashboard starts answering requests. Resyncs also
+	// copy pricing across the swap themselves, since this seed
+	// only runs once per daemon lifetime. Synchronous fallback
+	// upsert so the first usage page load does not observe an
+	// empty table; background LiteLLM refresh follows
+	// immediately.
 	seedPricing(database)
 
 	rtOpts := serveRuntimeOptions{
@@ -256,6 +262,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithPprof(opts.Pprof),
 	)
 
+	startupProgress.SetPhase("starting HTTP server")
 	rt, err := startServerWithOptionalCaddy(ctx, cfg, srv, rtOpts)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -616,10 +623,14 @@ func cleanResyncTemp(dbPath string) {
 
 func runInitialSync(
 	ctx context.Context, engine *sync.Engine,
+	startupProgress *startupStateWriter,
 ) {
 	fmt.Println("Running initial sync...")
 	t := time.Now()
-	stats := engine.SyncAll(ctx, printSyncProgress)
+	stats := engine.SyncAll(ctx, func(p sync.Progress) {
+		printSyncProgress(p)
+		startupProgress.SetDetail(startupProgressDetail(p))
+	})
 	printSyncSummary(stats, t)
 }
 
@@ -629,11 +640,15 @@ func runInitialSync(
 // path -- see resyncCoversSignals.
 func runInitialResync(
 	ctx context.Context, engine *sync.Engine,
+	startupProgress *startupStateWriter,
 ) bool {
 	fmt.Println("Data version changed, running full resync...")
 	t := time.Now()
 	progress := newResyncProgressPrinter(os.Stdout, time.Now)
-	stats := engine.ResyncAll(ctx, progress.Print)
+	stats := engine.ResyncAll(ctx, func(p sync.Progress) {
+		progress.Print(p)
+		startupProgress.SetDetail(startupProgressDetail(p))
+	})
 	progress.Finish()
 	printSyncSummary(stats, t)
 
@@ -641,7 +656,10 @@ func runInitialResync(
 	if stats.Aborted && ctx.Err() == nil {
 		fmt.Println("Resync incomplete, running incremental sync...")
 		t = time.Now()
-		fallback := engine.SyncAll(ctx, printSyncProgress)
+		fallback := engine.SyncAll(ctx, func(p sync.Progress) {
+			printSyncProgress(p)
+			startupProgress.SetDetail(startupProgressDetail(p))
+		})
 		printSyncSummary(fallback, t)
 		fellBack = true
 	}
@@ -893,6 +911,16 @@ func sanitizeBreakdownLines(s sync.SanitizeStats) []string {
 		}
 	}
 	return out
+}
+
+// startupProgressDetail renders a one-line sync progress snapshot for
+// the startup state file: the counted progress line when available,
+// otherwise the bare resync step label.
+func startupProgressDetail(p sync.Progress) string {
+	if detail := formatSyncProgress(p); detail != "" {
+		return detail
+	}
+	return resyncProgressDisplayLabel(p)
 }
 
 func printSyncProgress(p sync.Progress) {

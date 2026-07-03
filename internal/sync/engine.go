@@ -1361,6 +1361,23 @@ func (e *Engine) resyncAllLocked(
 		time.Since(tInsights).Round(time.Millisecond),
 	)
 
+	// Copy model pricing so usage costs survive the swap. The
+	// startup seed only runs once per daemon lifetime, so a
+	// resync triggered through the sync API would otherwise
+	// leave the rebuilt DB with an empty pricing table and
+	// every usage cost reading $0.00 until the next restart.
+	// Non-fatal: a failed copy degrades cost display but does
+	// not justify aborting the resync, and the next daemon
+	// startup re-seeds pricing.
+	if err := newDB.CopyModelPricingFrom(origPath); err != nil {
+		log.Printf("resync: copy model pricing: %v", err)
+		stats.Warnings = append(stats.Warnings,
+			"model pricing copy failed; usage costs show as $0.00 "+
+				"until the next daemon restart re-seeds pricing: "+
+				err.Error(),
+		)
+	}
+
 	// Copy orphaned sessions (source files gone) from the
 	// old DB so archived data is preserved. Failure aborts
 	// the swap to avoid losing archived sessions.
@@ -5525,6 +5542,17 @@ func (e *Engine) recomputeSignalsFromDB(
 		)
 	}
 	update, findings := computeSignalsAndSecrets(*sess, msgs)
+	// Findings persist before the signals update: UpdateSessionSignals
+	// advances quality_signal_version, which BackfillSignals treats as
+	// proof the whole compute persisted. Writing it last keeps a
+	// session whose findings write failed below the current version,
+	// so the next backfill retries it.
+	if err := e.db.ReplaceSessionSecretFindings(
+		sessionID, findings, update.SecretLeakCount, update.SecretsRulesVersion,
+	); err != nil {
+		log.Printf("secrets: persist %s: %v", sessionID, err)
+		return fmt.Errorf("persisting findings %s: %w", sessionID, err)
+	}
 	if err := e.db.UpdateSessionSignals(
 		sessionID, update,
 	); err != nil {
@@ -5534,12 +5562,6 @@ func (e *Engine) recomputeSignalsFromDB(
 		return fmt.Errorf(
 			"updating signals %s: %w", sessionID, err,
 		)
-	}
-	if err := e.db.ReplaceSessionSecretFindings(
-		sessionID, findings, update.SecretLeakCount, update.SecretsRulesVersion,
-	); err != nil {
-		log.Printf("secrets: persist %s: %v", sessionID, err)
-		return fmt.Errorf("persisting findings %s: %w", sessionID, err)
 	}
 	return nil
 }
@@ -5702,13 +5724,16 @@ func (e *Engine) writeBatch(
 		}
 
 		if !replaceMessages {
-			if err := e.db.UpdateSessionSignals(s.ID, update); err != nil {
-				log.Printf("signals: update %s: %v", s.ID, err)
-			}
+			// Same ordering contract as recomputeSignalsFromDB: the
+			// version-advancing signals update only runs after findings
+			// persisted, so a partial failure leaves the session below
+			// the current version for the startup backfill to retry.
 			if err := e.db.ReplaceSessionSecretFindings(
 				s.ID, findings, update.SecretLeakCount,
 				update.SecretsRulesVersion); err != nil {
 				log.Printf("secrets: persist %s: %v", s.ID, err)
+			} else if err := e.db.UpdateSessionSignals(s.ID, update); err != nil {
+				log.Printf("signals: update %s: %v", s.ID, err)
 			}
 		}
 		writtenSessions++
