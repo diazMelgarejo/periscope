@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 const (
@@ -211,6 +212,9 @@ func (s *Sync) Push(
 		return result, err
 	}
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
+		return result, err
+	}
+	if err := s.syncProjectIdentityObservations(ctx); err != nil {
 		return result, err
 	}
 
@@ -453,6 +457,58 @@ func (s *Sync) Push(
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
+	observations, err := s.local.ListProjectIdentityObservations(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("loading project identity observations: %w", err)
+	}
+	observations = filterProjectIdentityObservations(
+		observations, s.projects, s.excludeProjects,
+	)
+	if len(observations) == 0 {
+		return nil
+	}
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning project identity observation sync: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, obs := range observations {
+		obs = export.SanitizeStoredProjectIdentityObservation(obs)
+		if err := upsertProjectIdentityObservation(ctx, tx, obs, ""); err != nil {
+			return fmt.Errorf(
+				"syncing project identity observation %s/%s/%s: %w",
+				obs.Project, obs.Machine, obs.RootPath, err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing project identity observation sync: %w", err)
+	}
+	return nil
+}
+
+func filterProjectIdentityObservations(
+	observations []export.ProjectIdentityObservation,
+	projects []string,
+	excludeProjects []string,
+) []export.ProjectIdentityObservation {
+	if len(projects) == 0 && len(excludeProjects) == 0 {
+		return observations
+	}
+	out := observations[:0]
+	for _, obs := range observations {
+		if len(projects) > 0 && !slices.Contains(projects, obs.Project) {
+			continue
+		}
+		if slices.Contains(excludeProjects, obs.Project) {
+			continue
+		}
+		out = append(out, obs)
+	}
+	return out
 }
 
 // pgPushMarkerMachineState reports whether this host's push marker is present

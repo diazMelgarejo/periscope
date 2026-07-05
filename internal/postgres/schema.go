@@ -11,11 +11,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
 const tokenCoverageRepairMetadataKey = "token_coverage_repair_v1"
 const sourceCurationBackfillMetadataKey = "source_curation_baseline_backfill_v1"
+const projectIdentityRemoteScrubMetadataKey = "git_remote_credentials_scrub_v1"
 const tokenCoverageBackfillBatchSize = 1000
 
 type columnMigration struct {
@@ -229,6 +231,24 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     cache_read_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS project_identity_observations (
+    project            TEXT NOT NULL,
+    machine            TEXT NOT NULL,
+    root_path          TEXT NOT NULL DEFAULT '',
+    git_remote         TEXT NOT NULL DEFAULT '',
+    git_remote_name    TEXT NOT NULL DEFAULT '',
+    worktree_name      TEXT NOT NULL DEFAULT '',
+    worktree_root_path TEXT NOT NULL DEFAULT '',
+    observed_at        TIMESTAMPTZ NOT NULL,
+    normalized_remote  TEXT NOT NULL DEFAULT '',
+    key_source         TEXT NOT NULL DEFAULT '',
+    key                TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (project, machine, root_path, git_remote)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project
+    ON project_identity_observations (project);
 
 CREATE TABLE IF NOT EXISTS tool_calls (
     id                    BIGSERIAL PRIMARY KEY,
@@ -746,6 +766,23 @@ func EnsureSchema(
 		)
 	}
 	step = time.Now()
+	remoteScrubbed, err := scrubProjectIdentityGitRemoteCredentialsPG(ctx, db)
+	if err != nil {
+		return err
+	}
+	if remoteScrubbed {
+		log.Printf(
+			"pg schema: project identity remote scrub completed in %s",
+			time.Since(step).Round(time.Millisecond),
+		)
+	} else {
+		log.Printf(
+			"pg schema: project identity remote scrub check completed"+
+				" in %s (repair skipped)",
+			time.Since(step).Round(time.Millisecond),
+		)
+	}
+	step = time.Now()
 	if _, err := db.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
 		 ON sessions(termination_status)`,
@@ -1039,7 +1076,8 @@ func backfillIsAutomatedPG(
 }
 
 // runSchemaDataRepairsPG runs the non-DDL correctness repairs that
-// EnsureSchema performs: it recomputes is_automated and backfills
+// EnsureSchema performs: it recomputes is_automated, backfills
+// source-curation baselines, scrubs stored project remotes, and repairs
 // token-coverage flags. These issue only row-level writes, so the
 // compatible-schema fast path can run them without the index and
 // column DDL that can block concurrent pg serve reads (issue #887).
@@ -1048,6 +1086,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := runSourceCurationBackfill(ctx, db, false); err != nil {
+		return err
+	}
+	if _, err := scrubProjectIdentityGitRemoteCredentialsPG(ctx, db); err != nil {
 		return err
 	}
 	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)
@@ -1143,6 +1184,129 @@ func markSourceCurationBackfillDone(
 	if err != nil {
 		return fmt.Errorf(
 			"storing source curation backfill metadata: %w", err,
+		)
+	}
+	return nil
+}
+
+func scrubProjectIdentityGitRemoteCredentialsPG(
+	ctx context.Context, db *sql.DB,
+) (bool, error) {
+	var done bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM sync_metadata
+			WHERE key = $1
+		)`,
+		projectIdentityRemoteScrubMetadataKey,
+	).Scan(&done); err != nil {
+		return false, fmt.Errorf(
+			"probing project identity remote scrub metadata: %w", err,
+		)
+	}
+	if done {
+		return false, nil
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		FROM project_identity_observations
+		WHERE git_remote != ''
+		ORDER BY project, machine, root_path, git_remote`)
+	if err != nil {
+		return false, fmt.Errorf(
+			"listing pg project identity remotes for scrub: %w", err,
+		)
+	}
+
+	type pendingScrub struct {
+		obs       export.ProjectIdentityObservation
+		rawRemote string
+	}
+	var pending []pendingScrub
+	for rows.Next() {
+		var obs export.ProjectIdentityObservation
+		if err := rows.Scan(
+			&obs.Project,
+			&obs.Machine,
+			&obs.RootPath,
+			&obs.GitRemote,
+			&obs.GitRemoteName,
+			&obs.WorktreeName,
+			&obs.WorktreeRootPath,
+			&obs.ObservedAt,
+			&obs.NormalizedRemote,
+			&obs.KeySource,
+			&obs.Key,
+		); err != nil {
+			_ = rows.Close()
+			return false, fmt.Errorf(
+				"scanning pg project identity remote for scrub: %w", err,
+			)
+		}
+		sanitized := export.SanitizeGitRemoteForStorage(obs.GitRemote)
+		if sanitized == obs.GitRemote {
+			continue
+		}
+		pending = append(pending, pendingScrub{
+			obs:       obs,
+			rawRemote: obs.GitRemote,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return false, fmt.Errorf(
+			"iterating pg project identity remotes for scrub: %w", err,
+		)
+	}
+	if err := rows.Close(); err != nil {
+		return false, fmt.Errorf(
+			"closing pg project identity remotes for scrub: %w", err,
+		)
+	}
+
+	for _, scrub := range pending {
+		obs := export.SanitizeStoredProjectIdentityObservation(scrub.obs)
+		if err := upsertProjectIdentityObservation(
+			ctx, db, obs, scrub.rawRemote,
+		); err != nil {
+			return false, fmt.Errorf(
+				"upserting scrubbed pg project identity remote: %w", err,
+			)
+		}
+		if _, err := db.ExecContext(ctx, `
+			DELETE FROM project_identity_observations
+			WHERE project = $1 AND machine = $2 AND root_path = $3
+			  AND git_remote = $4`,
+			scrub.obs.Project, scrub.obs.Machine, scrub.obs.RootPath,
+			scrub.rawRemote,
+		); err != nil {
+			return false, fmt.Errorf(
+				"removing raw pg project identity remote: %w", err,
+			)
+		}
+	}
+	if err := markProjectIdentityRemoteScrubDone(ctx, db); err != nil {
+		return false, err
+	}
+	return len(pending) > 0, nil
+}
+
+func markProjectIdentityRemoteScrubDone(
+	ctx context.Context, db *sql.DB,
+) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value)
+		 VALUES ($1, '1')
+		 ON CONFLICT (key) DO UPDATE
+		 SET value = EXCLUDED.value`,
+		projectIdentityRemoteScrubMetadataKey,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"storing project identity remote scrub metadata: %w", err,
 		)
 	}
 	return nil
@@ -1828,6 +1992,18 @@ func CheckSchemaCompat(
 		return fmt.Errorf("secret_findings table missing required columns: %w", err)
 	}
 	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		 FROM project_identity_observations LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"project_identity_observations table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
 	return nil
 }
 
@@ -1871,6 +2047,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		return false
 	}
 	if !pgHasTable(ctx, db, "model_pricing") ||
+		!pgHasTable(ctx, db, "project_identity_observations") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") {
 		return false
 	}

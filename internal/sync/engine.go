@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
@@ -22,8 +23,9 @@ import (
 )
 
 const (
-	batchSize  = 100
-	maxWorkers = 8
+	batchSize               = 100
+	maxWorkers              = 8
+	projectIdentityCacheTTL = time.Minute
 )
 
 type syncWriteMode int
@@ -113,6 +115,9 @@ type Engine struct {
 	emitter                Emitter
 	providerFactories      map[parser.AgentType]parser.ProviderFactory
 	providerMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
+	projectIdentityMu      gosync.Mutex
+	projectIdentityCache   map[string]projectIdentityCacheEntry
+	projectIdentityWritten map[string]struct{}
 
 	// forceParse disables every stored-state skip (skip cache,
 	// size/mtime/data_version checks, incremental JSONL deltas) so
@@ -226,6 +231,8 @@ func NewEngine(
 		emitter:                 cfg.Emitter,
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
+		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
+		projectIdentityWritten:  make(map[string]struct{}),
 	}
 	// Errors are logged inside recomputeSignalsFromDB and are
 	// non-fatal: the next write or flush retries.
@@ -3392,6 +3399,9 @@ func drainResults(results <-chan syncJob, remaining int) {
 // session row without overwriting unrelated columns.
 type incrementalUpdate struct {
 	sessionID            string
+	project              string
+	machine              string
+	cwd                  string
 	msgs                 []parser.ParsedMessage
 	endedAt              time.Time
 	msgCount             int // total (old + new)
@@ -4967,6 +4977,9 @@ func (e *Engine) tryIncrementalJSONL(
 			return processResult{
 				incremental: &incrementalUpdate{
 					sessionID:            inc.ID,
+					project:              inc.Project,
+					machine:              inc.Machine,
+					cwd:                  inc.Cwd,
 					endedAt:              endedAt,
 					msgCount:             inc.MsgCount,
 					userMsgCount:         inc.UserMsgCount,
@@ -5046,6 +5059,9 @@ func (e *Engine) tryIncrementalJSONL(
 	return processResult{
 		incremental: &incrementalUpdate{
 			sessionID:            inc.ID,
+			project:              inc.Project,
+			machine:              inc.Machine,
+			cwd:                  inc.Cwd,
 			msgs:                 newMsgs,
 			endedAt:              endedAt,
 			msgCount:             inc.MsgCount + len(newMsgs),
@@ -5677,6 +5693,14 @@ func (e *Engine) writeBatch(
 			log.Printf("upsert session %s: %v", s.ID, err)
 			failedSessions++
 			continue
+		}
+		if err := e.writeProjectIdentityObservation(
+			context.Background(), s,
+		); err != nil {
+			log.Printf(
+				"write project identity observation for %s: %v",
+				s.ID, err,
+			)
 		}
 
 		replaceMessages := shouldReplaceFullParseMessages(
@@ -6511,6 +6535,15 @@ type batchSourceFile struct {
 	fingerprint string
 }
 
+type projectIdentityCacheEntry struct {
+	rootPath         string
+	gitRemoteName    string
+	gitRemote        string
+	worktreeName     string
+	worktreeRootPath string
+	expiresAt        time.Time
+}
+
 func (e *Engine) writeBatchBulk(
 	batch []pendingWrite, forceReplace bool,
 ) (writtenSessions, writtenMessages, failedSessions int) {
@@ -6534,9 +6567,12 @@ func (e *Engine) writeBatchBulk(
 		update, findings := computeSignalsAndSecrets(s, msgs)
 		e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
 		writes = append(writes, db.SessionBatchWrite{
-			Session:         s,
-			Messages:        msgs,
-			UsageEvents:     e.usageEventsForWrite(s.ID, pw.usageEvents),
+			Session:     s,
+			Messages:    msgs,
+			UsageEvents: e.usageEventsForWrite(s.ID, pw.usageEvents),
+			IdentityObservation: identityObservationOrZero(
+				e.projectIdentityObservation(s),
+			),
 			Signals:         update,
 			Findings:        findings,
 			DataVersion:     dataVersionForWrite(pw),
@@ -6577,6 +6613,246 @@ func (e *Engine) writeBatchBulk(
 	return result.WrittenSessions,
 		result.WrittenMessages,
 		result.FailedSessions
+}
+
+func identityObservationOrZero(
+	obs export.ProjectIdentityObservation,
+	ok bool,
+) export.ProjectIdentityObservation {
+	if !ok {
+		return export.ProjectIdentityObservation{}
+	}
+	return obs
+}
+
+func (e *Engine) projectIdentityObservation(
+	s db.Session,
+) (export.ProjectIdentityObservation, bool) {
+	project := strings.TrimSpace(s.Project)
+	machine := strings.TrimSpace(s.Machine)
+	rootPath := strings.TrimSpace(s.Cwd)
+	if project == "" || machine == "" || rootPath == "" {
+		return export.ProjectIdentityObservation{}, false
+	}
+
+	cached := e.cachedProjectIdentity(machine, rootPath)
+	obs := export.ProjectIdentityObservation{
+		Project:    project,
+		Machine:    machine,
+		RootPath:   cached.rootPath,
+		ObservedAt: time.Now().UTC(),
+	}
+	obs.GitRemoteName = cached.gitRemoteName
+	obs.GitRemote = cached.gitRemote
+	obs.WorktreeName = cached.worktreeName
+	obs.WorktreeRootPath = cached.worktreeRootPath
+	return obs, true
+}
+
+func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
+	e.projectIdentityMu.Lock()
+	defer e.projectIdentityMu.Unlock()
+	if e.projectIdentityCache == nil {
+		e.projectIdentityCache = make(map[string]projectIdentityCacheEntry)
+	}
+	cacheKey := machine + "\x00" + rootPath
+	now := time.Now()
+	if cached, ok := e.projectIdentityCache[cacheKey]; ok &&
+		now.Before(cached.expiresAt) {
+		return cached
+	}
+	identity := projectIdentityCacheEntry{rootPath: rootPath}
+	if e.idPrefix == "" && e.pathRewriter == nil {
+		if gitRoot, remotes := discoverLocalGitIdentity(rootPath); gitRoot != "" {
+			identity.rootPath = gitRoot
+			if name, raw, ok := export.SelectRemote(remotes); ok {
+				identity.gitRemoteName = name
+				identity.gitRemote = raw
+			}
+		}
+	}
+	if identity.gitRemote == "" {
+		identity.worktreeName = filepath.Base(identity.rootPath)
+		identity.worktreeRootPath = identity.rootPath
+	}
+	identity.expiresAt = now.Add(projectIdentityCacheTTL)
+	e.projectIdentityCache[cacheKey] = identity
+	return identity
+}
+
+func (e *Engine) writeProjectIdentityObservation(
+	ctx context.Context, s db.Session,
+) error {
+	obs, ok := e.projectIdentityObservation(s)
+	if !ok {
+		return nil
+	}
+	fingerprint := projectIdentityObservationFingerprint(obs)
+	e.projectIdentityMu.Lock()
+	if e.projectIdentityWritten == nil {
+		e.projectIdentityWritten = make(map[string]struct{})
+	}
+	if _, ok := e.projectIdentityWritten[fingerprint]; ok {
+		e.projectIdentityMu.Unlock()
+		return nil
+	}
+	e.projectIdentityMu.Unlock()
+
+	if err := e.db.UpsertProjectIdentityObservation(ctx, obs); err != nil {
+		return err
+	}
+
+	e.projectIdentityMu.Lock()
+	e.projectIdentityWritten[fingerprint] = struct{}{}
+	e.projectIdentityMu.Unlock()
+	return nil
+}
+
+func projectIdentityObservationFingerprint(
+	obs export.ProjectIdentityObservation,
+) string {
+	return strings.Join([]string{
+		obs.Project,
+		obs.Machine,
+		obs.RootPath,
+		obs.GitRemote,
+		obs.GitRemoteName,
+		obs.WorktreeName,
+		obs.WorktreeRootPath,
+	}, "\x00")
+}
+
+func discoverLocalGitIdentity(cwd string) (string, map[string]string) {
+	if !safeLocalAbsolutePath(cwd) {
+		return "", nil
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
+	if err != nil {
+		return "", nil
+	}
+	root := findLocalGitRoot(resolved)
+	if root == "" {
+		return "", nil
+	}
+	config := gitConfigPath(root)
+	if config == "" {
+		return root, nil
+	}
+	return root, readGitRemotes(config)
+}
+
+func safeLocalAbsolutePath(p string) bool {
+	p = strings.TrimSpace(p)
+	if p == "" || strings.Contains(p, "://") {
+		return false
+	}
+	if looksWindowsDrivePath(p) {
+		return runtime.GOOS == "windows" && filepath.IsAbs(p)
+	}
+	if looksRemotePrefixedPath(p) {
+		return false
+	}
+	return filepath.IsAbs(p)
+}
+
+func looksRemotePrefixedPath(p string) bool {
+	colon := strings.Index(p, ":")
+	if colon <= 0 {
+		return false
+	}
+	prefix := p[:colon]
+	return !strings.ContainsAny(prefix, `/\`)
+}
+
+func looksWindowsDrivePath(p string) bool {
+	if len(p) < 3 || p[1] != ':' {
+		return false
+	}
+	drive := p[0]
+	if (drive < 'A' || drive > 'Z') && (drive < 'a' || drive > 'z') {
+		return false
+	}
+	return p[2] == '\\' || p[2] == '/'
+}
+
+func findLocalGitRoot(start string) string {
+	dir := filepath.Clean(start)
+	for {
+		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			if info.IsDir() || info.Mode().IsRegular() {
+				return dir
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func gitConfigPath(root string) string {
+	gitPath := filepath.Join(root, ".git")
+	if info, err := os.Stat(gitPath); err == nil && info.IsDir() {
+		return filepath.Join(gitPath, "config")
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(data))
+	line = strings.TrimPrefix(line, "gitdir:")
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	if !filepath.IsAbs(line) {
+		line = filepath.Join(root, line)
+	}
+	commonDir := line
+	if data, err := os.ReadFile(filepath.Join(line, "commondir")); err == nil {
+		common := strings.TrimSpace(string(data))
+		if filepath.IsAbs(common) {
+			commonDir = common
+		} else {
+			commonDir = filepath.Clean(filepath.Join(line, common))
+		}
+	}
+	return filepath.Join(commonDir, "config")
+}
+
+func readGitRemotes(configPath string) map[string]string {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil
+	}
+	remotes := map[string]string{}
+	var current string
+	for line := range strings.SplitSeq(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			current = remoteNameFromGitConfigSection(trimmed)
+			continue
+		}
+		if current == "" || !strings.HasPrefix(trimmed, "url") {
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(key) != "url" {
+			continue
+		}
+		remotes[current] = strings.TrimSpace(value)
+	}
+	return remotes
+}
+
+func remoteNameFromGitConfigSection(section string) string {
+	section = strings.Trim(section, "[]")
+	if !strings.HasPrefix(section, `remote `) {
+		return ""
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(section, `remote `))
+	return strings.Trim(name, `"`)
 }
 
 func shouldReplaceFullParseMessages(
@@ -6693,6 +6969,20 @@ func (e *Engine) writeIncremental(
 		inc.sessionID,
 	); err != nil {
 		return err
+	}
+	if err := e.writeProjectIdentityObservation(
+		context.Background(),
+		db.Session{
+			ID:      inc.sessionID,
+			Project: inc.project,
+			Machine: inc.machine,
+			Cwd:     inc.cwd,
+		},
+	); err != nil {
+		log.Printf(
+			"incremental project identity observation %s: %v",
+			inc.sessionID, err,
+		)
 	}
 
 	// Signal/secret recompute costs O(session history), so it is

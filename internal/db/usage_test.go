@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 )
@@ -25,6 +26,37 @@ var (
 	dailyUsageFixtureDir  string
 	dailyUsageFixturePath string
 )
+
+func TestDailyUsageResultOmitsUnsetPricingMetadata(t *testing.T) {
+	b, err := json.Marshal(DailyUsageResult{})
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(b), `"pricing"`)
+}
+
+func TestDailyUsageResultEmitsEmptyProjectsMap(t *testing.T) {
+	b, err := json.Marshal(DailyUsageResult{
+		SchemaVersion: export.UsageDailySchemaVersion,
+		Projects:      map[string]export.ProjectMapEntry{},
+		Daily:         []DailyUsageEntry{},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, string(b), `"projects":{}`)
+}
+
+func TestUsageDailyEmptyProjectsMapExcludesUnrelatedObservations(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedProjectIdentityObservation(t, d, "unrelated-project")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-06-01", To: "2026-06-01", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.Daily)
+	assert.Empty(t, result.Projects)
+}
 
 func openDailyUsageFixtureDB(t *testing.T) *DB {
 	t.Helper()
@@ -158,7 +190,6 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")
 	assert.NotContains(t, normalized, "cost_source")
-	assert.NotContains(t, normalized, "reasoning_tokens")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
 	assert.NotContains(t, normalized, " as started_at")
@@ -200,7 +231,6 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")
 	assert.NotContains(t, normalized, "cost_source")
-	assert.NotContains(t, normalized, "reasoning_tokens")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
 	assert.NotContains(t, normalized, " as started_at")
@@ -606,6 +636,8 @@ func TestGetDailyUsageIncludesCursorUsageEvents(t *testing.T) {
 	require.Len(t, day.AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", day.AgentBreakdowns[0].Agent)
 	assert.InDelta(t, 0.1566, day.AgentBreakdowns[0].Cost, 1e-9)
+	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
+	assert.NotContains(t, result.Projects, "")
 	assert.Equal(t, 0, result.SessionCounts.Total, "cursor rows should not count as sessions")
 }
 
@@ -992,6 +1024,40 @@ func TestGetDailyUsageNoPricing(t *testing.T) {
 		"ModelsUsed")
 }
 
+func TestGetDailyUsageCostsMessageReasoningTokens(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "gpt-5.4",
+		InputPerMTok:  1,
+		OutputPerMTok: 2,
+	}}))
+	insertSession(t, d, "reasoning-message", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.StartedAt = Ptr("2026-05-14T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "reasoning-message",
+		Ordinal:   0,
+		Role:      "assistant",
+		Timestamp: "2026-05-14T10:30:00Z",
+		Model:     "gpt-5.4",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":500}`),
+	})
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-14", To: "2026-05-14", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, 1000, result.Totals.InputTokens)
+	assert.Zero(t, result.Totals.OutputTokens)
+	assert.InDelta(t, 0.002, result.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, 0.002, result.Daily[0].TotalCost, 1e-12)
+}
+
 // TestGetDailyUsageTruncatedTokenJSON documents what happens when
 // a message lands in the DB with truncated token_usage. The hot
 // aggregation counter is intentionally permissive and still extracts
@@ -1053,12 +1119,25 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	in, out, cacheCreate, cacheRead := parseUsageTokenCounters(
 		`{"input_tokens":100,"output_tokens":50,` +
 			`"cache_creation_input_tokens":20,` +
-			`"cache_read_input_tokens":300}`,
+			`"cache_read_input_tokens":300,` +
+			`"reasoning_tokens":75}`,
 	)
 	assert.Equal(t, 100, in)
 	assert.Equal(t, 50, out)
 	assert.Equal(t, 20, cacheCreate)
 	assert.Equal(t, 300, cacheRead)
+
+	in, out, cacheCreate, cacheRead, reasoning := parseUsageTokenCountersWithReasoning(
+		`{"input_tokens":100,"output_tokens":50,` +
+			`"cache_creation_input_tokens":20,` +
+			`"cache_read_input_tokens":300,` +
+			`"reasoning_tokens":75}`,
+	)
+	assert.Equal(t, 100, in)
+	assert.Equal(t, 50, out)
+	assert.Equal(t, 20, cacheCreate)
+	assert.Equal(t, 300, cacheRead)
+	assert.Equal(t, 75, reasoning)
 
 	in, out, cacheCreate, cacheRead = parseUsageTokenCounters(
 		`{"input_tokens":9999,"output_tokens":4242,"ca`,
@@ -1427,6 +1506,20 @@ func TestGetDailyUsageProjectBreakdowns(t *testing.T) {
 	}
 	assert.InDelta(t, day.TotalCost, projCostSum, 1e-9,
 		"sum(ProjectBreakdowns.Cost) want TotalCost")
+}
+
+func TestDailyUsageEntryBreakdownSlicesMarshalAsEmptyArrays(t *testing.T) {
+	data, err := json.Marshal(DailyUsageEntry{
+		Date:       "2026-07-03",
+		ModelsUsed: []string{},
+	})
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, []any{}, got["modelBreakdowns"])
+	assert.Equal(t, []any{}, got["projectBreakdowns"])
+	assert.Equal(t, []any{}, got["agentBreakdowns"])
 }
 
 func TestGetDailyUsageAgentBreakdowns(t *testing.T) {

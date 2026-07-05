@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -156,6 +157,54 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb cursor usage sync: %w", err)
+	}
+	return nil
+}
+
+func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
+	observations, err := s.local.ListProjectIdentityObservations(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("loading project identity observations: %w", err)
+	}
+	if len(s.projects) > 0 || len(s.excludeProjects) > 0 {
+		out := observations[:0]
+		for _, obs := range observations {
+			if !projectInSyncScope(obs.Project, s.projects, s.excludeProjects) {
+				continue
+			}
+			out = append(out, obs)
+		}
+		observations = out
+	}
+	if len(observations) == 0 {
+		return nil
+	}
+	tx, err := s.duck.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning duckdb project identity sync: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	for _, obs := range observations {
+		obs = export.SanitizeStoredProjectIdentityObservation(obs)
+		if err := upsertProjectIdentityObservation(
+			func(stmt string, args ...any) error {
+				return s.execMutation(ctx, tx, stmt, args...)
+			},
+			func(stmt string, args ...any) *sql.Row {
+				return tx.QueryRowContext(ctx, stmt, args...)
+			},
+			obs, "",
+		); err != nil {
+			return fmt.Errorf(
+				"syncing duckdb project identity observation %s/%s/%s: %w",
+				obs.Project, obs.Machine, obs.RootPath, err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing duckdb project identity sync: %w", err)
 	}
 	return nil
 }

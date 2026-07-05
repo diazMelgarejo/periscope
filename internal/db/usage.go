@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
@@ -42,43 +43,6 @@ func NoTokenData(t UsageTotals) bool {
 		t.CacheReadTokens == 0 &&
 		t.TotalCost == 0 &&
 		t.CopilotAICredits == 0
-}
-
-func lookupModelRates(
-	pricing map[string]modelRates, model string,
-) (modelRates, bool) {
-	return pricingpkg.Resolve(pricing, model)
-}
-
-type modelRateResolution struct {
-	rates modelRates
-	ok    bool
-}
-
-type modelRateResolver struct {
-	pricing map[string]modelRates
-	cache   map[string]modelRateResolution
-}
-
-func newModelRateResolver(
-	pricing map[string]modelRates,
-) *modelRateResolver {
-	return &modelRateResolver{
-		pricing: pricing,
-		cache:   make(map[string]modelRateResolution),
-	}
-}
-
-func (r *modelRateResolver) lookup(model string) (modelRates, bool) {
-	if r == nil {
-		return modelRates{}, false
-	}
-	if cached, ok := r.cache[model]; ok {
-		return cached.rates, cached.ok
-	}
-	rates, ok := lookupModelRates(r.pricing, model)
-	r.cache[model] = modelRateResolution{rates: rates, ok: ok}
-	return rates, ok
 }
 
 // UsageFilter controls the date range, agent, and timezone
@@ -382,7 +346,10 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
+	CASE
+		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
+		ELSE 0
+	END AS reasoning_tokens,
 	NULL AS cost_usd,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -462,6 +429,10 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
+	CASE
+		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
+		ELSE 0
+	END AS reasoning_tokens,
 	NULL AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -486,6 +457,7 @@ SELECT
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
 	ue.cache_read_input_tokens,
+	ue.reasoning_tokens,
 	ue.cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -512,6 +484,10 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
+	CASE
+		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
+		ELSE 0
+	END AS reasoning_tokens,
 	NULL AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -535,6 +511,7 @@ SELECT
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
 	ue.cache_read_input_tokens,
+	ue.reasoning_tokens,
 	ue.cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -588,10 +565,11 @@ usage_event_timestamp_rows AS MATERIALIZED (
 		ue.occurred_at,
 		ue.model,
 		ue.input_tokens,
-		ue.output_tokens,
-		ue.cache_creation_input_tokens,
-		ue.cache_read_input_tokens,
-		ue.cost_usd,
+			ue.output_tokens,
+			ue.cache_creation_input_tokens,
+			ue.cache_read_input_tokens,
+			ue.reasoning_tokens,
+			ue.cost_usd,
 		ue.dedup_key
 	FROM usage_events ue
 	WHERE ` + eventTimestampWhere + `
@@ -668,6 +646,7 @@ type dailyUsageScanRow struct {
 	outputTokens             int
 	cacheCreationInputTokens int
 	cacheReadInputTokens     int
+	reasoningTokens          int
 	costUSD                  sql.NullFloat64
 	claudeMessageID          string
 	claudeRequestID          string
@@ -735,10 +714,11 @@ SELECT
 	u.model,
 	u.token_usage,
 	u.input_tokens,
-	u.output_tokens,
-	u.cache_creation_input_tokens,
-	u.cache_read_input_tokens,
-	u.cost_usd,
+		u.output_tokens,
+		u.cache_creation_input_tokens,
+		u.cache_read_input_tokens,
+		u.reasoning_tokens,
+		u.cost_usd,
 	u.claude_message_id,
 	u.claude_request_id,
 	u.source_uuid,
@@ -915,6 +895,7 @@ SELECT
 	cu.output_tokens,
 	cu.cache_write_tokens AS cache_creation_input_tokens,
 	cu.cache_read_tokens AS cache_read_input_tokens,
+	0 AS reasoning_tokens,
 	cu.charged_cents / 100.0 AS cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -1036,6 +1017,7 @@ func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
 		&r.outputTokens,
 		&r.cacheCreationInputTokens,
 		&r.cacheReadInputTokens,
+		&r.reasoningTokens,
 		&r.costUSD,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
@@ -1050,6 +1032,14 @@ func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
 func parseUsageTokenCounters(
 	tokenJSON string,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+	inputTok, outputTok, cacheCrTok, cacheRdTok, _ =
+		parseUsageTokenCountersWithReasoning(tokenJSON)
+	return
+}
+
+func parseUsageTokenCountersWithReasoning(
+	tokenJSON string,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	i := skipJSONSpace(tokenJSON, 0)
 	if i >= len(tokenJSON) || tokenJSON[i] != '{' {
 		return
@@ -1094,6 +1084,8 @@ func parseUsageTokenCounters(
 					cacheCrTok = value
 				case "cache_read_input_tokens":
 					cacheRdTok = value
+				case "reasoning_tokens":
+					reasoningTok = value
 				}
 			}
 			if valueNext <= i {
@@ -1115,7 +1107,8 @@ func parseUsageTokenCounters(
 func isUsageTokenCounterKey(key string) bool {
 	switch key {
 	case "input_tokens", "output_tokens",
-		"cache_creation_input_tokens", "cache_read_input_tokens":
+		"cache_creation_input_tokens", "cache_read_input_tokens",
+		"reasoning_tokens":
 		return true
 	default:
 		return false
@@ -1346,20 +1339,33 @@ func floorNegativeTokens(v int) int {
 func clampedUsageTokenCounters(
 	tokenJSON string,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok =
-		parseUsageTokenCounters(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok, _ =
+		parseUsageTokenCountersWithReasoning(tokenJSON)
 	return ClampPlausibleTokens(int64(inputTok)),
 		ClampPlausibleTokens(int64(outputTok)),
 		ClampPlausibleTokens(int64(cacheCrTok)),
 		ClampPlausibleTokens(int64(cacheRdTok))
 }
 
+func clampedUsageTokenCountersWithReasoning(
+	tokenJSON string,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
+	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
+		parseUsageTokenCountersWithReasoning(tokenJSON)
+	return ClampPlausibleTokens(int64(inputTok)),
+		ClampPlausibleTokens(int64(outputTok)),
+		ClampPlausibleTokens(int64(cacheCrTok)),
+		ClampPlausibleTokens(int64(cacheRdTok)),
+		ClampPlausibleTokens(int64(reasoningTok))
+}
+
 func dailyUsageAmounts(
-	r dailyUsageScanRow, pricing *modelRateResolver,
+	r dailyUsageScanRow, pricing *export.PricingResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
+	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
-		inputTok, outputTok, cacheCrTok, cacheRdTok =
-			clampedUsageTokenCounters(r.tokenJSON)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
+			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 	} else {
 		inputTok, outputTok, cacheCrTok, cacheRdTok =
 			usageEventRowTokens(
@@ -1368,20 +1374,21 @@ func dailyUsageAmounts(
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
-	rates, _ := pricing.lookup(r.model)
+	lookup := pricing.Lookup(r.model)
+	rates := lookup.Rates
 	if r.costUSD.Valid {
 		cost = r.costUSD.Float64
+		pricing.RecordReported(r.model, lookup)
 	} else {
-		cost = (float64(inputTok)*rates.input +
-			float64(outputTok)*rates.output +
-			float64(cacheCrTok)*rates.cacheCreation +
-			float64(cacheRdTok)*rates.cacheRead) / 1_000_000
+		cost = rates.CostForTokens(
+			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
+		pricing.RecordComputed(r.model, lookup)
 	}
 
 	readDelta := float64(cacheRdTok) *
-		(rates.input - rates.cacheRead) / 1_000_000
+		(rates.InputPerMTok - rates.CacheReadPerMTok) / 1_000_000
 	crDelta := float64(cacheCrTok) *
-		(rates.input - rates.cacheCreation) / 1_000_000
+		(rates.InputPerMTok - rates.CacheWritePerMTok) / 1_000_000
 	savings = readDelta + crDelta
 	return
 }
@@ -1474,9 +1481,27 @@ type DailyUsageEntry struct {
 	CacheReadTokens     int                `json:"cacheReadTokens"`
 	TotalCost           float64            `json:"totalCost"`
 	ModelsUsed          []string           `json:"modelsUsed"`
-	ModelBreakdowns     []ModelBreakdown   `json:"modelBreakdowns,omitempty"`
-	ProjectBreakdowns   []ProjectBreakdown `json:"projectBreakdowns,omitempty"`
-	AgentBreakdowns     []AgentBreakdown   `json:"agentBreakdowns,omitempty"`
+	ModelBreakdowns     []ModelBreakdown   `json:"modelBreakdowns"`
+	ProjectBreakdowns   []ProjectBreakdown `json:"projectBreakdowns"`
+	AgentBreakdowns     []AgentBreakdown   `json:"agentBreakdowns"`
+}
+
+func (e DailyUsageEntry) MarshalJSON() ([]byte, error) {
+	type alias DailyUsageEntry
+	out := alias(e)
+	if out.ModelsUsed == nil {
+		out.ModelsUsed = []string{}
+	}
+	if out.ModelBreakdowns == nil {
+		out.ModelBreakdowns = []ModelBreakdown{}
+	}
+	if out.ProjectBreakdowns == nil {
+		out.ProjectBreakdowns = []ProjectBreakdown{}
+	}
+	if out.AgentBreakdowns == nil {
+		out.AgentBreakdowns = []AgentBreakdown{}
+	}
+	return json.Marshal(out)
 }
 
 // ModelBreakdown holds per-model token and cost breakdown.
@@ -1529,30 +1554,26 @@ type UsageTotals struct {
 
 // DailyUsageResult wraps the daily entries and totals.
 type DailyUsageResult struct {
-	Daily         []DailyUsageEntry  `json:"daily"`
-	Totals        UsageTotals        `json:"totals"`
-	SessionCounts UsageSessionCounts `json:"sessionCounts,omitempty"`
-}
-
-// modelRates holds per-model pricing in rate-per-token form.
-type modelRates struct {
-	input         float64
-	output        float64
-	cacheCreation float64
-	cacheRead     float64
+	SchemaVersion int                               `json:"schema_version,omitempty"`
+	Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
+	Projects      map[string]export.ProjectMapEntry `json:"projects"`
+	Daily         []DailyUsageEntry                 `json:"daily"`
+	Totals        UsageTotals                       `json:"totals"`
+	SessionCounts UsageSessionCounts                `json:"sessionCounts,omitempty"`
 }
 
 // loadPricingMap reads the model_pricing table into a map for
 // in-memory joins. This is much faster than a SQL LEFT JOIN
 // on every row of the daily usage scan, since the pricing
-// table is tiny (a few dozen rows) and lookups are O(1).
+// table is tiny and repeated resolver lookups are cached.
 func (db *DB) loadPricingMap(
 	ctx context.Context,
-) (map[string]modelRates, error) {
+) ([]export.EffectivePricingRow, error) {
 	rows, err := db.getReader().QueryContext(ctx,
 		`SELECT model_pattern,
 			input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok
+			cache_creation_per_mtok, cache_read_per_mtok,
+			updated_at
 		 FROM model_pricing
 		 WHERE model_pattern NOT LIKE '\_%' ESCAPE '\'`)
 	if err != nil {
@@ -1560,35 +1581,104 @@ func (db *DB) loadPricingMap(
 	}
 	defer rows.Close()
 
-	out := make(map[string]modelRates)
+	fallback := fallbackRateMap()
+	out := make(map[string]export.ModelRates)
 	for rows.Next() {
-		var (
-			pattern string
-			rates   modelRates
-		)
+		var p ModelPricing
 		if err := rows.Scan(
-			&pattern,
-			&rates.input, &rates.output,
-			&rates.cacheCreation, &rates.cacheRead,
+			&p.ModelPattern,
+			&p.InputPerMTok, &p.OutputPerMTok,
+			&p.CacheCreationPerMTok, &p.CacheReadPerMTok,
+			&p.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
-		out[pattern] = rates
+		rates := modelPricingRates(p)
+		rates.Source = modelPricingSource(p, fallback)
+		out[p.ModelPattern] = rates
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
 	for model, cp := range db.customPricing {
-		out[model] = modelRates{
-			input:         cp.Input,
-			output:        cp.Output,
-			cacheCreation: cp.CacheCreation,
-			cacheRead:     cp.CacheRead,
+		rates := export.ModelRates{
+			InputPerMTok:      cp.Input,
+			OutputPerMTok:     cp.Output,
+			CacheWritePerMTok: cp.CacheCreation,
+			CacheReadPerMTok:  cp.CacheRead,
 		}
+		rates.Source = customPricingSource()
+		if source, ok := db.customPricingSources[model]; ok {
+			rates.Source = source
+		}
+		out[model] = rates
 	}
 
-	return out, nil
+	return pricingMapRows(out), nil
+}
+
+func customPricingSource() export.PricingRowSource {
+	return export.PricingRowSourceCustom
+}
+
+func fallbackRateMap() map[string]export.ModelRates {
+	fallback := pricingpkg.FallbackPricing()
+	out := make(map[string]export.ModelRates, len(fallback))
+	for _, p := range fallback {
+		rates := export.ModelRates{
+			InputPerMTok:      p.InputPerMTok,
+			OutputPerMTok:     p.OutputPerMTok,
+			CacheWritePerMTok: p.CacheCreationPerMTok,
+			CacheReadPerMTok:  p.CacheReadPerMTok,
+			Source:            export.PricingRowSourceEmbedded,
+		}
+		out[p.ModelPattern] = rates
+	}
+	return out
+}
+
+func modelPricingRates(p ModelPricing) export.ModelRates {
+	var updatedAt *time.Time
+	if p.UpdatedAt != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, p.UpdatedAt); err == nil {
+			t := parsed.UTC()
+			updatedAt = &t
+		}
+	}
+	return export.ModelRates{
+		InputPerMTok:      p.InputPerMTok,
+		OutputPerMTok:     p.OutputPerMTok,
+		CacheWritePerMTok: p.CacheCreationPerMTok,
+		CacheReadPerMTok:  p.CacheReadPerMTok,
+		UpdatedAt:         updatedAt,
+	}
+}
+
+func modelPricingSource(
+	p ModelPricing, fallback map[string]export.ModelRates,
+) export.PricingRowSource {
+	if rates, ok := fallback[p.ModelPattern]; ok &&
+		rates.InputPerMTok == p.InputPerMTok &&
+		rates.OutputPerMTok == p.OutputPerMTok &&
+		rates.CacheWritePerMTok == p.CacheCreationPerMTok &&
+		rates.CacheReadPerMTok == p.CacheReadPerMTok {
+		return export.PricingRowSourceEmbedded
+	}
+	return export.PricingRowSourceFetched
+}
+
+func pricingMapRows(
+	in map[string]export.ModelRates,
+) []export.EffectivePricingRow {
+	out := make([]export.EffectivePricingRow, 0, len(in))
+	for pattern, rates := range in {
+		out = append(out, export.EffectivePricingRow{
+			ModelPattern: pattern,
+			Rates:        rates,
+		})
+	}
+	return out
 }
 
 // paddedUTCBound pads a UTC timestamp by hours to cover timezone
@@ -1616,7 +1706,7 @@ func (db *DB) GetDailyUsage(
 		return DailyUsageResult{},
 			fmt.Errorf("loading pricing: %w", err)
 	}
-	rateResolver := newModelRateResolver(pricing)
+	rateResolver := export.NewPricingResolver(pricing)
 
 	// Filter on usage timestamp (not only session started_at) so
 	// long-lived sessions that span date boundaries are included.
@@ -1656,6 +1746,7 @@ func (db *DB) GetDailyUsage(
 	if !f.SkipSessionCounts {
 		seenSessions = make(map[string]UsageSessionInfo)
 	}
+	projectLabels := make(map[string]struct{})
 
 	// totalSavings is the running sum of per-message cache
 	// savings using each row's actual per-model rates. We sum
@@ -1699,6 +1790,9 @@ func (db *DB) GetDailyUsage(
 					Agent:   r.agent,
 				}
 			}
+		}
+		if r.project != "" {
+			projectLabels[r.project] = struct{}{}
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings :=
@@ -1856,7 +1950,20 @@ func (db *DB) GetDailyUsage(
 		if seenSessions != nil {
 			sessionCounts = NewUsageSessionCounts(seenSessions)
 		}
+		projects, err := db.BuildProjectIdentityMap(ctx,
+			sortedSetKeys(projectLabels))
+		if err != nil {
+			return DailyUsageResult{}, err
+		}
+		pricingBlock, err := rateResolver.BuildBlock()
+		if err != nil {
+			return DailyUsageResult{}, fmt.Errorf(
+				"building pricing block: %w", err)
+		}
 		return DailyUsageResult{
+			SchemaVersion: export.UsageDailySchemaVersion,
+			Pricing:       &pricingBlock,
+			Projects:      projects,
 			Daily:         daily,
 			Totals:        totals,
 			SessionCounts: sessionCounts,
@@ -2032,7 +2139,19 @@ func (db *DB) GetDailyUsage(
 	if seenSessions != nil {
 		sessionCounts = NewUsageSessionCounts(seenSessions)
 	}
+	projects, err := db.BuildProjectIdentityMap(ctx, sortedSetKeys(projectLabels))
+	if err != nil {
+		return DailyUsageResult{}, err
+	}
+	pricingBlock, err := rateResolver.BuildBlock()
+	if err != nil {
+		return DailyUsageResult{}, fmt.Errorf(
+			"building pricing block: %w", err)
+	}
 	return DailyUsageResult{
+		SchemaVersion: export.UsageDailySchemaVersion,
+		Pricing:       &pricingBlock,
+		Projects:      projects,
 		Daily:         daily,
 		Totals:        totals,
 		SessionCounts: sessionCounts,
@@ -2067,7 +2186,7 @@ func (db *DB) GetTopSessionsByCost(
 		return nil,
 			fmt.Errorf("loading pricing: %w", err)
 	}
-	rateResolver := newModelRateResolver(pricing)
+	rateResolver := export.NewPricingResolver(pricing)
 
 	query, args := topSessionsUsageRowQuery(f)
 	// Deterministic order so the dedup "winner" (the session
@@ -2217,12 +2336,13 @@ type SessionUsage struct {
 // an explicit map lookup so callers can distinguish "unpriced" from
 // "$0".
 func sessionRowCost(
-	r usageScanRow, pricing map[string]modelRates,
+	r usageScanRow, pricing *export.PricingResolver,
 ) (cost float64, priced, contributes bool) {
 	var inTok, outTok, crTok, rdTok int
+	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok =
-			clampedUsageTokenCounters(r.tokenJSON)
+		inTok, outTok, crTok, rdTok, reasoningTok =
+			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 	} else {
 		inTok, outTok, crTok, rdTok = usageEventRowTokens(
 			r.usageSource,
@@ -2231,19 +2351,21 @@ func sessionRowCost(
 	}
 
 	if r.costUSD.Valid {
+		pricing.RecordReported(r.model, pricing.Lookup(r.model))
 		return r.costUSD.Float64, true, true
 	}
-	if inTok == 0 && outTok == 0 && crTok == 0 && rdTok == 0 {
+	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
+		crTok == 0 && rdTok == 0 {
 		return 0, true, false
 	}
-	rates, ok := lookupModelRates(pricing, r.model)
-	if !ok {
+	lookup := pricing.Lookup(r.model)
+	if !lookup.OK {
+		pricing.RecordComputed(r.model, lookup)
 		return 0, false, true
 	}
-	cost = (float64(inTok)*rates.input +
-		float64(outTok)*rates.output +
-		float64(crTok)*rates.cacheCreation +
-		float64(rdTok)*rates.cacheRead) / 1_000_000
+	cost = lookup.Rates.CostForTokens(
+		inTok, outTok, reasoningTok, crTok, rdTok)
+	pricing.RecordComputed(r.model, lookup)
 	return cost, true, true
 }
 
@@ -2270,6 +2392,7 @@ func (db *DB) GetSessionUsage(
 	if err != nil {
 		return nil, fmt.Errorf("loading pricing: %w", err)
 	}
+	rateResolver := export.NewPricingResolver(pricing)
 
 	query := usageRowSelect() + ` AND u.session_id = ?
 		ORDER BY u.ts ASC, u.session_id ASC,
@@ -2303,7 +2426,7 @@ func (db *DB) GetSessionUsage(
 			seen[key] = struct{}{}
 		}
 
-		c, priced, contributes := sessionRowCost(r, pricing)
+		c, priced, contributes := sessionRowCost(r, rateResolver)
 		if !contributes {
 			continue
 		}
