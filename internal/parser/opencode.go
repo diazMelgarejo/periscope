@@ -494,7 +494,7 @@ func buildOpenCodeParsedSession(
 		})
 
 		pm := buildOpenCodeMessage(
-			ordinal, role, m.timeCreated, msgParts,
+			ordinal, role, m.timeCreated, msgParts, worktree,
 		)
 		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
 		if strings.TrimSpace(pm.Content) == "" &&
@@ -690,6 +690,7 @@ func buildOpenCodeMessage(
 	role RoleType,
 	timeCreatedMs int64,
 	parts []openCodePartRow,
+	cwd string,
 ) ParsedMessage {
 	var (
 		texts       []string
@@ -708,7 +709,7 @@ func buildOpenCodeMessage(
 			}
 		case "tool":
 			hasToolUse = true
-			tc := extractOpenCodeToolCall(p.data)
+			tc := extractOpenCodeToolCall(p.data, cwd)
 			if tc.ToolName != "" {
 				toolCalls = append(toolCalls, tc)
 			}
@@ -779,7 +780,7 @@ type openCodeToolState struct {
 	Input json.RawMessage `json:"input"`
 }
 
-func extractOpenCodeToolCall(data string) ParsedToolCall {
+func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 	var d openCodeToolData
 	if err := json.Unmarshal([]byte(data), &d); err != nil {
 		return ParsedToolCall{}
@@ -795,12 +796,40 @@ func extractOpenCodeToolCall(data string) ParsedToolCall {
 		}
 	}
 
+	var skillName string
+	switch d.ToolName {
+	case "skill":
+		skillName = gjson.Get(inputJSON, "skill").Str
+		if skillName == "" {
+			skillName = gjson.Get(inputJSON, "name").Str
+		}
+	default:
+		skillName = inferOpenCodeSkillName(d.ToolName, inputJSON, cwd)
+	}
+
 	return ParsedToolCall{
 		ToolUseID: d.CallID,
 		ToolName:  d.ToolName,
 		Category:  NormalizeToolCategory(d.ToolName),
 		InputJSON: inputJSON,
+		SkillName: skillName,
 	}
+}
+
+func inferOpenCodeSkillName(toolName, inputJSON, cwd string) string {
+	if isCursorSkillReadTool(toolName) {
+		// OpenCode's read-tool input carries no cwd/workdir key, so
+		// inferSkillNameFromJSONPaths can't resolve relative SKILL.md
+		// paths and falls back to the parent directory name. Try the
+		// file_path directly against the session worktree first.
+		if fp := gjson.Get(inputJSON, "file_path").Str; fp != "" && cwd != "" {
+			if name := skillNameFromPath(fp, cwd); name != "" {
+				return name
+			}
+		}
+		return inferSkillNameFromJSONPaths(inputJSON)
+	}
+	return inferCodexSkillNameWithBase(toolName, inputJSON, cwd)
 }
 
 type openCodeStorageTime struct {
