@@ -150,6 +150,32 @@ type Engine struct {
 	// sessions don't rescan their whole history on every appended
 	// line. Close flushes and stops it.
 	signalSched *signalScheduler
+
+	// containerMu guards the OpenCode-family shared-SQLite freshness
+	// gate (see opencode_container_gate.go). trustedSQLiteContainers
+	// maps a container DB path to its state and verified session-ID
+	// set at the end of the last pass that verified every one of its
+	// discovered sessions; containerPass is the bookkeeping for the
+	// pass currently running (nil outside passes). Both are in-memory
+	// only: a restart re-verifies once.
+	containerMu             gosync.Mutex
+	trustedSQLiteContainers map[string]trustedSQLiteContainer
+	containerPass           *sqliteContainerPass
+
+	// storageTrustMu guards the per-session freshness gate for
+	// OpenCode-family file-backed storage sessions (see
+	// opencode_storage_gate.go). trustedStorageSessions maps a session
+	// JSON path to the stat signature captured before the last parse
+	// whose outcome the archive absorbed (results dropped as already
+	// stored, or confirmed written). storageTrustGens counts each
+	// session's invalidations and storageTrustEpoch counts full clears,
+	// so a promotion whose pre-parse snapshot predates an invalidation
+	// is discarded instead of resurrecting the invalidated trust. All
+	// in-memory only: a restart re-verifies once.
+	storageTrustMu         gosync.Mutex
+	trustedStorageSessions map[string]string
+	storageTrustGens       map[string]uint64
+	storageTrustEpoch      uint64
 }
 
 // PhaseStats returns the engine's phase counter. The values reflect only
@@ -543,6 +569,9 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) {
 	if e.refuseWriteInForceParse("SyncPaths") {
 		return
 	}
+	// Capture container states before classifyPaths lists any session rows,
+	// matching the capture-before-discovery ordering of full syncs.
+	preContainerStates := e.captureSQLiteContainerStates()
 	files := e.classifyPaths(paths)
 	if len(files) == 0 {
 		return
@@ -564,11 +593,20 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) {
 	e.resetS3CodexIndexCache()
 
 	e.anomalies.reset()
+	// Begin a container pass so an already-trusted, unchanged container
+	// still gates its fan-out (a spurious watcher event on the DB file
+	// costs nothing), but never promote from here: a changed-path pass is
+	// not guaranteed to cover a container's complete session set (a hybrid
+	// root can fan a single message path out to one SQLite-backed
+	// session), and promotion from a subset would be unsound. The next
+	// full sync re-verifies and re-trusts (see opencode_container_gate.go).
+	e.beginSQLiteContainerPass(files, preContainerStates)
 	results := e.startWorkers(ctx, files)
 	stats = e.collectAndBatch(
 		ctx, results, len(files), len(files), nil,
 		syncWriteDefault,
 	)
+	e.finishSQLiteContainerPass(true, false)
 	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
 
@@ -691,15 +729,19 @@ func (e *Engine) classifyProviderChangedPath(
 			continue
 		}
 		for _, watchRoot := range watchRoots {
-			storedSourcePaths, err := e.db.ListStoredSourcePathHints(
-				string(def.Type),
-				[]string{watchRoot},
-			)
-			if err != nil {
-				log.Printf(
-					"%s provider changed-path stored hints: %v",
-					def.Type, err,
+			var storedSourcePaths []string
+			if providerChangedPathWantsStoredHints(def.Type) {
+				var err error
+				storedSourcePaths, err = e.db.ListStoredSourcePathHints(
+					string(def.Type),
+					[]string{watchRoot},
 				)
+				if err != nil {
+					log.Printf(
+						"%s provider changed-path stored hints: %v",
+						def.Type, err,
+					)
+				}
 			}
 			sources, err := provider.SourcesForChangedPath(
 				ctx,
@@ -740,14 +782,22 @@ func (e *Engine) classifyProviderChangedPath(
 				}
 				seen[key] = struct{}{}
 				sourceCopy := source
-				files = append(files, parser.DiscoveredFile{
+				discovered := parser.DiscoveredFile{
 					Path:            sourcePath,
 					Project:         source.ProjectHint,
 					Agent:           agent,
 					ForceParse:      providerChangedPathForceParse(agent, sourcePath, path, eventKind, mode),
 					ProviderSource:  &sourceCopy,
 					ProviderProcess: mode == parser.ProviderMigrationProviderAuthoritative,
-				})
+				}
+				// A watcher event names a concrete change even when the
+				// session's stat signature cannot see it (a same-size,
+				// same-mtime child rewrite), so the storage gate must
+				// re-verify this session by content on the next pass.
+				if sessionPath := e.openCodeStorageSessionPath(discovered); sessionPath != "" {
+					e.invalidateOpenCodeStorageSession(sessionPath)
+				}
+				files = append(files, discovered)
 			}
 		}
 	}
@@ -805,10 +855,34 @@ func providerChangedPathForceParse(
 	}
 	if filepath.Clean(sourcePath) != filepath.Clean(eventPath) &&
 		!providerVirtualSourceBackedByEvent(sourcePath, eventPath) {
+		// OpenCode-family storage sessions resolve message/part events
+		// to their session JSON, whose fingerprint and stat signature
+		// span those same child files, and the classifier invalidates
+		// the session's storage-gate trust for every event. The normal
+		// freshness path therefore re-verifies by content, while a
+		// forced parse would bypass dropUnchangedSharedSQLiteResults
+		// and rewrite the whole session on every streamed append.
+		// Remove events keep the force so a deleted child still
+		// re-emits through the deletion path.
+		if eventKind != "remove" &&
+			isOpenCodeFormatStorageAgent(agent) &&
+			isOpenCodeFormatStoragePath(agent, sourcePath) {
+			return false
+		}
 		return true
 	}
 	return eventKind == "remove" &&
 		providerDeletedPhysicalSQLiteSource(agent, sourcePath)
+}
+
+// providerChangedPathWantsStoredHints reports whether an agent's
+// SourcesForChangedPath implementation reads
+// ChangedPathRequest.StoredSourcePaths. The OpenCode-family source sets
+// resolve changed paths purely from the on-disk layout, so the per-event
+// stored-hints lookup — a LIKE scan over every stored session row of the
+// agent — would be computed and discarded on every watcher event.
+func providerChangedPathWantsStoredHints(agent parser.AgentType) bool {
+	return !isOpenCodeFormatStorageAgent(agent)
 }
 
 func providerVirtualSourceBackedByEvent(sourcePath, eventPath string) bool {
@@ -1141,6 +1215,12 @@ func (e *Engine) resyncAllLocked(
 			Hint:   hint,
 		})
 	}
+
+	// Resync rebuilds the archive from scratch, so every shared-SQLite
+	// container and storage session must be re-verified against the
+	// fresh database.
+	e.clearTrustedSQLiteContainers()
+	e.clearTrustedOpenCodeStorageSessions()
 
 	origDB := e.db
 	origPath := origDB.Path()
@@ -1884,6 +1964,11 @@ func (e *Engine) syncAllLocked(
 		Detail: "Discovering sessions",
 	})
 
+	// Container states must be captured BEFORE discovery lists any session
+	// rows, so a promoted state can never be newer than the discovered
+	// session set (see captureSQLiteContainerStates).
+	preContainerStates := e.captureSQLiteContainerStates()
+
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
 	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
@@ -1891,6 +1976,11 @@ func (e *Engine) syncAllLocked(
 		counts[file.Agent]++
 	}
 	all = append(all, providerFound...)
+
+	// Begin gate bookkeeping from the pre-filter discovery set: promotion
+	// needs a completion for every discovered session, so a cutoff-filtered
+	// pass must stay unpromotable (see opencode_container_gate.go).
+	e.beginSQLiteContainerPass(providerFound, preContainerStates)
 
 	quickSyncCutoff := !since.IsZero()
 	if quickSyncCutoff {
@@ -1971,6 +2061,14 @@ func (e *Engine) syncAllLocked(
 	for range providerFailures {
 		stats.RecordFailed()
 	}
+	// Discovery failures cannot be attributed to a provider here, so any
+	// failure conservatively blocks every container promotion this pass.
+	// Only unscoped passes discovered every root, so only they may drop
+	// trusted entries for containers that produced no sources.
+	e.finishSQLiteContainerPass(
+		stats.Aborted || ctx.Err() != nil || providerFailures > 0,
+		scope == nil,
+	)
 	stats.nonContainerDiscovered = nonContainerDiscovered
 	if verbose {
 		log.Printf(
@@ -3315,6 +3413,7 @@ func (e *Engine) collectAndBatch(
 				goto flush
 			}
 			stats.RecordFailed()
+			e.noteSQLiteContainerResult(r.path, false)
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
 			}
@@ -3326,6 +3425,7 @@ func (e *Engine) collectAndBatch(
 				e.cacheSkip(r.skipCacheKey(), r.mtime)
 			}
 			stats.RecordSkip()
+			e.noteSQLiteContainerResult(r.path, true)
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
 			continue
@@ -3349,6 +3449,7 @@ func (e *Engine) collectAndBatch(
 			); err != nil {
 				log.Printf("delete parser-excluded sessions: %v", err)
 				stats.RecordFailed()
+				e.noteSQLiteContainerResult(r.path, false)
 				continue
 			}
 			stats.parserExcludedIDs = append(
@@ -3364,6 +3465,7 @@ func (e *Engine) collectAndBatch(
 			if r.cacheSkip && !r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
 			}
+			e.noteSQLiteContainerResult(r.path, true)
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
 			continue
@@ -3381,6 +3483,16 @@ func (e *Engine) collectAndBatch(
 		// allow-list change must be able to pick them up again.
 		allowed, vetoed := e.splitResultsByCwdFilter(r.results)
 		stats.cwdFilteredSessions += vetoed
+		// A cwd-vetoed session parsed fine but was deliberately not
+		// persisted, and sessions parsed at DataVersionNeedsRetry are
+		// deferred work — neither is verified state, so their container
+		// must stay untrusted. The vetoed case matters because the gate
+		// must never hide a filtered session from a future allow-list
+		// change; such containers simply keep the pre-gate re-verify
+		// behavior.
+		e.noteSQLiteContainerResult(
+			r.path, vetoed == 0 && len(r.retrySessionIDs) == 0,
+		)
 		if vetoed > 0 && len(allowed) == 0 {
 			stats.cwdFilteredFiles++
 			progress.SessionsDone++
@@ -3402,11 +3514,14 @@ func (e *Engine) collectAndBatch(
 		} else {
 			for _, pr := range allowed {
 				pending = append(pending, pendingWrite{
-					sess:         pr.Session,
-					msgs:         pr.Messages,
-					usageEvents:  pr.UsageEvents,
-					needsRetry:   r.needsRetryForSession(pr.Session.ID),
-					forceReplace: r.forceReplace,
+					sess:              pr.Session,
+					msgs:              pr.Messages,
+					usageEvents:       pr.UsageEvents,
+					needsRetry:        r.needsRetryForSession(pr.Session.ID),
+					forceReplace:      r.forceReplace,
+					storageTrustPath:  r.storageTrustPath,
+					storageTrustState: r.storageTrustState,
+					storageTrustSnap:  r.storageTrustSnap,
 				})
 			}
 			// A Kiro SQLite store is discovered as one container source
@@ -3430,6 +3545,14 @@ func (e *Engine) collectAndBatch(
 			for range failedWrites {
 				stats.RecordFailed()
 			}
+			// Batch write failures cannot be attributed to individual
+			// sessions, so they block every container promotion this pass.
+			if failedWrites > 0 {
+				e.poisonSQLiteContainerPass()
+			}
+			e.promoteOpenCodeStorageTrustAfterWrite(
+				pending, writtenSessions, failedWrites, cwdFiltered,
+			)
 			stats.cwdFilteredSessions += cwdFiltered
 			progress.MessagesIndexed += writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
@@ -3448,6 +3571,12 @@ flush:
 		for range failedWrites {
 			stats.RecordFailed()
 		}
+		if failedWrites > 0 {
+			e.poisonSQLiteContainerPass()
+		}
+		e.promoteOpenCodeStorageTrustAfterWrite(
+			pending, writtenSessions, failedWrites, cwdFiltered,
+		)
 		stats.cwdFilteredSessions += cwdFiltered
 		progress.MessagesIndexed += writtenMessages
 		stats.messagesIndexed = progress.MessagesIndexed
@@ -3546,6 +3675,14 @@ type processResult struct {
 	// suppressPresenceSweep marks an incomplete source result where
 	// missing stored sessions are expected rather than parser drift.
 	suppressPresenceSweep bool
+	// storageTrustPath/State/Snap carry an OpenCode-family storage
+	// session's pre-parse stat signature and invalidation snapshot to
+	// the write path, which promotes it once the session's batch is
+	// confirmed fully written (see opencode_storage_gate.go). Empty for
+	// everything else.
+	storageTrustPath  string
+	storageTrustState string
+	storageTrustSnap  storageTrustSnapshot
 }
 
 func (r processResult) needsRetryForSession(sessionID string) bool {
@@ -3700,6 +3837,37 @@ func (e *Engine) processProviderFile(
 	}
 	if file.ProviderSource != nil && !file.ProviderProcess && !usesProvider {
 		return processResult{}, false
+	}
+
+	// OpenCode-family shared-SQLite gate: when the whole container
+	// provably has not changed since the last fully verified pass, none
+	// of its sessions can have changed, so skip before paying for the
+	// per-session fingerprint (a DB open per source) and parse.
+	if e.sqliteContainerSourceFresh(file) {
+		return processResult{skip: true}, true
+	}
+
+	// Processing a file-backed storage session makes (or confirms) the
+	// storage copy as the archive's canonical content for its ID, so a
+	// same-ID SQLite row in this root's container is no longer backed by
+	// what its trusted membership verified. Drop it so a storage copy
+	// that appears and disappears entirely between full passes still
+	// forces the re-exposed row to re-verify (see
+	// dropTrustedSQLiteContainerSessionForStorage).
+	if sessionPath := e.openCodeStorageSessionPath(file); sessionPath != "" {
+		e.dropTrustedSQLiteContainerSessionForStorage(file.Agent, sessionPath)
+	}
+
+	// OpenCode-family file-backed storage gate: when the session's
+	// per-file stat signature matches the last verified pass, its parse
+	// inputs are unchanged, so skip before re-reading the whole message
+	// and part tree (see opencode_storage_gate.go). The captured state
+	// also feeds the post-parse promotion below.
+	storageState, storageSnap, storageStateOK :=
+		e.openCodeStorageSessionGateState(file)
+	if storageStateOK &&
+		e.openCodeStorageSessionFresh(file.Path, storageState) {
+		return processResult{skip: true}, true
 	}
 
 	factory, ok := e.providerFactories[file.Agent]
@@ -3925,8 +4093,10 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 
+	parsedResults := parseOutcomeResults(outcome.Results)
+	parsedCount := len(parsedResults)
 	res := processResult{
-		results:               e.dropUnchangedSharedSQLiteResults(file, parseOutcomeResults(outcome.Results)),
+		results:               e.dropUnchangedSharedSQLiteResults(file, parsedResults),
 		excludedSessionIDs:    append([]string(nil), outcome.ExcludedSessionIDs...),
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
@@ -3959,6 +4129,12 @@ func (e *Engine) processProviderFile(
 		}
 	}
 	e.applyProviderFilePathPolicies(provider, file.Agent, &res)
+	if storageStateOK {
+		e.stageOpenCodeStorageTrust(
+			&res, file.Path, storageState, storageSnap,
+			parsedCount, outcome.ResultSetComplete,
+		)
+	}
 	return res, true
 }
 
@@ -5717,6 +5893,12 @@ type pendingWrite struct {
 	usageEvents  []parser.ParsedUsageEvent
 	needsRetry   bool
 	forceReplace bool
+	// storageTrustPath/State/Snap promote the session's OpenCode
+	// storage-gate trust after its batch is confirmed fully written.
+	// Empty for everything else.
+	storageTrustPath  string
+	storageTrustState string
+	storageTrustSnap  storageTrustSnapshot
 }
 
 func dataVersionForWrite(pw pendingWrite) int {

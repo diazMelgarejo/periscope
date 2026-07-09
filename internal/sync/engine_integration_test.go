@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -593,6 +594,446 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 		"changed SQLite child content must change the storage fingerprint")
 	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
 		"successful rewrite must bump local_modified_at for push windows")
+}
+
+// TestSyncEngineOpenCodeSQLiteUntouchedContainerSkipsReparse pins the
+// container-level freshness gate: when the shared opencode.db file is
+// completely untouched since the last verified sync, its sessions must be
+// counted as skipped (no per-session fingerprint, no parse) instead of
+// being re-parsed and dropped as unchanged after the fact.
+func TestSyncEngineOpenCodeSQLiteUntouchedContainerSkipsReparse(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/opencode-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "gated-one",
+		1779012000000, 1779012030000,
+		"first prompt", "first answer",
+	)
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "gated-two",
+		1779012100000, 1779012130000,
+		"second prompt", "second answer",
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 2, stats.Synced, "first sync writes both sessions")
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 0, stats.Synced,
+		"untouched container must not re-emit sessions")
+	assert.Equal(t, 2, stats.Skipped,
+		"untouched container sessions must skip before parse")
+	assertMessageContent(
+		t, env.db, "opencode:gated-one",
+		"first prompt", "first answer",
+	)
+	assertMessageContent(
+		t, env.db, "opencode:gated-two",
+		"second prompt", "second answer",
+	)
+}
+
+// TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits pins
+// the gate's safety boundary: file size and mtime equality alone must never
+// be trusted (mtime granularity differs across filesystems, and a rewrite
+// can land within one granularity unit). A content change that leaves the
+// container stat-identical — same size, mtime restored — still changes
+// SQLite's own write counters, so the sessions must be re-parsed and the
+// changed content re-emitted.
+func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/opencode-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "stat-twin",
+		1779012000000, 1779012030000,
+		"original prompt", "original answer",
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
+
+	dbPath := filepath.Join(env.opencodeDir, "opencode.db")
+	before, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat opencode.db")
+
+	time.Sleep(20 * time.Millisecond)
+	// Same-length replacement content keeps the SQLite file size stable, and
+	// the mtime is restored below, so only SQLite's internal change counter
+	// betrays the rewrite.
+	oc.replaceTextContent(
+		t, "stat-twin",
+		"replaced prompt", "replaced answer",
+		1779012000000,
+	)
+	after, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat opencode.db after rewrite")
+	require.Equal(t, before.Size(), after.Size(),
+		"fixture must keep the container size stable for this test")
+	setFileMtime(t, dbPath, before.ModTime().UnixNano())
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced,
+		"stat-identical content change must still be re-emitted")
+	assertMessageContent(
+		t, env.db, "opencode:stat-twin",
+		"replaced prompt", "replaced answer",
+	)
+}
+
+// TestSyncEngineOpenCodeSQLiteWALOnlyChangeStillReemits pins the gate's WAL
+// awareness: OpenCode runs its database in WAL mode, where a committed write
+// only appends frames to opencode.db-wal and leaves the main file's size,
+// mtime, and header change counter untouched until a checkpoint. A change
+// that lands only in the WAL must still be re-parsed and re-emitted.
+func TestSyncEngineOpenCodeSQLiteWALOnlyChangeStillReemits(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.mustExec(t, "enable WAL", "PRAGMA journal_mode=WAL")
+	oc.addProject(t, "proj", "/home/user/code/opencode-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "wal-session",
+		1779012000000, 1779012030000,
+		"original prompt", "original answer",
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
+
+	dbPath := filepath.Join(env.opencodeDir, "opencode.db")
+	before, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat opencode.db")
+
+	time.Sleep(20 * time.Millisecond)
+	oc.updateSessionTime(t, "wal-session", 1779015630000)
+	oc.replaceTextContent(
+		t, "wal-session",
+		"changed prompt", "changed answer",
+		1779015600000,
+	)
+	// The commit must have landed in the WAL only; a main-file change would
+	// mean this test no longer exercises the WAL-awareness of the gate.
+	after, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat opencode.db after WAL write")
+	require.Equal(t, before.Size(), after.Size(),
+		"main DB file size must stay untouched by a WAL-mode commit")
+	require.Equal(t, before.ModTime(), after.ModTime(),
+		"main DB file mtime must stay untouched by a WAL-mode commit")
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced,
+		"a WAL-only container change must still be re-emitted")
+	assertMessageContent(
+		t, env.db, "opencode:wal-session",
+		"changed prompt", "changed answer",
+	)
+}
+
+// TestSyncEngineOpenCodeSQLiteCwdFilteredContainerStaysUntrusted pins the
+// promotion invariant against the cwd allow-list: a session that parses but
+// is vetoed by the filter was deliberately not persisted, so its container
+// was not fully verified and must never be trusted. A later sync must
+// re-verify the container (no gate skips) instead of hiding the vetoed
+// session behind the trusted state.
+func TestSyncEngineOpenCodeSQLiteCwdFilteredContainerStaysUntrusted(
+	t *testing.T,
+) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {root},
+		},
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/home/user/code/keep-app"},
+	})
+	oc := createOpenCodeDB(t, root)
+	oc.addProject(t, "proj-keep", "/home/user/code/keep-app")
+	oc.addProject(t, "proj-drop", "/home/user/code/drop-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj-keep", "keep-session",
+		1779012000000, 1779012030000,
+		"keep prompt", "keep answer",
+	)
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj-drop", "drop-session",
+		1779012100000, 1779012130000,
+		"drop prompt", "drop answer",
+	)
+
+	stats := engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "only the allowed session is written")
+
+	stats = engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 0, stats.Skipped,
+		"a container with cwd-vetoed sessions must not be gate-skipped")
+
+	kept, err := database.GetSessionFull(
+		context.Background(), "opencode:keep-session",
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, kept, "allowed session must be archived")
+	dropped, err := database.GetSessionFull(
+		context.Background(), "opencode:drop-session",
+	)
+	require.NoError(t, err)
+	assert.Nil(t, dropped, "vetoed session must stay out of the archive")
+}
+
+// TestSyncEngineOpenCodeSQLiteCutoffPassMustNotTrustContainer guards the
+// gate's promotion rule: a cutoff-filtered pass discovers the container but
+// processes none of its sessions, so it has verified nothing and a later
+// full sync must still parse and write them.
+func TestSyncEngineOpenCodeSQLiteCutoffPassMustNotTrustContainer(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/opencode-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "filtered-session",
+		1779012000000, 1779012030000,
+		"first prompt", "first answer",
+	)
+
+	future := time.Now().Add(24 * time.Hour)
+	stats := env.engine.SyncAllSince(context.Background(), future, nil)
+	require.False(t, stats.Aborted, "cutoff sync aborted: %+v", stats)
+	assert.Equal(t, 0, stats.Synced, "future cutoff filters every source")
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "full sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced,
+		"a cutoff-filtered pass must not mark the container verified")
+	assertMessageContent(
+		t, env.db, "opencode:filtered-session",
+		"first prompt", "first answer",
+	)
+}
+
+// TestSyncEngineOpenCodeStorageUntouchedSessionSkipsReparse pins the
+// per-session freshness gate for file-backed storage sessions: once a pass
+// has written (or verified) a session, an untouched session must skip
+// before fingerprinting and parsing on every later pass — including the
+// very next one after the write. The part file is made unreadable for the
+// gated pass, so any attempt to re-read the tree would surface as a
+// failure instead of a skip.
+func TestSyncEngineOpenCodeStorageUntouchedSessionSkipsReparse(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-storage-gated"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/oc-app", "Storage Gated",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"gated storage reply", 1704067201000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
+
+	// The write pass itself promotes the session's stat signature, so
+	// the very next pass must already gate-skip it.
+	require.NoError(t, os.Chmod(partPath, 0o000), "make part unreadable")
+	t.Cleanup(func() {
+		_ = os.Chmod(partPath, 0o644)
+	})
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "gated sync aborted: %+v", stats)
+	assert.Equal(t, 0, stats.Failed,
+		"gated pass must not re-read message or part files")
+	assert.Equal(t, 1, stats.Skipped,
+		"verified-unchanged session must skip before parse")
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "gated storage reply",
+	)
+}
+
+// TestSyncEngineOpenCodeStorageAppendedMessageReemitsSession covers the
+// streaming case through the gate: a new message/part appended after the
+// session was trusted changes its stat signature, so the session re-parses
+// and re-emits exactly once, then settles back to skipping.
+func TestSyncEngineOpenCodeStorageAppendedMessageReemitsSession(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-storage-append"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/oc-app", "Storage Append",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"first storage reply", 1704067201000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 0, stats.Synced, "verification pass drops the unchanged session")
+
+	storage.addMessage(
+		t, sessionID, "msg-b1", "assistant",
+		1704067202000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-b1", "part-b1",
+		"second storage reply", 1704067202000,
+	)
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "append sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced,
+		"appended message must re-emit the session")
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"first storage reply", "second storage reply",
+	)
+}
+
+// TestSyncEngineOpenCodeStorageWatcherEventDoesNotRewriteUnchanged pins the
+// watcher path for file-backed storage sessions: a changed-path event that
+// resolves to a session whose parse output is already stored must not
+// rewrite it. Message/part events used to force-parse, which bypassed
+// dropUnchangedSharedSQLiteResults and rewrote the whole session (bumping
+// local_modified_at and amplifying remote pushes) on every streamed append
+// or spurious event re-fire.
+func TestSyncEngineOpenCodeStorageWatcherEventDoesNotRewriteUnchanged(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-storage-watch-unchanged"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/oc-app", "Storage Watch",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"steady storage reply", 1704067201000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
+	fullID := "opencode:" + sessionID
+	before := openCodeLocalModifiedSnapshot(t, env.db, fullID)
+
+	env.engine.SyncPaths([]string{partPath})
+
+	after := openCodeLocalModifiedSnapshot(t, env.db, fullID)
+	assert.Equal(t, before[fullID], after[fullID],
+		"an event on an unchanged session must not rewrite it")
+	assertMessageContent(
+		t, env.db, fullID, "steady storage reply",
+	)
+
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"updated storage reply", 1704067203000,
+	)
+	env.engine.SyncPaths([]string{partPath})
+
+	assertMessageContent(
+		t, env.db, fullID, "updated storage reply",
+	)
+	final := openCodeLocalModifiedSnapshot(t, env.db, fullID)
+	assert.NotEqual(t, after[fullID], final[fullID],
+		"a real content change must rewrite the session")
+}
+
+// TestSyncEngineOpenCodeStorageStatIdenticalEventStillReemits pins the
+// gate's safety boundary on the watcher path: a child rewritten in place
+// with the same size and a restored mtime is invisible to the stat
+// signature, but the event names the change, so classification must
+// invalidate the session's trust and the next parse must re-emit the new
+// content.
+func TestSyncEngineOpenCodeStorageStatIdenticalEventStillReemits(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-storage-stat-twin"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/oc-app", "Storage Stat Twin",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"stat twin reply AAAA", 1704067201000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 0, stats.Synced, "verification pass drops the unchanged session")
+
+	beforeInfo, err := os.Stat(partPath)
+	require.NoError(t, err, "stat part before rewrite")
+	// Same-length replacement text keeps the part file size stable, and the
+	// mtime is restored below, so only the event says anything changed.
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"stat twin reply BBBB", 1704067201000,
+	)
+	afterInfo, err := os.Stat(partPath)
+	require.NoError(t, err, "stat part after rewrite")
+	require.Equal(t, beforeInfo.Size(), afterInfo.Size(),
+		"fixture must keep the part size stable for this test")
+	setFileMtime(t, partPath, beforeInfo.ModTime().UnixNano())
+
+	env.engine.SyncPaths([]string{partPath})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "stat twin reply BBBB",
+	)
 }
 
 func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
@@ -4809,6 +5250,262 @@ func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
 	assertMessageContent(
 		t, env.db, "opencode:"+duplicateID,
 		"canonical storage reply",
+	)
+}
+
+// TestOpenCodeHybridUnshadowedSQLiteSessionParsesAfterStorageRemoval pins
+// the container gate against hybrid shadow removal: a SQLite row hidden by
+// a same-ID storage JSON during the verified pass becomes discoverable when
+// the storage copy is deleted, while the DB — and so its trusted state — is
+// untouched. The newly exposed row must be parsed and take over the
+// session, not gate-skipped as part of an unchanged container.
+func TestOpenCodeHybridUnshadowedSQLiteSessionParsesAfterStorageRemoval(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-unshadow"
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/app", "Unshadow",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-s1", "assistant", 1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-s1", "part-s1",
+		"storage canonical reply", 1704067201000,
+	)
+	// The archived storage session's mtime is a composite over the storage
+	// tree's files and directories; backdate the whole tree so the SQLite
+	// copy's updated time is comparably newer.
+	storageMtime := time.UnixMilli(1704067205000)
+	require.NoError(t, filepath.WalkDir(
+		filepath.Join(env.opencodeDir, "storage"),
+		func(p string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return os.Chtimes(p, storageMtime, storageMtime)
+		},
+	), "backdate storage tree")
+
+	// The SQLite copy is newer than the storage copy from the start, so
+	// once exposed it must supersede the preserved storage archive; while
+	// the storage JSON exists, the same-ID shadow keeps the row out of
+	// discovery regardless of recency.
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/app")
+	sqlite.addSession(t, sessionID, "proj-1", 1704067200000, 1704067299000)
+	sqlite.addMessage(t, "msg-q1", sessionID, "user", 1704067200000)
+	sqlite.addTextPart(
+		t, "part-q1", sessionID, "msg-q1",
+		"sqlite only question", 1704067200000,
+	)
+	// A second, unshadowed row makes the verified pass discover the
+	// container at all — a fully shadowed container is never promoted, so
+	// only this row's presence puts the container's trust on the line.
+	const otherID = "oc-unshadow-other"
+	sqlite.addSession(t, otherID, "proj-1", 1704067200000, 1704067205000)
+	sqlite.addMessage(t, "msg-o1", otherID, "user", 1704067200000)
+	sqlite.addTextPart(
+		t, "part-o1", otherID, "msg-o1",
+		"other sqlite question", 1704067200000,
+	)
+
+	// The verified pass sees the storage copy and the unshadowed SQLite
+	// row; the shadowed row stays out of discovery, and the container is
+	// promoted to trusted with only the unshadowed row verified.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        2,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "storage canonical reply",
+	)
+
+	// Removing the storage copy exposes the SQLite row without touching
+	// the DB, so the container still matches its trusted state.
+	require.NoError(t, os.Remove(sessionPath), "remove session json")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "message", sessionID,
+	)), "remove message dir")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-s1",
+	)), "remove part dir")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        1,
+		Skipped:       1,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "sqlite only question",
+	)
+	virtualPath := parser.OpenCodeSQLiteVirtualPath(sqlite.path, sessionID)
+	assert.Equal(t, virtualPath,
+		env.engine.FindSourceFile("opencode:"+sessionID),
+		"the session must now resolve to the SQLite source")
+}
+
+// TestOpenCodeHybridFullyShadowedContainerDropsStaleTrust pins the
+// shadow-then-unshadow cycle with no other rows: a verified SQLite-only
+// session gets shadowed by a later storage JSON, so the next full sync
+// discovers no SQLite sources at all for the container. That pass must
+// drop the container's trusted entry — otherwise the stale session set
+// still matches once the storage JSON is removed again (the DB never
+// changed), and the re-exposed row is gate-skipped instead of parsed.
+func TestOpenCodeHybridFullyShadowedContainerDropsStaleTrust(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	const sessionID = "oc-reshadow"
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/app")
+	sqlite.addSession(t, sessionID, "proj-1", 1704067200000, 1704067299000)
+	sqlite.addMessage(t, "msg-q1", sessionID, "user", 1704067200000)
+	sqlite.addTextPart(
+		t, "part-q1", sessionID, "msg-q1",
+		"sqlite canonical question", 1704067200000,
+	)
+
+	// The verified pass sees only the SQLite row and trusts the container.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "sqlite canonical question",
+	)
+
+	// A storage JSON appears for the same session and shadows the row;
+	// this full sync discovers no SQLite sources for the container.
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/app", "Reshadow",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-s1", "assistant", 1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-s1", "part-s1",
+		"storage interim reply", 1704067201000,
+	)
+	// Backdate the storage tree so the SQLite copy stays comparably newer
+	// (the archived session mtime is a composite over files and dirs).
+	storageMtime := time.UnixMilli(1704067205000)
+	require.NoError(t, filepath.WalkDir(
+		filepath.Join(env.opencodeDir, "storage"),
+		func(p string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return os.Chtimes(p, storageMtime, storageMtime)
+		},
+	), "backdate storage tree")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "storage interim reply",
+	)
+
+	// The storage copy disappears again; the DB never changed, so a stale
+	// trusted entry from the first pass would still match and gate-skip
+	// the re-exposed, newer row.
+	require.NoError(t, os.Remove(sessionPath), "remove session json")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "message", sessionID,
+	)), "remove message dir")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-s1",
+	)), "remove part dir")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "sqlite canonical question",
+	)
+}
+
+// TestOpenCodeHybridWatcherShadowCycleDropsRowTrust pins the watcher-path
+// shadow/unshadow cycle: a storage JSON for a trusted SQLite row arrives
+// via a changed-path sync (which replaces the archived row but never
+// re-promotes containers) and disappears again before any full pass
+// observes the shadowed state. Processing the storage session must drop
+// the row's trusted membership, or the next full pass — container state
+// unchanged, membership still verified — would gate-skip the re-exposed
+// row forever and the archive would keep the interim storage copy.
+func TestOpenCodeHybridWatcherShadowCycleDropsRowTrust(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	const sessionID = "oc-watcher-shadow"
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/app")
+	sqlite.addSession(t, sessionID, "proj-1", 1704067200000, 1704067299000)
+	sqlite.addMessage(t, "msg-q1", sessionID, "user", 1704067200000)
+	sqlite.addTextPart(
+		t, "part-q1", sessionID, "msg-q1",
+		"sqlite canonical question", 1704067200000,
+	)
+
+	// The verified pass trusts the container with the row's membership.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+
+	// A storage JSON for the same session arrives and is synced through
+	// the watcher's changed-path pass, replacing the archived row.
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/app", "Watcher Shadow",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-s1", "assistant", 1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-s1", "part-s1",
+		"storage interim reply", 1704067201000,
+	)
+	storageMtime := time.UnixMilli(1704067205000)
+	require.NoError(t, filepath.WalkDir(
+		filepath.Join(env.opencodeDir, "storage"),
+		func(p string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return os.Chtimes(p, storageMtime, storageMtime)
+		},
+	), "backdate storage tree")
+	env.engine.SyncPaths([]string{sessionPath})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "storage interim reply",
+	)
+
+	// The storage copy disappears again without the watcher observing it
+	// and without any full pass having seen the shadowed state; the DB
+	// never changed.
+	require.NoError(t, os.Remove(sessionPath), "remove session json")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "message", sessionID,
+	)), "remove message dir")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-s1",
+	)), "remove part dir")
+
+	// The full pass must re-verify the re-exposed row: it is newer than
+	// the interim storage archive and takes the session back.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "sqlite canonical question",
 	)
 }
 
