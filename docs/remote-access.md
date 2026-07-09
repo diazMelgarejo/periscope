@@ -119,6 +119,35 @@ That setting controls detached background daemons only. Supervised daemons run
 under systemd, launchd, Docker, or a foreground shell never create the idle
 tracker and already stay alive until their supervisor stops them.
 
+## Incremental Sync
+
+HTTP remote sync is incremental. The first sync downloads the full session
+archive and stores a byte-for-byte mirror under
+`<data_dir>/remote-mirrors/<host>-<hash>/`; subsequent syncs fetch a file
+manifest, diff it against the mirror, and download only files that changed
+on the remote. Archives are gzip-compressed in transit.
+
+The mirror is a disposable transfer cache: deleting it is always safe and
+just makes the next sync download everything again. Sessions already
+imported into the database are never removed, even when their source files
+disappear from the remote.
+
+Agents whose exports are sanitized per transfer (Windsurf state databases)
+cannot be described by the manifest, so their files are downloaded as a
+separate small full archive on every sync. The rest of the host's corpus
+stays incremental.
+
+When the remote daemon predates the manifest endpoint, sync automatically
+falls back to the full-archive download and reports that incremental sync
+is unavailable, so mixed versions keep working.
+
+Incremental transfer applies to the HTTP transport only; SSH remote sync
+still copies the full session tree on every run. `agentsview sync --full`
+re-downloads the full archive into the mirror — the escape hatch for a
+stale or corrupted mirror, which the size/mtime diff cannot detect — and
+bypasses the remote skip cache. Sessions already stored and current in
+the local database are still skipped by the normal freshness checks.
+
 ## SSE Endpoints
 
 The SSE endpoints also accept `?token=<token>` because browser `EventSource`

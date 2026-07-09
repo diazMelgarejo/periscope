@@ -252,6 +252,10 @@ func writeArchiveHeader(
 		return err
 	}
 	hdr.Name = name
+	// PAX carries sub-second mtimes; the default (unknown) format
+	// makes tar.Writer round ModTime to whole seconds, which would
+	// desync the manifest's mtime_ns diff from extracted files.
+	hdr.Format = tar.FormatPAX
 	if err := tw.WriteHeader(hdr); err != nil {
 		return err
 	}
@@ -268,4 +272,66 @@ func writeArchiveHeader(
 		}
 	}
 	return nil
+}
+
+// WriteArchiveFiles streams a tar containing exactly the given files,
+// each confined to one of allowedRoots. Entries that vanished since
+// the client's manifest diff, symlinks, and non-regular files are
+// skipped silently: deletions race live agents and are reconciled by
+// the next manifest. writeArchivePath is unsuitable here because it
+// fails on a missing root.
+//
+// The allowedRoots re-resolution is defense in depth: callers validate
+// the file list before reaching here, but the path handed to the
+// filesystem is rebuilt from the trusted root plus a filepath.IsLocal
+// validated relative component, so a client-supplied string can never
+// escape the resolved targets, even if a future caller forgets to
+// validate.
+func WriteArchiveFiles(w io.Writer, allowedRoots, files []string) error {
+	tw := tar.NewWriter(w)
+	for _, path := range files {
+		local, ok := resolveDeltaFilePath(allowedRoots, path)
+		if !ok {
+			continue
+		}
+		info, err := os.Lstat(local)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("stat archive file %q: %w", local, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := writeArchiveFile(tw, local, info); err != nil {
+			return err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("close archive: %w", err)
+	}
+	return nil
+}
+
+// resolveDeltaFilePath maps a requested delta file onto the trusted
+// allowedRoots. An exact root match (extra files, Aider file roots)
+// returns the trusted root string itself; a file under a directory
+// root returns filepath.Join(root, rel) where rel passed
+// filepath.IsLocal, so the path used for filesystem access is always
+// derived from a trusted base rather than the request string.
+func resolveDeltaFilePath(allowedRoots []string, path string) (string, bool) {
+	clean := filepath.Clean(path)
+	for _, root := range allowedRoots {
+		root = filepath.Clean(root)
+		if clean == root {
+			return root, true
+		}
+		rel, err := filepath.Rel(root, clean)
+		if err != nil || !filepath.IsLocal(rel) {
+			continue
+		}
+		return filepath.Join(root, rel), true
+	}
+	return "", false
 }

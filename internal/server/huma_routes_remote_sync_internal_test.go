@@ -3,6 +3,7 @@ package server
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -106,7 +107,12 @@ func TestRemoteSyncArchiveStreamsTar(t *testing.T) {
 	}
 }
 
-func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
+// newWindsurfRemoteSyncServer builds a remote-sync server whose only
+// agent is Windsurf (a file-scoped, sanitized agent). It returns the
+// handler, the resolved targets the client would see, and the raw
+// state.vscdb path under the Windsurf root.
+func newWindsurfRemoteSyncServer(t *testing.T) (http.Handler, remotesync.TargetSet, string) {
+	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -117,7 +123,7 @@ func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
 	secretPath := filepath.Join(workspaceDir, "extension-secret.json")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 	closeStateDB := writeWindsurfArchiveStateDB(t, stateDB)
-	defer closeStateDB()
+	t.Cleanup(closeStateDB)
 	require.NoError(t, os.WriteFile(workspaceJSON, []byte(`{"folder":"file:///work/demo"}`), 0o644))
 	require.NoError(t, os.WriteFile(secretPath, []byte("do not archive"), 0o644))
 	srv := New(config.Config{
@@ -141,6 +147,48 @@ func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
 	require.Equal(t, http.StatusOK, targetW.Code, "body: %s", targetW.Body.String())
 	var targets remotesync.TargetSet
 	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
+	return handler, targets, stateDB
+}
+
+func TestRemoteSyncManifestRefusesFileScopedAgents(t *testing.T) {
+	handler, targets, _ := newWindsurfRemoteSyncServer(t)
+	payload, err := json.Marshal(targets)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/manifest", bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	// 501 is in the client's manifest-unsupported set, so the client
+	// falls back to the full-archive flow (which sanitizes Windsurf).
+	assert.Equal(t, http.StatusNotImplemented, w.Code, "body: %s", w.Body.String())
+}
+
+func TestRemoteSyncArchiveRejectsDeltaForFileScopedAgent(t *testing.T) {
+	handler, targets, stateDB := newWindsurfRemoteSyncServer(t)
+	// A malicious client that skips the manifest and requests the raw,
+	// unsanitized state.vscdb as a delta must be refused.
+	req := remotesync.ArchiveRequest{
+		TargetSet:  targets,
+		DeltaFiles: []string{stateDB},
+	}
+	payload, err := json.Marshal(req)
+	require.NoError(t, err)
+	archiveReq := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload))
+	archiveReq.Header.Set("Authorization", "Bearer remote-token")
+	archiveReq.Header.Set("Content-Type", "application/json")
+	archiveW := httptest.NewRecorder()
+
+	handler.ServeHTTP(archiveW, archiveReq)
+
+	assert.Equal(t, http.StatusForbidden, archiveW.Code, "body: %s", archiveW.Body.String())
+	assert.NotContains(t, archiveW.Body.String(), "extension secret value")
+}
+
+func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
+	handler, targets, _ := newWindsurfRemoteSyncServer(t)
 	payload, err := json.Marshal(targets)
 	require.NoError(t, err)
 	archiveReq := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload))
@@ -300,4 +348,131 @@ func (w *errorOnFirstWriteRecorder) Write(p []byte) (int, error) {
 		return n, errors.New("forced tar write error")
 	}
 	return n, err
+}
+
+func TestRemoteSyncManifestListsFiles(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"dirs": map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/manifest",
+		bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
+	gz, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
+	require.NoError(t, err)
+	var manifest remotesync.Manifest
+	require.NoError(t, json.NewDecoder(gz).Decode(&manifest))
+	require.Len(t, manifest.Files, 1)
+	assert.Equal(t, sessionPath, manifest.Files[0].Path)
+	assert.Equal(t, int64(3), manifest.Files[0].Size)
+	info, err := os.Stat(sessionPath)
+	require.NoError(t, err)
+	assert.Equal(t, info.ModTime().UnixNano(), manifest.Files[0].MtimeNS)
+}
+
+func TestRemoteSyncManifestRejectsUnresolvedPath(t *testing.T) {
+	_, handler, _ := newRemoteSyncServer(t)
+	body := bytes.NewBufferString(`{"dirs":{"claude":["/etc"]}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/manifest", body)
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestRemoteSyncArchiveDeltaStreamsOnlyRequestedFiles(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	other := filepath.Join(filepath.Dir(sessionPath), "other.jsonl")
+	require.NoError(t, os.WriteFile(other, []byte("{}\n"), 0o644))
+	payload, err := json.Marshal(map[string]any{
+		"dirs":  map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+		"files": []string{other},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive",
+		bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	names := []string{}
+	tr := tar.NewReader(bytes.NewReader(w.Body.Bytes()))
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, pathBaseSlash(hdr.Name))
+	}
+	assert.Equal(t, []string{"other.jsonl"}, names)
+}
+
+func TestRemoteSyncArchiveDeltaRejectsFileOutsideAllowedDirs(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"dirs":  map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+		"files": []string{"/etc/passwd"},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive",
+		bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestRemoteSyncArchiveGzipsWhenAdvertised(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"dirs": map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive",
+		bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
+	gz, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
+	require.NoError(t, err)
+	tr := tar.NewReader(gz)
+	hdr, err := tr.Next()
+	require.NoError(t, err)
+	assert.NotEmpty(t, hdr.Name)
+}
+
+func TestRemoteSyncArchiveExplicitEmptyDeltaReturnsEmptyTar(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"dirs":  map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+		"files": []string{},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	tr := tar.NewReader(bytes.NewReader(w.Body.Bytes()))
+	_, err = tr.Next()
+	assert.Equal(t, io.EOF, err, "explicit empty delta must stream an empty tar")
 }
