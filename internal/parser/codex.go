@@ -282,6 +282,9 @@ func (b *codexSessionBuilder) handleResponseItem(
 	}
 
 	content := extractCodexContent(payload)
+	if role == "user" && b.firstUserContent == "" {
+		content = extractCodexInitialUserContent(payload)
+	}
 	if strings.TrimSpace(content) == "" {
 		return
 	}
@@ -1263,9 +1266,7 @@ func isCodexSubagentFunctionOutput(output gjson.Result) bool {
 	return true
 }
 
-// extractCodexContent joins all text blocks from a Codex
-// response item's content array.
-func extractCodexContent(payload gjson.Result) string {
+func extractCodexTextBlocks(payload gjson.Result) []string {
 	var texts []string
 	payload.Get("content").ForEach(
 		func(_, block gjson.Result) bool {
@@ -1278,7 +1279,38 @@ func extractCodexContent(payload gjson.Result) string {
 			return true
 		},
 	)
-	return strings.Join(texts, "\n")
+	return texts
+}
+
+// extractCodexContent joins all text blocks from a Codex
+// response item's content array.
+func extractCodexContent(payload gjson.Result) string {
+	return strings.Join(extractCodexTextBlocks(payload), "\n")
+}
+
+// extractCodexInitialUserContent filters the synthetic blocks bundled with
+// Codex's recommended-plugins injection while retaining user-authored blocks
+// from the same response item.
+func extractCodexInitialUserContent(payload gjson.Result) string {
+	texts := extractCodexTextBlocks(payload)
+	if len(texts) == 0 {
+		return strings.Join(texts, "\n")
+	}
+
+	stripped := stripCodexRecommendedPlugins(texts[0])
+	if stripped == texts[0] {
+		return strings.Join(texts, "\n")
+	}
+	texts[0] = stripped
+	kept := texts[:0]
+	for _, text := range texts {
+		text = stripCodexInitialSystemPrefix(text)
+		if strings.TrimSpace(text) == "" || isCodexSystemMessage(text) {
+			continue
+		}
+		kept = append(kept, text)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // IsCodexExecSessionFile reports whether any session_meta
@@ -1651,6 +1683,9 @@ func (s *codexIncrementalSeed) observeUserMessage(
 		return
 	}
 	content := extractCodexContent(payload)
+	if s.firstUserContent == "" {
+		content = extractCodexInitialUserContent(payload)
+	}
 	if strings.TrimSpace(content) == "" {
 		return
 	}
@@ -1766,6 +1801,59 @@ func isCodexSystemMessage(content string) bool {
 		strings.HasPrefix(trimmed, "<skill>") ||
 		isCodexSubagentNotification(content) ||
 		isCodexGoalContext(content)
+}
+
+// stripCodexRecommendedPlugins removes the plugin-discovery envelope
+// that recent Codex versions prepend to the synthetic context item at the
+// start of a session. It is called only while looking for the first genuine
+// user turn, so a later user message that quotes the envelope is preserved.
+func stripCodexRecommendedPlugins(content string) string {
+	const (
+		openTag  = "<recommended_plugins>"
+		closeTag = "</recommended_plugins>"
+	)
+	start := strings.Index(content, openTag)
+	if start < 0 {
+		return content
+	}
+	relativeEnd := strings.Index(content[start+len(openTag):], closeTag)
+	if relativeEnd < 0 {
+		return content
+	}
+	end := start + len(openTag) + relativeEnd + len(closeTag)
+	prefix := content[:start]
+	suffix := strings.TrimLeft(content[end:], "\r\n")
+	if strings.TrimSpace(prefix) == "" {
+		return suffix
+	}
+	return prefix + suffix
+}
+
+// stripCodexInitialSystemPrefix removes complete synthetic envelopes from the
+// start of an initial text block. A genuine prompt may follow an injected
+// envelope in the same block, so only text through the first matching close
+// tag is removed.
+func stripCodexInitialSystemPrefix(content string) string {
+	for {
+		trimmed := strings.TrimLeft(content, "\r\n")
+		var closeTag string
+		switch {
+		case strings.HasPrefix(trimmed, "# AGENTS.md"):
+			closeTag = "</INSTRUCTIONS>"
+		case strings.HasPrefix(trimmed, "<environment_context>"):
+			closeTag = "</environment_context>"
+		case strings.HasPrefix(trimmed, "<INSTRUCTIONS>"):
+			closeTag = "</INSTRUCTIONS>"
+		default:
+			return content
+		}
+
+		_, after, ok := strings.Cut(trimmed, closeTag)
+		if !ok {
+			return content
+		}
+		content = strings.TrimLeft(after, "\r\n")
+	}
 }
 
 // isCodexGoalContext reports whether content is a Codex /goal
