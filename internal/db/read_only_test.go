@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -254,6 +255,12 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 	requireReadOnlyOp(t, "UpdateSessionIncremental", func() error {
 		return readonly.UpdateSessionIncremental("s", IncrementalSessionUpdate{})
 	})
+	requireReadOnlyOp(t, "RecordRecallQueryEvent", func() error {
+		_, err := readonly.RecordRecallQueryEvent(
+			context.Background(), RecallQueryEvent{Surface: "query"},
+		)
+		return err
+	})
 }
 
 func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
@@ -284,6 +291,8 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"pg sync state", "pg_sync_state", "value"},
 		{"model pricing", "model_pricing", "updated_at"},
 		{"secret finding", "secret_findings", "rules_version"},
+		{"recall entry", "recall_entries", "review_state"},
+		{"recall evidence", "recall_evidence", "snippet"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -309,6 +318,8 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 		{"secret_findings", "id"},
 		{"pg_sync_state", "key"},
 		{"model_pricing", "model_pattern"},
+		{"recall_query_events", "id"},
+		{"recall_query_exposures", "query_id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.table, func(t *testing.T) {
@@ -383,6 +394,9 @@ func requireReadOnlySchemaCompatibilityFails(
 
 func TestOpenReadOnlyAllowsMissingFTSTable(t *testing.T) {
 	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
+	execRawSQLite(t, path, "DROP TRIGGER IF EXISTS messages_ai")
+	execRawSQLite(t, path, "DROP TRIGGER IF EXISTS messages_au")
+	execRawSQLite(t, path, "DROP TRIGGER IF EXISTS messages_ad")
 	execRawSQLite(t, path, "DROP TABLE IF EXISTS messages_fts")
 
 	readonly, err := OpenReadOnly(path)

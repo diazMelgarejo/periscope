@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"io"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
@@ -106,6 +107,22 @@ type Store interface {
 	GetCachedInsight(ctx context.Context, cacheKey string) (*Insight, error)
 	InsertInsight(s Insight) (int64, error)
 	DeleteInsight(id int64) error
+
+	// RecallEntries.
+	ListRecallEntries(ctx context.Context, q RecallQuery) ([]RecallEntry, error)
+	GetRecallEntry(ctx context.Context, id string) (*RecallEntry, error)
+	QueryRecallEntries(ctx context.Context, q RecallQuery) (RecallPage, error)
+	RecordRecallQueryEvent(
+		ctx context.Context, event RecallQueryEvent,
+	) (string, error)
+	InsertRecallEntry(m RecallEntry) (string, error)
+	ImportAcceptedRecallEntriesJSONL(ctx context.Context, r io.Reader) (RecallImportResult, error)
+	ImportAcceptedRecallEntriesJSONLWithOptions(
+		ctx context.Context, r io.Reader, opts RecallImportOptions,
+	) (RecallImportResult, error)
+	IngestEvalTrajectory(
+		ctx context.Context, in EvalTrajectoryIngest,
+	) (EvalTrajectoryIngestResult, error)
 
 	// Session management.
 	RenameSession(id string, displayName *string) error

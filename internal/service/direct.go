@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"path/filepath"
 	"slices"
@@ -885,6 +886,95 @@ func redactMessageSecrets(m db.Message) db.Message {
 	}
 	m.ToolCalls = toolCalls
 	return m
+}
+
+func (b *directBackend) ListRecallEntries(
+	ctx context.Context, f RecallFilter,
+) (*RecallList, error) {
+	if err := ValidateRecallEntryLimit(f.Limit); err != nil {
+		return nil, err
+	}
+	query := recallFilterToDB(f)
+	if err := db.ValidateRecallQuery(query); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(f.Query) == "" {
+		entries, err := b.db.ListRecallEntries(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		return &RecallList{
+			RecallEntries: recallResultsFromRecallEntries(entries),
+			TrustedOnly:   f.TrustedOnly,
+		}, nil
+	}
+	page, err := b.db.QueryRecallEntries(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if page.RecallEntries == nil {
+		page.RecallEntries = []db.RecallResult{}
+	}
+	return &RecallList{
+		RecallEntries: page.RecallEntries,
+		TrustedOnly:   f.TrustedOnly,
+	}, nil
+}
+
+func recallResultsFromRecallEntries(entries []db.RecallEntry) []db.RecallResult {
+	out := make([]db.RecallResult, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, db.RecallResult{RecallEntry: entry})
+	}
+	return out
+}
+
+func (b *directBackend) GetRecallEntry(
+	ctx context.Context, id string,
+) (*db.RecallEntry, error) {
+	return b.db.GetRecallEntry(ctx, id)
+}
+
+func (b *directBackend) QueryRecallEntries(
+	ctx context.Context, req RecallQuery,
+) (*RecallQueryResult, error) {
+	return QueryRecallStore(ctx, b.db, req)
+}
+
+func (b *directBackend) ImportRecallEntries(
+	ctx context.Context, r io.Reader, opts db.RecallImportOptions,
+) (*db.RecallImportResult, error) {
+	if b.local == nil {
+		return nil, db.ErrReadOnly
+	}
+	result, err := b.local.ImportAcceptedRecallEntriesJSONLWithOptions(
+		ctx, r, opts,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func recallFilterToDB(f RecallFilter) db.RecallQuery {
+	return db.RecallQuery{
+		Text:                f.Query,
+		Project:             f.Project,
+		CWD:                 f.CWD,
+		GitBranch:           f.GitBranch,
+		Agent:               f.Agent,
+		Type:                f.Type,
+		Scope:               f.Scope,
+		Status:              f.Status,
+		ExtractorMethod:     f.ExtractorMethod,
+		SourceSessionID:     f.SourceSessionID,
+		SourceEpisodeID:     f.SourceEpisodeID,
+		SourceRunID:         f.SourceRunID,
+		SupersedesEntryID:   f.SupersedesEntryID,
+		SupersededByEntryID: f.SupersededByEntryID,
+		TrustedOnly:         f.TrustedOnly,
+		Limit:               f.Limit,
+	}
 }
 
 const secretSourceChanged = "source changed; cannot reveal"

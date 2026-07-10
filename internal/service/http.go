@@ -617,6 +617,170 @@ func (b *httpBackend) UsagePairwiseComparison(
 	return &out, nil
 }
 
+func (b *httpBackend) ListRecallEntries(
+	ctx context.Context, f RecallFilter,
+) (*RecallList, error) {
+	if err := ValidateRecallEntryLimit(f.Limit); err != nil {
+		return nil, err
+	}
+	q := recallFilterToQuery(f)
+	var out RecallList
+	if err := b.getJSON(ctx, "/api/v1/recall/entries?"+q.Encode(), &out); err != nil {
+		if errors.Is(err, errHTTPNotImplemented) {
+			return nil, fmt.Errorf(
+				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+			)
+		}
+		return nil, err
+	}
+	if out.RecallEntries == nil {
+		out.RecallEntries = []db.RecallResult{}
+	}
+	if f.TrustedOnly {
+		out.TrustedOnly = true
+	}
+	return &out, nil
+}
+
+func (b *httpBackend) GetRecallEntry(
+	ctx context.Context, id string,
+) (*db.RecallEntry, error) {
+	var out db.RecallEntry
+	path := "/api/v1/recall/entries/" + url.PathEscape(id)
+	err := b.getJSON(ctx, path, &out)
+	if errors.Is(err, errHTTPNotFound) {
+		return nil, nil
+	}
+	if errors.Is(err, errHTTPNotImplemented) {
+		return nil, fmt.Errorf(
+			"recall get: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (b *httpBackend) QueryRecallEntries(
+	ctx context.Context, req RecallQuery,
+) (*RecallQueryResult, error) {
+	if err := ValidateRecallEntryLimit(req.Limit); err != nil {
+		return nil, err
+	}
+	if req.IncludeContext {
+		if _, err := NormalizeRecallContextMaxBytes(req.ContextMaxBytes); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := NormalizeRecallQuerySurface(req.Surface); err != nil {
+		return nil, err
+	}
+	if req.StrictRecording {
+		return nil, fmt.Errorf("strict recall recording requires a direct backend")
+	}
+	var out RecallQueryResult
+	if err := b.postJSON(ctx, "/api/v1/recall/query", req, &out); err != nil {
+		if errors.Is(err, errHTTPNotImplemented) {
+			return nil, fmt.Errorf(
+				"recall query: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+			)
+		}
+		return nil, err
+	}
+	if out.RecallEntries == nil {
+		out.RecallEntries = []db.RecallResult{}
+	}
+	if req.TrustedOnly {
+		out.TrustedOnly = true
+	}
+	if out.Summary == nil {
+		out.Summary = BuildRecallQuerySummary(out.RecallEntries)
+	}
+	if out.ContextEntries == nil && out.ContextMeta != nil {
+		out.ContextEntries = RecallContextResults(
+			out.RecallEntries, out.ContextMeta,
+		)
+	}
+	if err := ValidateRecallContextEntries(
+		out.ContextEntries, out.ContextMeta,
+	); err != nil {
+		return nil, err
+	}
+	if out.ContextSummary == nil && out.ContextMeta != nil {
+		out.ContextSummary = BuildRecallContextSummary(
+			out.RecallEntries, out.ContextMeta,
+		)
+	}
+	return &out, nil
+}
+
+func (b *httpBackend) ImportRecallEntries(
+	ctx context.Context, r io.Reader, opts db.RecallImportOptions,
+) (*db.RecallImportResult, error) {
+	if b.readOnly {
+		// Surface the shared sentinel so callers can errors.Is it,
+		// matching Sync/ScanSecrets instead of posting to a read-only
+		// daemon and returning a bare endpoint error.
+		return nil, fmt.Errorf(
+			"import: daemon at %s is read-only: %w",
+			b.baseURL, db.ErrReadOnly,
+		)
+	}
+	var out db.RecallImportResult
+	path := "/api/v1/recall/import"
+	q := url.Values{}
+	if opts.DryRun {
+		q.Set("dry_run", "true")
+	}
+	if opts.RequireExistingSessions {
+		q.Set("require_existing_sessions", "true")
+	} else {
+		q.Set("allow_placeholder_sessions", "true")
+	}
+	if opts.AllowProductionImport {
+		q.Set("allow_production_import", "true")
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	if err := b.postRaw(ctx, path, r, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func recallFilterToQuery(f RecallFilter) url.Values {
+	q := url.Values{}
+	for k, v := range map[string]string{
+		"q":                      f.Query,
+		"project":                f.Project,
+		"cwd":                    f.CWD,
+		"git_branch":             f.GitBranch,
+		"agent":                  f.Agent,
+		"type":                   f.Type,
+		"scope":                  f.Scope,
+		"status":                 f.Status,
+		"extractor_method":       f.ExtractorMethod,
+		"source_session_id":      f.SourceSessionID,
+		"source_episode_id":      f.SourceEpisodeID,
+		"source_run_id":          f.SourceRunID,
+		"supersedes_entry_id":    f.SupersedesEntryID,
+		"superseded_by_entry_id": f.SupersededByEntryID,
+	} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if f.Limit > 0 {
+		q.Set("limit", strconv.Itoa(f.Limit))
+	}
+	if f.TrustedOnly {
+		q.Set("trusted_only", "true")
+	}
+	return q
+}
+
 func (b *httpBackend) ListSecrets(
 	ctx context.Context, f SecretListFilter,
 ) (*SecretFindingList, error) {
@@ -818,6 +982,80 @@ func (b *httpBackend) getJSONWithClient(
 		msg, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf(
 			"GET %s: HTTP %d: %s", path, resp.StatusCode, msg,
+		)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (b *httpBackend) postJSON(
+	ctx context.Context, path string, in any, out any,
+) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, b.baseURL+path, bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", b.baseURL)
+	b.addAuth(req)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errHTTPNotFound
+	}
+	if resp.StatusCode == http.StatusNotImplemented {
+		body, _ := io.ReadAll(resp.Body)
+		return &errNotImplementedBody{message: notImplementedMessage(body)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf(
+			"POST %s: HTTP %d: %s", path, resp.StatusCode, msg,
+		)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (b *httpBackend) postRaw(
+	ctx context.Context, path string, in io.Reader, out any,
+) error {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, b.baseURL+path, in,
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	req.Header.Set("Origin", b.baseURL)
+	b.addAuth(req)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errHTTPNotFound
+	}
+	if resp.StatusCode == http.StatusNotImplemented {
+		// A read-only (pg serve) daemon returns 501 for write endpoints.
+		// Surface the shared sentinel so callers can errors.Is it, matching
+		// Sync and ScanSecrets.
+		return fmt.Errorf(
+			"daemon at %s is read-only: %w", b.baseURL, db.ErrReadOnly,
+		)
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf(
+			"POST %s: HTTP %d: %s", path, resp.StatusCode, msg,
 		)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)

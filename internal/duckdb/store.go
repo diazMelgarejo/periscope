@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -137,6 +138,52 @@ func (s *Store) SetCursorSecret(secret []byte) {
 }
 
 func (s *Store) ReadOnly() bool { return true }
+
+func (s *Store) ListRecallEntries(
+	_ context.Context, _ db.RecallQuery,
+) ([]db.RecallEntry, error) {
+	return nil, db.ErrReadOnly
+}
+
+func (s *Store) GetRecallEntry(
+	_ context.Context, _ string,
+) (*db.RecallEntry, error) {
+	return nil, db.ErrReadOnly
+}
+
+func (s *Store) QueryRecallEntries(
+	_ context.Context, _ db.RecallQuery,
+) (db.RecallPage, error) {
+	return db.RecallPage{}, db.ErrReadOnly
+}
+
+func (s *Store) RecordRecallQueryEvent(
+	_ context.Context, _ db.RecallQueryEvent,
+) (string, error) {
+	return "", db.ErrReadOnly
+}
+
+func (s *Store) InsertRecallEntry(_ db.RecallEntry) (string, error) {
+	return "", db.ErrReadOnly
+}
+
+func (s *Store) ImportAcceptedRecallEntriesJSONL(
+	_ context.Context, _ io.Reader,
+) (db.RecallImportResult, error) {
+	return db.RecallImportResult{}, db.ErrReadOnly
+}
+
+func (s *Store) ImportAcceptedRecallEntriesJSONLWithOptions(
+	_ context.Context, _ io.Reader, _ db.RecallImportOptions,
+) (db.RecallImportResult, error) {
+	return db.RecallImportResult{}, db.ErrReadOnly
+}
+
+func (s *Store) IngestEvalTrajectory(
+	_ context.Context, _ db.EvalTrajectoryIngest,
+) (db.EvalTrajectoryIngestResult, error) {
+	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
+}
 
 const duckSessionCols = `id, project, machine, agent,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,

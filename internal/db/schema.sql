@@ -311,6 +311,111 @@ CREATE INDEX IF NOT EXISTS idx_insights_lookup
 CREATE INDEX IF NOT EXISTS idx_insights_created
     ON insights(created_at DESC);
 
+-- Recall entries: reviewed, reusable facts learned from prior sessions.
+-- These are not raw transcript chunks: each row is an accepted recall entry with
+-- provenance back to the session archive.
+CREATE TABLE IF NOT EXISTS recall_entries (
+    id                TEXT PRIMARY KEY,
+    type              TEXT NOT NULL,
+    scope             TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'accepted',
+    review_state      TEXT NOT NULL DEFAULT 'unreviewed_auto'
+        CHECK (review_state IN (
+            'human_reviewed', 'unreviewed_auto', 'calibrated_auto', 'eval_raw'
+        )),
+    title             TEXT NOT NULL,
+    body              TEXT NOT NULL,
+    trigger           TEXT NOT NULL DEFAULT '',
+    confidence        REAL,
+    uncertainty       TEXT NOT NULL DEFAULT '',
+    project           TEXT NOT NULL DEFAULT '',
+    cwd               TEXT NOT NULL DEFAULT '',
+    git_branch        TEXT NOT NULL DEFAULT '',
+    agent             TEXT NOT NULL DEFAULT '',
+    source_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    source_episode_id TEXT NOT NULL DEFAULT '',
+    source_run_id     TEXT NOT NULL DEFAULT '',
+    extractor_method  TEXT NOT NULL DEFAULT '',
+    model             TEXT NOT NULL DEFAULT '',
+    transferable      INTEGER NOT NULL DEFAULT 0,
+    provenance_ok     INTEGER NOT NULL DEFAULT 0,
+    supersedes_entry_id TEXT NOT NULL DEFAULT '',
+    superseded_by_entry_id TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at        TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_recall_entries_context
+    ON recall_entries(project, cwd, git_branch, agent);
+CREATE INDEX IF NOT EXISTS idx_recall_entries_type_scope
+    ON recall_entries(type, scope, status);
+CREATE INDEX IF NOT EXISTS idx_recall_entries_source_session
+    ON recall_entries(source_session_id);
+CREATE INDEX IF NOT EXISTS idx_recall_entries_source_episode
+    ON recall_entries(source_episode_id);
+CREATE INDEX IF NOT EXISTS idx_recall_entries_updated
+    ON recall_entries(updated_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_recall_entries_supersession
+    ON recall_entries(supersedes_entry_id, superseded_by_entry_id);
+
+CREATE TABLE IF NOT EXISTS recall_evidence (
+    id                    INTEGER PRIMARY KEY,
+    entry_id             TEXT NOT NULL
+        REFERENCES recall_entries(id) ON DELETE CASCADE,
+    session_id            TEXT NOT NULL
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    message_start_ordinal INTEGER NOT NULL,
+    message_end_ordinal   INTEGER NOT NULL,
+    message_start_source_uuid TEXT NOT NULL DEFAULT '',
+    message_end_source_uuid   TEXT NOT NULL DEFAULT '',
+    content_digest            TEXT NOT NULL DEFAULT '',
+    tool_use_id           TEXT NOT NULL DEFAULT '',
+    snippet               TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_recall_evidence_entry
+    ON recall_evidence(entry_id);
+CREATE INDEX IF NOT EXISTS idx_recall_evidence_session
+    ON recall_evidence(session_id);
+
+-- Append-only demand and exposure snapshots. Exposures deliberately do not
+-- reference recall_entries: measurements must survive recall/session deletion
+-- and full resync even when an exposed entry no longer exists.
+CREATE TABLE IF NOT EXISTS recall_query_events (
+    id                   TEXT PRIMARY KEY,
+    query_text           TEXT NOT NULL,
+    surface              TEXT NOT NULL,
+    filters_json         TEXT NOT NULL DEFAULT '{}',
+    trusted_only         INTEGER NOT NULL DEFAULT 0,
+    score_policy_version TEXT NOT NULL,
+    result_count         INTEGER NOT NULL DEFAULT 0 CHECK (result_count >= 0),
+    packed_count         INTEGER NOT NULL DEFAULT 0 CHECK (packed_count >= 0),
+    top_score            REAL NOT NULL DEFAULT 0,
+    miss_reason          TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_recall_query_events_created
+    ON recall_query_events(created_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_recall_query_events_surface
+    ON recall_query_events(surface, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS recall_query_exposures (
+    query_id TEXT NOT NULL
+        REFERENCES recall_query_events(id) ON DELETE CASCADE,
+    rank     INTEGER NOT NULL CHECK (rank >= 1),
+    entry_id TEXT NOT NULL,
+    score    REAL NOT NULL,
+    packed   INTEGER NOT NULL DEFAULT 0 CHECK (packed IN (0, 1)),
+    PRIMARY KEY (query_id, rank)
+);
+
+CREATE INDEX IF NOT EXISTS idx_recall_query_exposures_entry
+    ON recall_query_exposures(entry_id);
+
 -- Pinned messages table
 CREATE TABLE IF NOT EXISTS pinned_messages (
     id          INTEGER PRIMARY KEY,

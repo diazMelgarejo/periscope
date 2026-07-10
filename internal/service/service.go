@@ -67,6 +67,12 @@ type SessionService interface {
 	UsagePairwiseComparison(
 		ctx context.Context, req UsagePairwiseComparisonRequest,
 	) (*UsagePairwiseComparisonResponse, error)
+	ListRecallEntries(ctx context.Context, f RecallFilter) (*RecallList, error)
+	GetRecallEntry(ctx context.Context, id string) (*db.RecallEntry, error)
+	QueryRecallEntries(ctx context.Context, req RecallQuery) (*RecallQueryResult, error)
+	ImportRecallEntries(
+		ctx context.Context, r io.Reader, opts db.RecallImportOptions,
+	) (*db.RecallImportResult, error)
 	ListSecrets(ctx context.Context, f SecretListFilter) (*SecretFindingList, error)
 	ScanSecrets(ctx context.Context, in SecretScanInput,
 		progress func(SecretScanProgress)) (*SecretScanSummary, error)
@@ -165,6 +171,112 @@ type ContentSearchRequest struct {
 type ContentSearchResult struct {
 	Matches    []db.ContentMatch `json:"matches"`
 	NextCursor int               `json:"next_cursor,omitempty"`
+}
+
+// RecallFilter mirrors GET /api/v1/recall/entries query parameters.
+type RecallFilter struct {
+	Query               string `json:"q,omitempty"`
+	Project             string `json:"project,omitempty"`
+	CWD                 string `json:"cwd,omitempty"`
+	GitBranch           string `json:"git_branch,omitempty"`
+	Agent               string `json:"agent,omitempty"`
+	Type                string `json:"type,omitempty"`
+	Scope               string `json:"scope,omitempty"`
+	Status              string `json:"status,omitempty"`
+	ExtractorMethod     string `json:"extractor_method,omitempty"`
+	SourceSessionID     string `json:"source_session_id,omitempty"`
+	SourceEpisodeID     string `json:"source_episode_id,omitempty"`
+	SourceRunID         string `json:"source_run_id,omitempty"`
+	SupersedesEntryID   string `json:"supersedes_entry_id,omitempty"`
+	SupersededByEntryID string `json:"superseded_by_entry_id,omitempty"`
+	TrustedOnly         bool   `json:"trusted_only,omitempty"`
+	Limit               int    `json:"limit,omitempty"`
+}
+
+// RecallList mirrors GET /api/v1/recall/entries.
+type RecallList struct {
+	RecallEntries []db.RecallResult `json:"entries"`
+	TrustedOnly   bool              `json:"trusted_only"`
+}
+
+// RecallQuery mirrors POST /api/v1/recall/query.
+type RecallQuery struct {
+	Query               string `json:"query"`
+	Surface             string `json:"surface,omitempty"`
+	Project             string `json:"project,omitempty"`
+	CWD                 string `json:"cwd,omitempty"`
+	GitBranch           string `json:"git_branch,omitempty"`
+	Agent               string `json:"agent,omitempty"`
+	Type                string `json:"type,omitempty"`
+	Scope               string `json:"scope,omitempty"`
+	Status              string `json:"status,omitempty"`
+	ExtractorMethod     string `json:"extractor_method,omitempty"`
+	SourceSessionID     string `json:"source_session_id,omitempty"`
+	SourceEpisodeID     string `json:"source_episode_id,omitempty"`
+	SourceRunID         string `json:"source_run_id,omitempty"`
+	SupersedesEntryID   string `json:"supersedes_entry_id,omitempty"`
+	SupersededByEntryID string `json:"superseded_by_entry_id,omitempty"`
+	TrustedOnly         bool   `json:"trusted_only,omitempty"`
+	Limit               int    `json:"limit,omitempty"`
+	IncludeContext      bool   `json:"include_context,omitempty"`
+	ContextMaxBytes     int    `json:"context_max_bytes,omitempty"`
+	// StrictRecording is reserved for local calibration workflows. It is not
+	// transported over JSON; ordinary query paths keep measurement best-effort.
+	StrictRecording bool `json:"-"`
+}
+
+// RecallQueryResult mirrors POST /api/v1/recall/query response.
+type RecallQueryResult struct {
+	QueryID        string              `json:"query_id"`
+	MissReason     string              `json:"miss_reason"`
+	RecallEntries  []db.RecallResult   `json:"entries"`
+	TrustedOnly    bool                `json:"trusted_only"`
+	Summary        *RecallQuerySummary `json:"summary,omitempty"`
+	Context        string              `json:"context,omitempty"`
+	ContextMeta    *RecallContextMeta  `json:"context_meta,omitempty"`
+	ContextEntries []db.RecallResult   `json:"context_entries,omitempty"`
+	ContextSummary *RecallQuerySummary `json:"context_summary,omitempty"`
+}
+
+// RecallQuerySummary is aggregate metadata for auditing one recall query result.
+type RecallQuerySummary struct {
+	Count             int            `json:"count"`
+	ByType            map[string]int `json:"by_type"`
+	ByScope           map[string]int `json:"by_scope"`
+	ByStatus          map[string]int `json:"by_status"`
+	ByProject         map[string]int `json:"by_project"`
+	ByAgent           map[string]int `json:"by_agent"`
+	ByCWD             map[string]int `json:"by_cwd"`
+	ByGitBranch       map[string]int `json:"by_git_branch"`
+	ByMatchReason     map[string]int `json:"by_match_reason"`
+	ByExtractorMethod map[string]int `json:"by_extractor"`
+	ByModel           map[string]int `json:"by_model"`
+	BySourceRun       map[string]int `json:"by_source_run"`
+	BySourceSession   map[string]int `json:"by_source_session"`
+	BySourceEpisode   map[string]int `json:"by_source_episode"`
+	ByTransferability map[string]int `json:"by_transferability"`
+	ByProvenanceAudit map[string]int `json:"by_provenance_audit"`
+	ByEvidence        map[string]int `json:"by_evidence"`
+	ByLifecycle       map[string]int `json:"by_lifecycle"`
+}
+
+// RecallContextMeta describes the assembled recall context without exposing it
+// as additional model-visible evidence.
+type RecallContextMeta struct {
+	EntryCount                        int                 `json:"entry_count"`
+	Truncated                         bool                `json:"truncated"`
+	IncludedIDs                       []string            `json:"included_ids,omitempty"`
+	IncludedTypesByID                 map[string]string   `json:"included_types_by_id,omitempty"`
+	IncludedMatchReasonsByID          map[string][]string `json:"included_match_reasons_by_id,omitempty"`
+	SourceSessionIDs                  []string            `json:"source_session_ids,omitempty"`
+	SourceEpisodeIDs                  []string            `json:"source_episode_ids,omitempty"`
+	SourceRunIDs                      []string            `json:"source_run_ids,omitempty"`
+	TruncatedFrom                     int                 `json:"truncated_from,omitempty"`
+	OmittedCount                      int                 `json:"omitted_count,omitempty"`
+	PromptInjectionContext            bool                `json:"prompt_injection_context,omitempty"`
+	PromptInjectionContextIDs         []string            `json:"prompt_injection_context_ids,omitempty"`
+	PromptInjectionContextReasons     []string            `json:"prompt_injection_context_reasons,omitempty"`
+	PromptInjectionContextReasonsByID map[string][]string `json:"prompt_injection_context_reasons_by_id,omitempty"`
 }
 
 // SessionDetail mirrors the HTTP GetSession response shape: a

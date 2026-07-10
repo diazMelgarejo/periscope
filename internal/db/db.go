@@ -362,6 +362,98 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
 END;
 `
 
+const recallEntriesFTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS recall_entries_fts USING fts5(
+    title,
+    body,
+    trigger,
+    content='recall_entries',
+    content_rowid='rowid',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS recall_entries_ai AFTER INSERT ON recall_entries BEGIN
+    INSERT INTO recall_entries_fts(rowid, title, body, trigger)
+        VALUES (new.rowid, new.title, new.body, new.trigger);
+END;
+CREATE TRIGGER IF NOT EXISTS recall_entries_ad AFTER DELETE ON recall_entries BEGIN
+    INSERT INTO recall_entries_fts(recall_entries_fts, rowid, title, body, trigger)
+        VALUES('delete', old.rowid, old.title, old.body, old.trigger);
+END;
+CREATE TRIGGER IF NOT EXISTS recall_entries_au AFTER UPDATE ON recall_entries BEGIN
+    INSERT INTO recall_entries_fts(recall_entries_fts, rowid, title, body, trigger)
+        VALUES('delete', old.rowid, old.title, old.body, old.trigger);
+    INSERT INTO recall_entries_fts(rowid, title, body, trigger)
+        VALUES (new.rowid, new.title, new.body, new.trigger);
+END;
+`
+
+const recallEntriesFTS4 = `
+CREATE VIRTUAL TABLE IF NOT EXISTS recall_entries_fts USING fts4(
+    title,
+    body,
+    trigger,
+    tokenize=porter
+);
+
+CREATE TRIGGER IF NOT EXISTS recall_entries_ai AFTER INSERT ON recall_entries BEGIN
+    INSERT INTO recall_entries_fts(rowid, title, body, trigger)
+        VALUES (new.rowid, new.title, new.body, new.trigger);
+END;
+CREATE TRIGGER IF NOT EXISTS recall_entries_ad AFTER DELETE ON recall_entries BEGIN
+    DELETE FROM recall_entries_fts WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS recall_entries_au AFTER UPDATE ON recall_entries BEGIN
+    DELETE FROM recall_entries_fts WHERE rowid = old.rowid;
+    INSERT INTO recall_entries_fts(rowid, title, body, trigger)
+        VALUES (new.rowid, new.title, new.body, new.trigger);
+END;
+`
+
+const recallEvidenceFTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS recall_evidence_fts USING fts5(
+    snippet,
+    content='recall_evidence',
+    content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS recall_evidence_ai AFTER INSERT ON recall_evidence BEGIN
+    INSERT INTO recall_evidence_fts(rowid, snippet)
+        VALUES (new.id, new.snippet);
+END;
+CREATE TRIGGER IF NOT EXISTS recall_evidence_ad AFTER DELETE ON recall_evidence BEGIN
+    INSERT INTO recall_evidence_fts(recall_evidence_fts, rowid, snippet)
+        VALUES('delete', old.id, old.snippet);
+END;
+CREATE TRIGGER IF NOT EXISTS recall_evidence_au AFTER UPDATE ON recall_evidence BEGIN
+    INSERT INTO recall_evidence_fts(recall_evidence_fts, rowid, snippet)
+        VALUES('delete', old.id, old.snippet);
+    INSERT INTO recall_evidence_fts(rowid, snippet)
+        VALUES (new.id, new.snippet);
+END;
+`
+
+const recallEvidenceFTS4 = `
+CREATE VIRTUAL TABLE IF NOT EXISTS recall_evidence_fts USING fts4(
+    snippet,
+    tokenize=porter
+);
+
+CREATE TRIGGER IF NOT EXISTS recall_evidence_ai AFTER INSERT ON recall_evidence BEGIN
+    INSERT INTO recall_evidence_fts(rowid, snippet)
+        VALUES (new.id, new.snippet);
+END;
+CREATE TRIGGER IF NOT EXISTS recall_evidence_ad AFTER DELETE ON recall_evidence BEGIN
+    DELETE FROM recall_evidence_fts WHERE rowid = old.id;
+END;
+CREATE TRIGGER IF NOT EXISTS recall_evidence_au AFTER UPDATE ON recall_evidence BEGIN
+    DELETE FROM recall_evidence_fts WHERE rowid = old.id;
+    INSERT INTO recall_evidence_fts(rowid, snippet)
+        VALUES (new.id, new.snippet);
+END;
+`
+
 // DB manages a write connection and a read-only pool.
 // The reader and writer fields use atomic.Pointer so that
 // concurrent HTTP handler goroutines can safely read while
@@ -813,6 +905,10 @@ var readOnlyRequiredTables = []string{
 	"pg_sync_state",
 	"model_pricing",
 	"secret_findings",
+	"recall_entries",
+	"recall_evidence",
+	"recall_query_events",
+	"recall_query_exposures",
 }
 
 var (
@@ -1470,7 +1566,7 @@ func (db *DB) migrateColumns() error {
 		)`,
 	); err != nil {
 		return fmt.Errorf(
-			"creating remote_skipped_files: %w", err,
+			"creating post-migration tables and indexes: %w", err,
 		)
 	}
 
@@ -2226,6 +2322,13 @@ func CurrentDataVersion() int {
 }
 
 // Vacuum runs VACUUM on the database to reclaim space.
+//
+// Note: entries uses a TEXT primary key, so its rowids are not an INTEGER
+// PRIMARY KEY alias, and the SQLite docs warn VACUUM "may change" such
+// rowids -- which would detach the external-content recall_entries_fts index
+// (joined on rowid). The bundled SQLite preserves rowids through VACUUM, so
+// no FTS rebuild is needed; TestVacuumPreservesRecallEntriesFTSSearchable guards
+// that assumption and will fail if a future SQLite bump changes it.
 func (db *DB) Vacuum() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -2536,6 +2639,84 @@ func (db *DB) init() error {
 				" VALUES('rebuild')",
 		); err != nil {
 			return fmt.Errorf("backfilling FTS: %w", err)
+		}
+	}
+
+	var recallFTSCount int
+	if err := w.QueryRow(
+		"SELECT count(*) FROM sqlite_master" +
+			" WHERE type='table' AND name='recall_entries_fts'",
+	).Scan(&recallFTSCount); err != nil {
+		return fmt.Errorf("checking recall entries fts table: %w", err)
+	}
+	hadRecallFTS := recallFTSCount > 0
+	if _, err := w.Exec(recallEntriesFTS); err != nil {
+		if !strings.Contains(
+			err.Error(), "no such module",
+		) {
+			return fmt.Errorf("initializing recall entries FTS: %w", err)
+		}
+		if _, err := w.Exec(recallEntriesFTS4); err != nil {
+			if !strings.Contains(
+				err.Error(), "no such module",
+			) {
+				return fmt.Errorf("initializing recall entries FTS4: %w", err)
+			}
+		} else if !hadRecallFTS {
+			if _, err := w.Exec(
+				"INSERT INTO recall_entries_fts(rowid, title, body, trigger)" +
+					" SELECT rowid, title, body, trigger FROM recall_entries",
+			); err != nil {
+				return fmt.Errorf("backfilling recall entries FTS4: %w", err)
+			}
+		}
+	} else if !hadRecallFTS {
+		if _, err := w.Exec(
+			"INSERT INTO recall_entries_fts(recall_entries_fts)" +
+				" VALUES('rebuild')",
+		); err != nil {
+			return fmt.Errorf("backfilling recall entries FTS: %w", err)
+		}
+	}
+
+	var recallEvidenceFTSCount int
+	if err := w.QueryRow(
+		"SELECT count(*) FROM sqlite_master" +
+			" WHERE type='table' AND name='recall_evidence_fts'",
+	).Scan(&recallEvidenceFTSCount); err != nil {
+		return fmt.Errorf("checking recall evidence fts table: %w", err)
+	}
+	hadRecallEvidenceFTS := recallEvidenceFTSCount > 0
+	if _, err := w.Exec(recallEvidenceFTS); err != nil {
+		if !strings.Contains(
+			err.Error(), "no such module",
+		) {
+			return fmt.Errorf("initializing recall evidence FTS: %w", err)
+		}
+		if _, err := w.Exec(recallEvidenceFTS4); err != nil {
+			if !strings.Contains(
+				err.Error(), "no such module",
+			) {
+				return fmt.Errorf(
+					"initializing recall evidence FTS4: %w", err,
+				)
+			}
+		} else if !hadRecallEvidenceFTS {
+			if _, err := w.Exec(
+				"INSERT INTO recall_evidence_fts(rowid, snippet)" +
+					" SELECT id, snippet FROM recall_evidence",
+			); err != nil {
+				return fmt.Errorf(
+					"backfilling recall evidence FTS4: %w", err,
+				)
+			}
+		}
+	} else if !hadRecallEvidenceFTS {
+		if _, err := w.Exec(
+			"INSERT INTO recall_evidence_fts(recall_evidence_fts)" +
+				" VALUES('rebuild')",
+		); err != nil {
+			return fmt.Errorf("backfilling recall evidence FTS: %w", err)
 		}
 	}
 
