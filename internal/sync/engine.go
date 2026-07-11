@@ -176,6 +176,17 @@ type Engine struct {
 	trustedStorageSessions map[string]string
 	storageTrustGens       map[string]uint64
 	storageTrustEpoch      uint64
+
+	// verifiedSourceMu guards the local source stat/ctime trust gate (see
+	// verified_source_gate.go). Each path has one compact record containing
+	// its trusted signature, invalidation generation, and last full pass seen.
+	// The epoch vetoes promotions captured before a global clear. State is
+	// memory-only, so process startup always deep-verifies sources once.
+	verifiedSourceMu         gosync.Mutex
+	verifiedSources          map[string]verifiedSourceRecord
+	verifiedSourceEpoch      uint64
+	verifiedSourcePass       uint64
+	verifiedSourceActivePass uint64
 }
 
 // PhaseStats returns the engine's phase counter. The values reflect only
@@ -640,6 +651,7 @@ func (e *Engine) classifyPaths(
 		dfs := e.classifyCodexIndexPath(p)
 		dfs = append(dfs, e.classifyProviderChangedPath(p)...)
 		for _, df := range dfs {
+			e.invalidateVerifiedDiscoveredSource(df)
 			key := string(df.Agent) + "\x00" + df.Path
 			if idx, ok := seen[key]; ok {
 				files[idx] = mergeChangedPathDiscoveredFile(files[idx], df)
@@ -1211,6 +1223,7 @@ func (e *Engine) resyncAllLocked(
 	// fresh database.
 	e.clearTrustedSQLiteContainers()
 	e.clearTrustedOpenCodeStorageSessions()
+	e.clearVerifiedSources()
 
 	origDB := e.db
 	origPath := origDB.Path()
@@ -2018,6 +2031,18 @@ func (e *Engine) syncAllLocked(
 	}
 	all = append(all, providerFound...)
 
+	verifiedPass := uint64(0)
+	verifiedPassFinished := false
+	if scope == nil && e.pathRewriter == nil {
+		verifiedPass = e.beginVerifiedSourcePass()
+		e.markVerifiedDiscoveredSources(providerFound)
+		defer func() {
+			if !verifiedPassFinished {
+				e.finishVerifiedSourcePass(verifiedPass, false)
+			}
+		}()
+	}
+
 	// Begin gate bookkeeping from the pre-filter discovery set: promotion
 	// needs a completion for every discovered session, so a cutoff-filtered
 	// pass must stay unpromotable (see opencode_container_gate.go).
@@ -2115,6 +2140,13 @@ func (e *Engine) syncAllLocked(
 		stats.Aborted || ctx.Err() != nil || providerFailures > 0,
 		scope == nil,
 	)
+	if verifiedPass != 0 {
+		e.finishVerifiedSourcePass(
+			verifiedPass,
+			!stats.Aborted && ctx.Err() == nil && providerFailures == 0,
+		)
+		verifiedPassFinished = true
+	}
 	stats.nonContainerDiscovered = nonContainerDiscovered
 	if verbose {
 		log.Printf(
@@ -3963,6 +3995,20 @@ func (e *Engine) processProviderFile(
 		source.ProjectHint = file.Project
 	}
 
+	verifiedCapture, verifiedMtime, verifiedFresh, verifiedStateOK :=
+		e.verifiedProviderSourceState(provider, source, file)
+	if verifiedStateOK && verifiedFresh {
+		if e.verifiedProviderSourceFreshInDB(
+			source, verifiedCapture.signature.size, verifiedMtime,
+		) {
+			return processResult{
+				skip:  true,
+				mtime: verifiedMtime,
+			}, true
+		}
+		e.invalidateVerifiedSource(verifiedCapture.path)
+	}
+
 	// DB-freshness skip for single-session JSONL providers (Claude):
 	// when the stored session's size, mtime, and data version already
 	// match the source and its project does not need reparse, skip the
@@ -3970,13 +4016,22 @@ func (e *Engine) processProviderFile(
 	// shouldSkipFile gate so an unchanged session is not re-parsed on
 	// every full sync.
 	sourceForceReplace := false
-	if mtime, fresh, forceReplace := e.providerSingleSessionFresh(
+	if mtime, fresh, forceReplace, contentVerified := e.providerSingleSessionFresh(
 		ctx, provider, source, file,
 	); fresh {
-		return processResult{
-			skip:  true,
-			mtime: mtime,
-		}, true
+		if !verifiedStateOK || contentVerified {
+			if verifiedStateOK {
+				e.promoteVerifiedSource(verifiedCapture)
+			}
+			return processResult{
+				skip:  true,
+				mtime: mtime,
+			}, true
+		}
+		// A gate-eligible local source without a comparable stored hash (or
+		// whose hash could not be read) must take the fingerprint path once.
+		// Otherwise it would retain the legacy stat-only skip forever without
+		// ever earning verified-source trust.
 	} else if forceReplace {
 		sourceForceReplace = true
 	}
@@ -4025,6 +4080,10 @@ func (e *Engine) processProviderFile(
 				// refresh; non-Codex providers avoid the index lookup entirely.
 				e.clearSkip(cacheKey)
 			} else {
+				if verifiedStateOK &&
+					e.shouldSkipProviderSourceByDB(file, fingerprint) {
+					e.promoteVerifiedSource(verifiedCapture)
+				}
 				return processResult{
 					skip:      true,
 					mtime:     fingerprint.MTimeNS,
@@ -4068,6 +4127,9 @@ func (e *Engine) processProviderFile(
 	// not trigger a reparse.
 	if !incForceReplace && !e.forceParse && !file.ForceParse &&
 		e.shouldSkipProviderSourceByDB(file, fingerprint) {
+		if verifiedStateOK {
+			e.promoteVerifiedSource(verifiedCapture)
+		}
 		return processResult{
 			skip:        true,
 			mtime:       fingerprint.MTimeNS,
@@ -4507,7 +4569,7 @@ func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
 // per content version would make the cache grow with a hot append-only file.
 func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentCodex, parser.AgentDevin, parser.AgentQoder, parser.AgentWindsurf:
+	case parser.AgentClaude, parser.AgentCodex, parser.AgentDevin, parser.AgentQoder, parser.AgentWindsurf:
 		return true
 	default:
 		return false
@@ -4745,6 +4807,7 @@ func (e *Engine) clearWatcherOverflowCaches() {
 	}
 	e.clearTrustedOpenCodeStorageSessions()
 	e.clearTrustedSQLiteContainers()
+	e.clearVerifiedSources()
 	parser.EvictAllCodexSessionIndexes()
 }
 
@@ -4913,7 +4976,7 @@ func (e *Engine) providerSingleSessionFresh(
 	provider parser.Provider,
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
-) (int64, bool, bool) {
+) (mtime int64, fresh bool, forceReplace bool, contentVerified bool) {
 	// Match the legacy shouldSkipFile gate, which keyed off the
 	// engine-wide forceParse (parse-diff) flag only. A per-file
 	// ForceParse (set by SyncSingleSession to bypass the error skip
@@ -4921,26 +4984,26 @@ func (e *Engine) providerSingleSessionFresh(
 	// is still skipped so a single-session resync does not, for example,
 	// reapply a worktree project mapping to a file that has not changed.
 	if e.forceParse {
-		return 0, false, false
+		return 0, false, false, false
 	}
 	// Claude is the single-physical-file provider that takes the
 	// append-only incremental path. Its source stem is the session ID,
 	// so DB freshness can be checked by that ID even though a DAG fork
 	// can later split the file into several sessions.
 	if provider.Definition().Type != parser.AgentClaude {
-		return 0, false, false
+		return 0, false, false, false
 	}
 	if provider.Capabilities().Source.IncrementalAppend !=
 		parser.CapabilitySupported {
-		return 0, false, false
+		return 0, false, false, false
 	}
 	path := providerDiscoveredPath(source)
 	if path == "" {
-		return 0, false, false
+		return 0, false, false, false
 	}
 	sessionID := claudeSessionIDFromPath(path)
 	if sessionID == "" {
-		return 0, false, false
+		return 0, false, false, false
 	}
 	lookupPath := path
 	if e.pathRewriter != nil {
@@ -4956,24 +5019,25 @@ func (e *Engine) providerSingleSessionFresh(
 		statPath = path
 		info, err = os.Stat(path)
 		if err != nil {
-			return 0, false, false
+			return 0, false, false, false
 		}
 	}
 	if !e.shouldSkipFile(sessionID, info) {
-		return 0, false, false
+		return 0, false, false, false
 	}
 	if e.providerIncrementalIdentityChanged(lookupPath, info) {
-		return 0, false, true
+		return 0, false, true, false
 	}
-	if e.providerIncrementalContentChanged(
+	contentChanged, contentVerified := e.providerIncrementalContentChanged(
 		e.idPrefix+sessionID, statPath, info,
-	) {
-		return 0, false, true
+	)
+	if contentChanged {
+		return 0, false, true, contentVerified
 	}
 	sess, _ := e.db.GetSession(ctx, e.idPrefix+sessionID)
 	return info.ModTime().UnixNano(), sess != nil &&
 		sess.Project != "" &&
-		!parser.NeedsProjectReparse(sess.Project), false
+		!parser.NeedsProjectReparse(sess.Project), false, contentVerified
 }
 
 func (e *Engine) providerIncrementalIdentityChanged(
@@ -5008,21 +5072,23 @@ func (e *Engine) providerIncrementalIdentityChanged(
 // false-positive re-parse, but identical content still hashes equal here while
 // a genuine rewrite does not. shouldSkipFile has already confirmed the stored
 // file_size equals the current size, so the prefix hash covers the stored byte
-// range. Rows without a stored hash (legacy or non-fingerprinted) fall back to
-// trusting the size/mtime/identity signals, preserving prior behavior.
+// range. Rows without a stored hash (legacy or non-fingerprinted) report an
+// unverified match. Gate-eligible local sources then fall through to the
+// fingerprint path once, while sources that cannot use the local-stat gate
+// preserve the legacy size/mtime/identity freshness behavior.
 func (e *Engine) providerIncrementalContentChanged(
 	fullID, hashPath string,
 	info os.FileInfo,
-) bool {
+) (changed, verified bool) {
 	storedHash, ok := e.db.GetSessionFileHash(fullID)
 	if !ok || storedHash == "" {
-		return false
+		return false, false
 	}
 	curHash, err := ComputeFileHashPrefix(hashPath, info.Size())
 	if err != nil {
-		return false
+		return false, false
 	}
-	return curHash != storedHash
+	return curHash != storedHash, true
 }
 
 func (e *Engine) providerSourceFreshBeforeFingerprint(
@@ -5593,15 +5659,13 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 		return false
 	}
 	currentName := parser.LookupCodexThreadName(path, uuid)
-	stored, err := e.db.GetSessionFull(
+	storedName, found, err := e.db.GetSessionName(
 		context.Background(), e.idPrefix+"codex:"+uuid,
 	)
-	if err != nil || stored == nil {
+	if err != nil || !found {
 		return true
 	}
-	return e.codexStoredNameDiffersBySession(
-		stored, currentName,
-	)
+	return codexSessionNameDiffers(storedName, currentName)
 }
 
 // codexCachedIndexSessionNameChanged limits title-based cache invalidation to
@@ -5746,21 +5810,17 @@ func (e *Engine) codexStoredNameDiffersBySessionID(
 	sessionID, indexTitle string,
 	missingDiffers bool,
 ) bool {
-	stored, err := e.db.GetSessionFull(context.Background(), sessionID)
-	if err != nil || stored == nil {
+	storedName, found, err := e.db.GetSessionName(
+		context.Background(), sessionID,
+	)
+	if err != nil || !found {
 		return missingDiffers
 	}
-	return e.codexStoredNameDiffersBySession(stored, indexTitle)
+	return codexSessionNameDiffers(storedName, indexTitle)
 }
 
-func (e *Engine) codexStoredNameDiffersBySession(
-	stored *db.Session, indexTitle string,
-) bool {
-	storedName := ""
-	if stored.SessionName != nil {
-		storedName = strings.TrimSpace(*stored.SessionName)
-	}
-	return strings.TrimSpace(indexTitle) != storedName
+func codexSessionNameDiffers(storedName, indexTitle string) bool {
+	return strings.TrimSpace(indexTitle) != strings.TrimSpace(storedName)
 }
 
 func pickPreferredCodexDiscoveredFile(
