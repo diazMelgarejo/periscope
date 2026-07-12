@@ -177,6 +177,84 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 	assert.Contains(t, out.String(), "pid 41")
 }
 
+func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.readStartupState = func(string) *startupState {
+		return &startupState{PID: 77, Phase: "starting HTTP server"}
+	}
+	var stopped daemon.RuntimeRecord
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{Record: testWritableRecord(77, ""), RuntimeFallback: true}
+	}
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		stopped = rec
+		return nil
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "stop")
+	require.NoError(t, err)
+	assert.Equal(t, 77, stopped.PID)
+	assert.Contains(t, out.String(), "Stopped agentsview (pid 77).")
+	assert.NotContains(t, out.String(), "starting up")
+}
+
+func TestDaemonStopUsesStartupStateFallbackWhenRuntimeStoreInspectionFails(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+		return nil, errors.New("store unavailable")
+	}
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{Record: testWritableRecord(76, ""), RuntimeFallback: true}
+	}
+	var stopped daemon.RuntimeRecord
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		stopped = rec
+		return nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "stop"))
+	assert.Equal(t, 76, stopped.PID)
+	assert.Contains(t, out.String(), "Stopped agentsview (pid 76).")
+}
+
+func TestDaemonStopRegisteredRuntimePreservesStartupGuard(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{testWritableRecord(78, "runtime.json")}, nil
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "stop")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "startup is still in progress")
+}
+
+func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{
+			Record:          testWritableRecord(79, ""),
+			Host:            "127.0.0.1",
+			Port:            8079,
+			RuntimeFallback: true,
+		}
+	}
+	starts := 0
+	deps.startBackground = func(
+		config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		starts++
+		return backgroundLaunchResult{}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
+	assert.Zero(t, starts)
+	assert.Contains(t, out.String(), "already running")
+	assert.Contains(t, out.String(), "8079")
+}
+
 func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.isStarting = func(string) bool { return true }
@@ -408,6 +486,25 @@ func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 	err = executeDaemonCommand(t, *deps, out, "status")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "bad config")
+}
+
+func TestDaemonStatusUsesStartupStateFallbackWhenRuntimeStoreInspectionFails(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+		return nil, errors.New("store unavailable")
+	}
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{
+			Record:          testWritableRecord(54, ""),
+			Host:            "127.0.0.1",
+			Port:            8054,
+			RuntimeFallback: true,
+		}
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "status"))
+	assert.Contains(t, out.String(), "pid:     54")
+	assert.Contains(t, out.String(), "runtime record unwritten")
 }
 
 func TestDaemonStatusNotRespondingIsUseful(t *testing.T) {
@@ -757,6 +854,77 @@ func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
 			require.Error(t, err)
 			assert.ErrorContains(t, err, tt.want)
 			assert.Zero(t, signals)
+		})
+	}
+}
+
+func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{
+			Record:          testWritableRecord(113, ""),
+			Host:            "127.0.0.1",
+			Port:            8113,
+			RuntimeFallback: true,
+		}
+	}
+	var stopped daemon.RuntimeRecord
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		stopped = rec
+		return nil
+	}
+	deps.startBackground = func(
+		_ config.Config, args []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		assert.Equal(t, []string{"serve"}, args)
+		assert.Equal(t, "daemon restart", policy.Operation)
+		return backgroundLaunchResult{
+			Runtime: &DaemonRuntime{
+				Record: daemon.RuntimeRecord{PID: 315},
+				Host:   "127.0.0.1", Port: 8080,
+			},
+			Started: true,
+		}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+	assert.Equal(t, 113, stopped.PID)
+	assert.Contains(t, out.String(), "restarted")
+	assert.NotContains(t, out.String(), "startup is still in progress")
+}
+
+func TestDaemonRestartUsesStartupStateFallbackWhenRuntimeStoreInspectionFails(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+		return nil, errors.New("store unavailable")
+	}
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{Record: testWritableRecord(114, ""), RuntimeFallback: true}
+	}
+	var stopped daemon.RuntimeRecord
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		stopped = rec
+		return nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+	assert.Equal(t, 114, stopped.PID)
+	assert.Contains(t, out.String(), "restarted")
+}
+
+func TestDaemonMutationsPreserveRuntimeStoreInspectionErrorWithoutFallback(t *testing.T) {
+	for _, command := range []string{"stop", "restart"} {
+		t.Run(command, func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+				return nil, errors.New("store unavailable")
+			}
+
+			err := executeDaemonCommand(t, *deps, out, command)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "store unavailable")
 		})
 	}
 }

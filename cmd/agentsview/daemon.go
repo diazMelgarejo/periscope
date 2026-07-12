@@ -80,6 +80,7 @@ type daemonCommandDeps struct {
 	validateConfig             func(config.Config) error
 	checkDataVersion           func(string) error
 	probeRecord                func(daemon.RuntimeRecord, string) (daemon.PingInfo, bool)
+	writableRuntime            func(string, string) *DaemonRuntime
 	now                        func() time.Time
 }
 
@@ -104,7 +105,10 @@ func defaultDaemonCommandDeps() daemonCommandDeps {
 		validateConfig:      validateServeConfig,
 		checkDataVersion:    db.CheckDataVersion,
 		probeRecord:         probeDaemonRecord,
-		now:                 time.Now,
+		writableRuntime: func(dataDir, authToken string) *DaemonRuntime {
+			return FindWritableDaemonRuntime(dataDir, authToken)
+		},
+		now: time.Now,
 	}
 }
 
@@ -164,6 +168,17 @@ func prepareDaemonMutation(deps daemonCommandDeps) (string, error) {
 	return dataDir, nil
 }
 
+func writableRuntimeFallbackForCommand(cfg config.Config, deps daemonCommandDeps) *DaemonRuntime {
+	if deps.writableRuntime == nil {
+		return nil
+	}
+	rt := deps.writableRuntime(cfg.DataDir, cfg.AuthToken)
+	if rt == nil || !rt.RuntimeFallback {
+		return nil
+	}
+	return rt
+}
+
 func runDaemonStart(w io.Writer, deps daemonCommandDeps) error {
 	dataDir, err := prepareDaemonMutation(deps)
 	if err != nil {
@@ -184,6 +199,10 @@ func runDaemonStart(w io.Writer, deps daemonCommandDeps) error {
 	}
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon start: %w", err)
+	}
+	if rt := writableRuntimeFallbackForCommand(cfg, deps); rt != nil {
+		writeDaemonStartResult(w, backgroundLaunchResult{Runtime: rt}, false)
+		return nil
 	}
 	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
@@ -431,6 +450,12 @@ func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 	}
 	records, err := deps.statusRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
+		if rt := writableRuntimeFallbackForCommand(cfg, deps); rt != nil {
+			for _, line := range serveStatusLines(rt) {
+				fmt.Fprintln(w, line)
+			}
+			return nil
+		}
 		return fmt.Errorf("daemon status: inspecting runtime store: %w", err)
 	}
 
@@ -450,6 +475,14 @@ func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 	if len(writable) == 1 {
 		writeDaemonRecordStatus(w, cfg, writable[0], deps)
 		return nil
+	}
+	if deps.writableRuntime != nil {
+		if rt := deps.writableRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+			for _, line := range serveStatusLines(rt) {
+				fmt.Fprintln(w, line)
+			}
+			return nil
+		}
 	}
 	if deps.isStarting(cfg.DataDir) {
 		fmt.Fprintln(w, "agentsview daemon is starting up.")
@@ -521,12 +554,21 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon stop: %w", err)
 	}
-	if deps.isStarting(cfg.DataDir) {
-		return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
-	}
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
-		return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
+		fallback := writableRuntimeFallbackForCommand(cfg, deps)
+		if fallback == nil {
+			return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
+		}
+		records = []daemon.RuntimeRecord{fallback.Record}
+	} else {
+		var fallback bool
+		records, fallback = writableDaemonRecordsWithFallback(records, func() *DaemonRuntime {
+			return writableRuntimeFallbackForCommand(cfg, deps)
+		})
+		if !fallback && deps.isStarting(cfg.DataDir) {
+			return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
+		}
 	}
 	if len(records) == 0 {
 		fmt.Fprintln(w, "agentsview daemon is not running.")
@@ -560,7 +602,8 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon restart: %w", err)
 	}
-	if deps.isStarting(cfg.DataDir) {
+	fallback := writableRuntimeFallbackForCommand(cfg, deps)
+	if fallback == nil && deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon restart", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
 	if err := deps.validateConfig(cfg); err != nil {
@@ -571,7 +614,12 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	}
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
-		return fmt.Errorf("daemon restart: inspecting runtime store: %w", err)
+		if fallback == nil {
+			return fmt.Errorf("daemon restart: inspecting runtime store: %w", err)
+		}
+	}
+	if fallback != nil {
+		records = []daemon.RuntimeRecord{fallback.Record}
 	}
 	wasRunning := len(records) > 0
 	if wasRunning {
