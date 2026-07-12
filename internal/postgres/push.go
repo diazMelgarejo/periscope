@@ -26,6 +26,7 @@ const (
 	lastPushTargetFingerprintKey       = "pg_target_fingerprint_v1"
 	sessionAliasBackfillStateKey       = "pg_session_alias_backfill_v1"
 	projectIdentityPublicationStateKey = "project_identity_publication_revision_v2"
+	transcriptRevisionBackfillStateKey = "pg_transcript_revision_backfill_v1"
 )
 
 // pushMarkerIDStateKey names the local sync-state entry holding this DB's
@@ -189,6 +190,17 @@ func (s *Sync) Push(
 	if aliasBackfillNeeded {
 		log.Printf(
 			"pgsync: session alias backfill marker missing; forcing full push",
+		)
+	}
+	transcriptRevisionBackfillNeeded := false
+	full, transcriptRevisionBackfillNeeded, err =
+		applyTranscriptRevisionBackfillRequirement(state, full)
+	if err != nil {
+		return result, err
+	}
+	if transcriptRevisionBackfillNeeded {
+		log.Printf(
+			"pgsync: transcript revision backfill marker missing; forcing full push",
 		)
 	}
 	if full {
@@ -435,6 +447,11 @@ func (s *Sync) Push(
 		); err != nil {
 			return result, err
 		}
+		if err := completeTranscriptRevisionBackfill(
+			state, transcriptRevisionBackfillNeeded, result,
+		); err != nil {
+			return result, err
+		}
 		if err := s.syncProjectIdentityObservations(ctx, full); err != nil {
 			return result, err
 		}
@@ -540,6 +557,11 @@ func (s *Sync) Push(
 	}
 	if err := completeSessionAliasBackfill(
 		aliasBackfillState, aliasBackfillNeeded, result,
+	); err != nil {
+		return result, err
+	}
+	if err := completeTranscriptRevisionBackfill(
+		state, transcriptRevisionBackfillNeeded, result,
 	); err != nil {
 		return result, err
 	}
@@ -1251,6 +1273,41 @@ func completeSessionAliasBackfill(
 	return markSessionAliasBackfillDone(local)
 }
 
+func applyTranscriptRevisionBackfillRequirement(
+	local syncStateStore, full bool,
+) (bool, bool, error) {
+	done, err := local.GetSyncState(transcriptRevisionBackfillStateKey)
+	if err != nil {
+		return full, false, fmt.Errorf(
+			"reading %s: %w", transcriptRevisionBackfillStateKey, err,
+		)
+	}
+	if done == "1" {
+		return full, false, nil
+	}
+	return true, true, nil
+}
+
+func markTranscriptRevisionBackfillDone(local syncStateStore) error {
+	if err := local.SetSyncState(
+		transcriptRevisionBackfillStateKey, "1",
+	); err != nil {
+		return fmt.Errorf(
+			"updating %s: %w", transcriptRevisionBackfillStateKey, err,
+		)
+	}
+	return nil
+}
+
+func completeTranscriptRevisionBackfill(
+	local syncStateStore, needed bool, result PushResult,
+) error {
+	if !needed || result.Errors > 0 {
+		return nil
+	}
+	return markTranscriptRevisionBackfillDone(local)
+}
+
 func persistPushTargetFingerprint(
 	local syncStateStore,
 	fingerprint string,
@@ -1617,6 +1674,7 @@ func sessionPushFingerprint(
 		sess.SourceSessionID,
 		sess.SourceVersion,
 		sess.TranscriptFidelity,
+		stringValue(sess.TranscriptRevision),
 		fmt.Sprintf("%d", sess.ParserMalformedLines),
 		fmt.Sprintf("%t", sess.IsTruncated),
 		stringValue(sess.TerminationStatus),
@@ -1667,6 +1725,13 @@ func stringValue(value *string) string {
 	return *value
 }
 
+func transcriptRevisionValue(value *string) string {
+	if value == nil || *value == "" {
+		return "0"
+	}
+	return *value
+}
+
 func float64Value(value *float64) string {
 	if value == nil {
 		return ""
@@ -1709,10 +1774,9 @@ func nilStrTS(s *string) any {
 }
 
 // pushSession upserts a single session into PG.
-// File-level metadata (file_hash, file_path, file_size,
-// file_mtime) is intentionally not synced to PG -- it is
-// local-only and used solely by the sync engine to detect
-// re-parsed sessions.
+// Local file metadata remains SQLite-only. The file hash is copied into the
+// backend-neutral transcript_revision column so PG readers can observe
+// transcript content changes without depending on local sync metadata.
 func (s *Sync) pushSession(
 	ctx context.Context, tx *sql.Tx, sess db.Session, markerID string,
 	legacyMarkerMachines []string,
@@ -1778,7 +1842,7 @@ func (s *Sync) pushSession(
 			missing_success_criteria_count,
 			missing_verification_count, duplicate_prompt_count,
 			no_code_context_count, runaway_tool_loop_count,
-			transcript_fidelity,
+			transcript_fidelity, transcript_revision,
 			updated_at
 			)
 			SELECT
@@ -1795,7 +1859,7 @@ func (s *Sync) pushSession(
 			$43,
 			$44, $45, $46, $47,
 			$48, $49,
-				$50, $51, $52, $53, $54, $55, $56, $57, $58,
+				$50, $51, $52, $53, $54, $55, $56, $57, $58, $59,
 				NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
@@ -1835,6 +1899,7 @@ func (s *Sync) pushSession(
 			source_session_id = EXCLUDED.source_session_id,
 			source_version = EXCLUDED.source_version,
 			transcript_fidelity = EXCLUDED.transcript_fidelity,
+			transcript_revision = EXCLUDED.transcript_revision,
 			parser_malformed_lines = EXCLUDED.parser_malformed_lines,
 			is_truncated = EXCLUDED.is_truncated,
 			termination_status = EXCLUDED.termination_status,
@@ -1873,7 +1938,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($59::jsonb)
+						SELECT jsonb_array_elements_text($60::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1906,6 +1971,7 @@ func (s *Sync) pushSession(
 			OR sessions.source_session_id IS DISTINCT FROM EXCLUDED.source_session_id
 			OR sessions.source_version IS DISTINCT FROM EXCLUDED.source_version
 			OR sessions.transcript_fidelity IS DISTINCT FROM EXCLUDED.transcript_fidelity
+			OR sessions.transcript_revision IS DISTINCT FROM EXCLUDED.transcript_revision
 			OR sessions.parser_malformed_lines IS DISTINCT FROM EXCLUDED.parser_malformed_lines
 			OR sessions.is_truncated IS DISTINCT FROM EXCLUDED.is_truncated
 			OR sessions.termination_status IS DISTINCT FROM EXCLUDED.termination_status
@@ -1976,6 +2042,7 @@ func (s *Sync) pushSession(
 		sess.MissingVerificationCount, sess.DuplicatePromptCount,
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sanitizePG(sess.TranscriptFidelity),
+		transcriptRevisionValue(sess.TranscriptRevision),
 		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {

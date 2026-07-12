@@ -56,7 +56,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
-	deleted_at, termination_status, created_at`
+	deleted_at, termination_status, transcript_revision, created_at`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -86,7 +86,8 @@ const sessionPruneCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
-	deleted_at, termination_status, file_path, file_size, created_at`
+	deleted_at, termination_status, transcript_revision,
+	file_path, file_size, created_at`
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
@@ -119,7 +120,7 @@ const sessionFullCols = `id, project, machine, agent,
 	deleted_at, termination_status, file_path, file_size, file_mtime,
 	next_ordinal, last_entry_uuid,
 	file_inode, file_device,
-	file_hash, local_modified_at, created_at`
+	file_hash, local_modified_at, transcript_revision, created_at`
 
 const (
 	// DefaultSessionLimit is the default number of sessions returned.
@@ -165,7 +166,8 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.DeletedAt, &s.TerminationStatus, &s.CreatedAt,
+		&s.DeletedAt, &s.TerminationStatus,
+		&s.TranscriptRevision, &s.CreatedAt,
 	)
 	return s, err
 }
@@ -342,6 +344,7 @@ type Session struct {
 	FileDevice           *int64  `json:"file_device,omitempty"`
 	FileHash             *string `json:"file_hash,omitempty"`
 	LocalModifiedAt      *string `json:"local_modified_at,omitempty"`
+	TranscriptRevision   *string `json:"transcript_revision,omitempty"`
 	CreatedAt            string  `json:"created_at"`
 }
 
@@ -584,21 +587,22 @@ type SessionPage struct {
 }
 
 type SidebarSessionIndexRow struct {
-	ID                string  `json:"id"`
-	ParentSessionID   *string `json:"parent_session_id,omitempty"`
-	RelationshipType  string  `json:"relationship_type,omitempty"`
-	Project           string  `json:"project"`
-	Machine           string  `json:"machine"`
-	Agent             string  `json:"agent"`
-	DisplayName       *string `json:"display_name,omitempty"`
-	StartedAt         *string `json:"started_at"`
-	EndedAt           *string `json:"ended_at"`
-	CreatedAt         string  `json:"created_at"`
-	TerminationStatus *string `json:"termination_status,omitempty"`
-	MessageCount      int     `json:"message_count"`
-	UserMessageCount  int     `json:"user_message_count"`
-	IsAutomated       bool    `json:"is_automated"`
-	IsTeammate        bool    `json:"is_teammate"`
+	ID                 string  `json:"id"`
+	ParentSessionID    *string `json:"parent_session_id,omitempty"`
+	RelationshipType   string  `json:"relationship_type,omitempty"`
+	Project            string  `json:"project"`
+	Machine            string  `json:"machine"`
+	Agent              string  `json:"agent"`
+	DisplayName        *string `json:"display_name,omitempty"`
+	StartedAt          *string `json:"started_at"`
+	EndedAt            *string `json:"ended_at"`
+	CreatedAt          string  `json:"created_at"`
+	TerminationStatus  *string `json:"termination_status,omitempty"`
+	MessageCount       int     `json:"message_count"`
+	UserMessageCount   int     `json:"user_message_count"`
+	TranscriptRevision *string `json:"transcript_revision,omitempty"`
+	IsAutomated        bool    `json:"is_automated"`
+	IsTeammate         bool    `json:"is_teammate"`
 }
 
 type SidebarSessionIndex struct {
@@ -723,6 +727,7 @@ func (db *DB) GetSidebarSessionIndex(
 			termination_status,
 			message_count,
 			user_message_count,
+			transcript_revision,
 			is_automated,
 			INSTR(COALESCE(first_message, ''), '<teammate-message') > 0
 		FROM sessions
@@ -759,6 +764,7 @@ func (db *DB) GetSidebarSessionIndex(
 			&row.TerminationStatus,
 			&row.MessageCount,
 			&row.UserMessageCount,
+			&row.TranscriptRevision,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {
@@ -973,6 +979,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			s.termination_status,
 			s.message_count,
 			s.user_message_count,
+			s.transcript_revision,
 			s.is_automated,
 			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
 		FROM sessions s
@@ -1005,6 +1012,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			&row.TerminationStatus,
 			&row.MessageCount,
 			&row.UserMessageCount,
+			&row.TranscriptRevision,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {
@@ -1085,7 +1093,8 @@ func (db *DB) GetSessionFull(
 		&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 		&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 		&s.FileInode, &s.FileDevice,
-		&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
+		&s.FileHash, &s.LocalModifiedAt,
+		&s.TranscriptRevision, &s.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -2809,7 +2818,8 @@ func (db *DB) FindPruneCandidates(
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
-			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize, &s.CreatedAt,
+			&s.DeletedAt, &s.TerminationStatus, &s.TranscriptRevision,
+			&s.FilePath, &s.FileSize, &s.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning prune candidate: %w", err)
@@ -3202,7 +3212,8 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 			&s.FileInode, &s.FileDevice,
-			&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
+			&s.FileHash, &s.LocalModifiedAt,
+			&s.TranscriptRevision, &s.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)

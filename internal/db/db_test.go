@@ -2527,21 +2527,22 @@ func TestGetSessionFull(t *testing.T) {
 		requireNoError(t, err, "GetSessionFull")
 		require.NotNil(t, got, "expected non-nil session")
 		want := &Session{
-			ID:                "full-1",
-			Project:           "proj",
-			MessageCount:      5,
-			FilePath:          new("/tmp/session.jsonl"),
-			FileSize:          new(int64(2048)),
-			FileMtime:         new(int64(1700000000)),
-			FileHash:          new("abc123"),
-			FirstMessage:      new("hello"),
-			StartedAt:         new(tsZero),
-			EndedAt:           new(tsHour1),
-			Machine:           defaultMachine,
-			Agent:             defaultAgent,
-			Outcome:           "unknown",
-			OutcomeConfidence: "low",
-			CreatedAt:         got.CreatedAt,
+			ID:                 "full-1",
+			Project:            "proj",
+			MessageCount:       5,
+			FilePath:           new("/tmp/session.jsonl"),
+			FileSize:           new(int64(2048)),
+			FileMtime:          new(int64(1700000000)),
+			FileHash:           new("abc123"),
+			TranscriptRevision: new("0"),
+			FirstMessage:       new("hello"),
+			StartedAt:          new(tsZero),
+			EndedAt:            new(tsHour1),
+			Machine:            defaultMachine,
+			Agent:              defaultAgent,
+			Outcome:            "unknown",
+			OutcomeConfidence:  "low",
+			CreatedAt:          got.CreatedAt,
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("GetSessionFull mismatch (-want +got):\n%s", diff)
@@ -2557,14 +2558,15 @@ func TestGetSessionFull(t *testing.T) {
 		requireNoError(t, err, "GetSessionFull")
 		require.NotNil(t, got, "expected non-nil session")
 		want := &Session{
-			ID:                "full-2",
-			Project:           "proj",
-			MessageCount:      1,
-			Machine:           defaultMachine,
-			Agent:             defaultAgent,
-			Outcome:           "unknown",
-			OutcomeConfidence: "low",
-			CreatedAt:         got.CreatedAt,
+			ID:                 "full-2",
+			Project:            "proj",
+			MessageCount:       1,
+			TranscriptRevision: new("0"),
+			Machine:            defaultMachine,
+			Agent:              defaultAgent,
+			Outcome:            "unknown",
+			OutcomeConfidence:  "low",
+			CreatedAt:          got.CreatedAt,
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("GetSessionFull mismatch (-want +got):\n%s", diff)
@@ -3387,20 +3389,26 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 			ToolUseID: "toolu_blocked",
 		}},
 	})
+	before, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.TranscriptRevision)
+	assert.Equal(t, "1", *before.TranscriptRevision)
 
+	update := IncrementalSessionUpdate{
+		MsgCount:    1,
+		NextOrdinal: 1,
+		SubagentLinks: []ToolCallSubagentLink{{
+			ToolUseID:         "toolu_blocked",
+			SubagentSessionID: "agent-child",
+			ResultContent:     "secret result",
+			ResultContentLen:  len("secret result"),
+			HasResult:         true,
+		}},
+		BlockedResultCategories: map[string]bool{"Task": true},
+	}
 	require.NoError(t, d.WriteSessionIncremental(
-		"s1", nil, IncrementalSessionUpdate{
-			MsgCount:    1,
-			NextOrdinal: 1,
-			SubagentLinks: []ToolCallSubagentLink{{
-				ToolUseID:         "toolu_blocked",
-				SubagentSessionID: "agent-child",
-				ResultContent:     "secret result",
-				ResultContentLen:  len("secret result"),
-				HasResult:         true,
-			}},
-			BlockedResultCategories: map[string]bool{"Task": true},
-		},
+		"s1", nil, update,
 	), "incremental write")
 
 	var subagent, content string
@@ -3415,6 +3423,19 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 	assert.Equal(t, "agent-child", subagent)
 	assert.Equal(t, len("secret result"), contentLen)
 	assert.Empty(t, content)
+	after, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.TranscriptRevision)
+	assert.Equal(t, "2", *after.TranscriptRevision)
+
+	require.NoError(t, d.WriteSessionIncremental("s1", nil, update),
+		"idempotent incremental write")
+	idempotent, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, idempotent)
+	require.NotNil(t, idempotent.TranscriptRevision)
+	assert.Equal(t, "2", *idempotent.TranscriptRevision)
 }
 
 func TestFTSBackfill(t *testing.T) {
@@ -4032,9 +4053,13 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 		asstMsg("s1", 1, "reply from s1"),
 		userMsg("s2", 0, "hello from s2"),
 	)
+	_, err := srcDB.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = '7' WHERE id = 's2'`,
+	)
+	requireNoError(t, err, "set orphan transcript revision")
 	// Insert tool_calls for s1 via raw SQL since
 	// insertToolCallsTx is unexported.
-	_, err := srcDB.getWriter().Exec(`
+	_, err = srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category)
 		SELECT id, session_id, 'Read', 'file'
@@ -4069,6 +4094,8 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 	requireNoError(t, err, "GetSession s2")
 	require.NotNil(t, s, "orphaned session s2 not found in dst")
 	assert.Equal(t, "codex", s.Agent, "s2 agent")
+	require.NotNil(t, s.TranscriptRevision)
+	assert.Equal(t, "7", *s.TranscriptRevision)
 
 	// s2 messages should be copied.
 	ctx := context.Background()
@@ -4179,6 +4206,101 @@ func TestCopyOrphanedDataFrom_NoOrphans(t *testing.T) {
 	requireNoError(t, err, "CopyOrphanedDataFrom")
 	require.Equal(t, 0, count,
 		"expected 0 orphaned sessions, got %d", count)
+}
+
+func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	ids := []string{
+		"unchanged", "changed", "tool-changed",
+		"compact-changed", "subtype-changed",
+	}
+	for _, id := range ids {
+		insertSession(t, srcDB, id, "proj")
+	}
+	insertMessages(t, srcDB,
+		userMsg("unchanged", 0, "same"),
+		userMsg("changed", 0, "old content"),
+		asstMsg("tool-changed", 0, "tool"),
+		userMsg("compact-changed", 0, "boundary"),
+		userMsg("subtype-changed", 0, "system event"),
+	)
+	_, err := srcDB.getWriter().Exec(`
+		UPDATE messages SET is_system = 1
+		WHERE session_id = 'subtype-changed'`)
+	requireNoError(t, err, "mark source system message")
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category, input_json, call_index)
+		SELECT id, session_id, 'Read', 'file', '{"path":"old"}', 0
+		FROM messages WHERE session_id = 'tool-changed'`)
+	requireNoError(t, err, "insert source tool call")
+	_, err = srcDB.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = '7'`,
+	)
+	requireNoError(t, err, "set source transcript revisions")
+	requireNoError(t, srcDB.Close(), "close source")
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	for _, id := range ids {
+		insertSession(t, dstDB, id, "proj")
+	}
+	insertMessages(t, dstDB,
+		userMsg("unchanged", 0, "same"),
+		userMsg("changed", 0, "new content"),
+		asstMsg("tool-changed", 0, "tool"),
+		userMsg("compact-changed", 0, "boundary"),
+		userMsg("subtype-changed", 0, "system event"),
+	)
+	_, err = dstDB.getWriter().Exec(`
+		UPDATE messages
+		SET is_compact_boundary = 1
+		WHERE session_id = 'compact-changed';
+		UPDATE messages
+		SET is_system = 1, source_subtype = 'resume'
+		WHERE session_id = 'subtype-changed'`)
+	requireNoError(t, err, "change destination display fields")
+	_, err = dstDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category, input_json, call_index)
+		SELECT id, session_id, 'Read', 'file', '{"path":"new"}', 0
+		FROM messages WHERE session_id = 'tool-changed'`)
+	requireNoError(t, err, "insert destination tool call")
+	name := "metadata-only rename"
+	requireNoError(t, dstDB.RenameSession("unchanged", &name), "rename session")
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	requireNoError(t, err, "CopyOrphanedDataFrom")
+	assert.Zero(t, count)
+
+	unchanged, err := dstDB.GetSession(context.Background(), "unchanged")
+	requireNoError(t, err, "GetSession unchanged")
+	require.NotNil(t, unchanged)
+	require.NotNil(t, unchanged.TranscriptRevision)
+	assert.Equal(t, "7", *unchanged.TranscriptRevision)
+
+	changed, err := dstDB.GetSession(context.Background(), "changed")
+	requireNoError(t, err, "GetSession changed")
+	require.NotNil(t, changed)
+	require.NotNil(t, changed.TranscriptRevision)
+	assert.Equal(t, "8", *changed.TranscriptRevision)
+
+	toolChanged, err := dstDB.GetSession(context.Background(), "tool-changed")
+	requireNoError(t, err, "GetSession tool-changed")
+	require.NotNil(t, toolChanged)
+	require.NotNil(t, toolChanged.TranscriptRevision)
+	assert.Equal(t, "8", *toolChanged.TranscriptRevision)
+
+	for _, id := range []string{"compact-changed", "subtype-changed"} {
+		session, err := dstDB.GetSession(context.Background(), id)
+		requireNoError(t, err, "GetSession "+id)
+		require.NotNil(t, session)
+		require.NotNil(t, session.TranscriptRevision)
+		assert.Equal(t, "8", *session.TranscriptRevision, id)
+	}
 }
 
 func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {

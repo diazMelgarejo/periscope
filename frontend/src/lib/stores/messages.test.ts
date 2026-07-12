@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vite-plus/test';
 import { messages } from './messages.svelte.js';
+import { readProgress } from './read-progress.svelte.js';
 import { parseContent } from '../utils/content-parser.js';
 import type {
   Message,
@@ -137,6 +138,7 @@ async function setupSession(
 describe('MessagesStore', () => {
   beforeEach(() => {
     messages.clear();
+    readProgress.reset();
     vi.clearAllMocks();
   });
 
@@ -196,6 +198,154 @@ describe('MessagesStore', () => {
     await p;
 
     expect(messages.mainModel).toBe('claude-3-opus');
+  });
+
+  it('publishes a new transcript token only after refreshed messages arrive', async () => {
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', 2),
+      transcript_revision: 'old',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(0), makeMessage(1)]),
+    );
+    await messages.loadSession('s1');
+    expect(messages.activeSessionToken).toBe('old');
+
+    vi.mocked(api.getSession).mockResolvedValueOnce({
+      ...makeSession('s1', 2),
+      transcript_revision: 'new',
+    });
+    const refreshed = createDeferred<MessagesResponse>();
+    vi.mocked(api.getMessages).mockReturnValueOnce(
+      refreshed.promise,
+    );
+
+    const reload = messages.reload();
+    await vi.waitFor(() => {
+      expect(vi.mocked(api.getMessages)).toHaveBeenCalledTimes(2);
+    });
+    expect(messages.activeSessionToken).toBe('old');
+
+    refreshed.resolve(
+      makeMessagesResponse([makeMessage(0), makeMessage(1)]),
+    );
+    await reload;
+    expect(messages.activeSessionToken).toBe('new');
+  });
+
+  it('publishes the earliest changed ordinal with a revised token', async () => {
+    const original = [makeMessage(0), makeMessage(1), makeMessage(2)];
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', original.length),
+      transcript_revision: 'old',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(original),
+    );
+    await messages.loadSession('s1');
+
+    vi.mocked(api.getSession).mockResolvedValueOnce({
+      ...makeSession('s1', original.length),
+      transcript_revision: 'new',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([
+        { ...makeMessage(0), content: 'edited earlier message' },
+        makeMessage(1),
+        makeMessage(2),
+      ]),
+    );
+
+    await messages.reload();
+
+    expect(messages.activeSessionToken).toBe('new');
+    expect(messages.activeSessionUnreadOrdinal).toBe(0);
+  });
+
+  it('ignores replacement row IDs when locating changed transcript content', async () => {
+    const original = [makeMessage(0), makeMessage(1)];
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', original.length),
+      transcript_revision: 'old',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(original),
+    );
+    await messages.loadSession('s1');
+
+    vi.mocked(api.getSession).mockResolvedValueOnce({
+      ...makeSession('s1', original.length),
+      transcript_revision: 'new',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(original.map((message) => ({
+        ...message,
+        id: message.id + 100,
+      }))),
+    );
+
+    await messages.reload();
+
+    expect(messages.activeSessionToken).toBe('new');
+    expect(messages.activeSessionUnreadOrdinal).toBeNull();
+  });
+
+  it('keeps a revised token pending until progressively loaded history is visible', async () => {
+    const count = 4_000;
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', count),
+      transcript_revision: 'old',
+    });
+    const tail = Array.from(
+      { length: 1_000 },
+      (_, i) => makeMessage(count - 1 - i),
+    );
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(tail),
+    );
+    await messages.loadSession('s1');
+    expect(messages.hasOlder).toBe(true);
+    expect(messages.activeSessionToken).toBe('old');
+
+    vi.mocked(api.getSession).mockResolvedValueOnce({
+      ...makeSession('s1', count),
+      transcript_revision: 'new',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([...tail].reverse()),
+    );
+    await messages.reload();
+    expect(messages.activeSessionToken).toBe('old');
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(1), makeMessage(0)]),
+    );
+    await messages.loadOlder();
+    expect(messages.hasOlder).toBe(false);
+    expect(messages.activeSessionToken).toBe('new');
+    expect(messages.activeSessionUnreadOrdinal).toBe(0);
+  });
+
+  it('publishes an already-current token for progressively loaded history', async () => {
+    const count = 4_000;
+    readProgress.baseline('s1', 'current', count - 1);
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', count),
+      transcript_revision: 'current',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(
+        Array.from(
+          { length: 1_000 },
+          (_, i) => makeMessage(count - 1 - i),
+        ),
+      ),
+    );
+
+    await messages.loadSession('s1');
+
+    expect(messages.hasOlder).toBe(true);
+    expect(messages.activeSessionToken).toBe('current');
   });
 
   it('should not carry over mainModel to a different session', async () => {

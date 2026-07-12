@@ -13,6 +13,10 @@ import {
 } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModel } from "../utils/model.js";
+import {
+  buildReadProgressToken,
+  readProgress,
+} from "./read-progress.svelte.js";
 
 const MESSAGE_PAGE_SIZE = 1000;
 const FULL_SESSION_MESSAGE_THRESHOLD = 3_000;
@@ -29,6 +33,8 @@ class MessagesStore {
   loading: boolean = $state(false);
   sessionId: string | null = $state(null);
   messageCount: number = $state(0);
+  activeSessionToken: string | null = $state(null);
+  activeSessionUnreadOrdinal: number | null = $state(null);
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   private _stableMainModel: string = $state("");
@@ -44,6 +50,9 @@ class MessagesStore {
   private reloadSessionId: string | null = null;
   private pendingReload: boolean = false;
   private loadOlderPromise: Promise<void> | null = null;
+  private pendingSessionToken: string | null = null;
+  private hasPendingSessionToken: boolean = false;
+  private pendingSessionUnreadOrdinal: number | null = null;
 
   async loadSession(id: string) {
     if (
@@ -52,9 +61,12 @@ class MessagesStore {
     ) {
       return;
     }
+    const readMarker = readProgress.get(id);
     this.clear();
     this._stableMainModel = "";
     this.sessionId = id;
+    this.activeSessionToken = null;
+    this.activeSessionUnreadOrdinal = null;
     this.loading = true;
 
     const ac = new AbortController();
@@ -62,6 +74,7 @@ class MessagesStore {
 
     try {
       let countHint: number | null = null;
+      let pendingToken: string | null = null;
       try {
         configureGeneratedClient();
         const sess = await withAbort(
@@ -69,6 +82,7 @@ class MessagesStore {
           ac.signal,
         );
         countHint = sess.message_count ?? 0;
+        pendingToken = buildReadProgressToken(sess);
       } catch (err) {
         if (isAbortError(err)) return;
         console.warn(
@@ -87,6 +101,14 @@ class MessagesStore {
           id,
           ac.signal,
           countHint ?? undefined,
+        );
+      }
+      if (this.sessionId === id) {
+        this.publishOrDeferSessionToken(
+          pendingToken,
+          null,
+          readMarker !== null &&
+            readMarker.token !== pendingToken,
         );
       }
     } catch (err) {
@@ -140,12 +162,17 @@ class MessagesStore {
     this.loading = false;
     this._stableMainModel = "";
     this.messageCount = 0;
+    this.activeSessionToken = null;
+    this.activeSessionUnreadOrdinal = null;
     this.hasOlder = false;
     this.loadingOlder = false;
     this.reloadPromise = null;
     this.reloadSessionId = null;
     this.pendingReload = false;
     this.loadOlderPromise = null;
+    this.pendingSessionToken = null;
+    this.hasPendingSessionToken = false;
+    this.pendingSessionUnreadOrdinal = null;
   }
 
   private async fetchPages(
@@ -313,6 +340,7 @@ class MessagesStore {
     const oldest = this.messages[0]!.ordinal;
     if (oldest <= 0) {
       this.hasOlder = false;
+      this.publishPendingSessionToken(id);
       return;
     }
 
@@ -334,11 +362,13 @@ class MessagesStore {
       if (this.sessionId !== id) return;
       if (res.messages.length === 0) {
         this.hasOlder = false;
+        this.publishPendingSessionToken(id);
         return;
       }
       const chunk = [...res.messages].reverse();
       this.messages.unshift(...chunk);
       this.hasOlder = chunk[0]!.ordinal > 0;
+      this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Failed to load older messages:", err);
@@ -427,6 +457,7 @@ class MessagesStore {
       const oldestNow = this.messages[0]?.ordinal;
       this.hasOlder =
         oldestNow !== undefined && oldestNow > 0;
+      this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn(
@@ -444,6 +475,9 @@ class MessagesStore {
     const signal = this.abortController?.signal;
     if (!signal || signal.aborted) return;
 
+    const previousToken = this.activeSessionToken;
+    const previousMessages = this.messages;
+
     try {
       configureGeneratedClient();
       const sess = await withAbort(
@@ -452,14 +486,12 @@ class MessagesStore {
       );
       if (this.sessionId !== id) return;
 
+      const pendingToken = buildReadProgressToken(sess);
       const newCount = sess.message_count ?? 0;
       const oldCount = this.messageCount;
       if (newCount === oldCount) {
         await this.refreshLoadedWindow(id, signal);
-        return;
-      }
-
-      if (newCount > oldCount && this.messages.length > 0) {
+      } else if (newCount > oldCount && this.messages.length > 0) {
         const oldestOrdinal = this.messages[0]!.ordinal;
         await this.loadFrom(id, oldestOrdinal, signal);
         if (this.sessionId !== id) return;
@@ -468,18 +500,57 @@ class MessagesStore {
           this.messages[this.messages.length - 1];
         if (newest && newest.ordinal !== newCount - 1) {
           await this.fullReload(id, signal, newCount);
-          return;
+        } else {
+          this.messageCount = newCount;
         }
-
-        this.messageCount = newCount;
-        return;
+      } else {
+        await this.fullReload(id, signal, newCount);
       }
 
-      await this.fullReload(id, signal, newCount);
+      if (this.sessionId === id) {
+        const unreadOrdinal = pendingToken !== previousToken
+          ? earliestChangedOrdinal(previousMessages, this.messages)
+          : null;
+        this.publishOrDeferSessionToken(pendingToken, unreadOrdinal);
+      }
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Reload failed:", err);
     }
+  }
+
+  private publishOrDeferSessionToken(
+    token: string | null,
+    unreadOrdinal: number | null,
+    deferForOlder: boolean = true,
+  ) {
+    if (this.hasOlder && deferForOlder) {
+      this.pendingSessionToken = token;
+      this.hasPendingSessionToken = true;
+      this.pendingSessionUnreadOrdinal = 0;
+      return;
+    }
+    this.pendingSessionToken = null;
+    this.hasPendingSessionToken = false;
+    this.pendingSessionUnreadOrdinal = null;
+    this.activeSessionToken = token;
+    this.activeSessionUnreadOrdinal = unreadOrdinal;
+  }
+
+  private publishPendingSessionToken(id: string) {
+    if (
+      this.sessionId !== id ||
+      this.hasOlder ||
+      !this.hasPendingSessionToken
+    ) {
+      return;
+    }
+    this.activeSessionToken = this.pendingSessionToken;
+    this.activeSessionUnreadOrdinal =
+      this.pendingSessionUnreadOrdinal;
+    this.pendingSessionToken = null;
+    this.hasPendingSessionToken = false;
+    this.pendingSessionUnreadOrdinal = null;
   }
 
   private async refreshLoadedWindow(
@@ -545,6 +616,81 @@ class MessagesStore {
       }
     }
   }
+}
+
+function earliestChangedOrdinal(
+  previous: Message[],
+  current: Message[],
+): number | null {
+  const previousByOrdinal = new Map(
+    previous.map((message) => [message.ordinal, message]),
+  );
+  const currentByOrdinal = new Map(
+    current.map((message) => [message.ordinal, message]),
+  );
+  const ordinals = new Set([
+    ...previousByOrdinal.keys(),
+    ...currentByOrdinal.keys(),
+  ]);
+  let earliest: number | null = null;
+  for (const ordinal of ordinals) {
+    const before = previousByOrdinal.get(ordinal);
+    const after = currentByOrdinal.get(ordinal);
+    if (
+      before !== undefined &&
+      after !== undefined &&
+      transcriptMessageEqual(before, after)
+    ) {
+      continue;
+    }
+    earliest = earliest === null
+      ? ordinal
+      : Math.min(earliest, ordinal);
+  }
+  return earliest;
+}
+
+function transcriptMessageEqual(
+  before: Message,
+  after: Message,
+): boolean {
+  const visibleContent = (message: Message) => ({
+    role: message.role,
+    content: message.content,
+    thinkingText: message.thinking_text,
+    timestamp: message.timestamp,
+    hasThinking: message.has_thinking,
+    hasToolUse: message.has_tool_use,
+    isSystem: message.is_system,
+    model: message.model,
+    contextTokens: message.context_tokens,
+    outputTokens: message.output_tokens,
+    hasContextTokens: message.has_context_tokens ?? false,
+    hasOutputTokens: message.has_output_tokens ?? false,
+    sourceSubtype: message.source_subtype ?? "",
+    isCompactBoundary: message.is_compact_boundary ?? false,
+    toolCalls: (message.tool_calls ?? []).map((call) => ({
+      toolName: call.tool_name,
+      category: call.category ?? "",
+      toolUseId: call.tool_use_id ?? "",
+      inputJson: call.input_json ?? "",
+      skillName: call.skill_name ?? "",
+      resultContent: call.result_content ?? "",
+      subagentSessionId: call.subagent_session_id ?? "",
+      resultEvents: (call.result_events ?? []).map((event) => ({
+        toolUseId: event.tool_use_id ?? "",
+        agentId: event.agent_id ?? "",
+        subagentSessionId: event.subagent_session_id ?? "",
+        source: event.source,
+        status: event.status,
+        content: event.content,
+        timestamp: event.timestamp ?? "",
+        eventIndex: event.event_index,
+      })),
+    })),
+  });
+  return JSON.stringify(visibleContent(before)) ===
+    JSON.stringify(visibleContent(after));
 }
 
 export const messages = new MessagesStore();

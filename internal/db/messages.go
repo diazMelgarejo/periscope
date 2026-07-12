@@ -902,6 +902,9 @@ func (db *DB) InsertMessages(msgs []Message) error {
 		return err
 	}
 	for _, sessionID := range messageSessionIDs(msgs) {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
 		if err := setSessionAutomationFromMessagesTx(
 			tx, sessionID,
 		); err != nil {
@@ -978,10 +981,18 @@ func (db *DB) WriteSessionIncremental(
 	if err := writeMessagesTx(tx, msgs); err != nil {
 		return err
 	}
+	transcriptChanged := len(msgs) > 0
 	for _, link := range update.SubagentLinks {
-		if err := applyToolCallSubagentLinkTx(
+		changed, err := applyToolCallSubagentLinkTx(
 			tx, sessionID, link, update.BlockedResultCategories,
-		); err != nil {
+		)
+		if err != nil {
+			return err
+		}
+		transcriptChanged = transcriptChanged || changed
+	}
+	if transcriptChanged {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
 	}
@@ -1095,7 +1106,11 @@ func (db *DB) ReplaceSessionMessages(
 	// syncs) so unchanged rows keep their rowids, pins, and FTS
 	// entries; fall back to the full delete+reinsert for
 	// truncations, reorders, and wholesale rewrites.
-	plan, useDiff := db.planStoredMessageDiff(sessionID, msgs)
+	plan, stored, useDiff, storedLoaded := db.planStoredMessageDiff(
+		sessionID, msgs,
+	)
+	transcriptChanged := !storedLoaded ||
+		!transcriptMessagesEqual(stored, msgs)
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
@@ -1110,6 +1125,11 @@ func (db *DB) ReplaceSessionMessages(
 		}
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
+	}
+	if transcriptChanged {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
@@ -1176,6 +1196,35 @@ func replaceSessionMessagesTx(
 	}
 
 	return restorePinsTx(tx, sessionID, pins)
+}
+
+func bumpTranscriptRevisionTx(tx *sql.Tx, sessionID string) error {
+	result, err := tx.Exec(
+		`UPDATE sessions
+		 SET transcript_revision = CAST(
+			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
+		 )
+		 WHERE id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"bumping transcript revision for %s: %w", sessionID, err,
+		)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"reading transcript revision rows for %s: %w", sessionID, err,
+		)
+	}
+	if rows != 1 {
+		return fmt.Errorf(
+			"bumping transcript revision for %s: updated %d rows",
+			sessionID, rows,
+		)
+	}
+	return nil
 }
 
 func sessionHasFTSTx(tx *sql.Tx) (bool, error) {
@@ -1257,7 +1306,11 @@ func (db *DB) ReplaceSessionContent(
 
 	// Same diff-vs-full decision as ReplaceSessionMessages: this is
 	// the hot path for streaming chunk-merge full-parse fallbacks.
-	plan, useDiff := db.planStoredMessageDiff(sessionID, msgs)
+	plan, stored, useDiff, storedLoaded := db.planStoredMessageDiff(
+		sessionID, msgs,
+	)
+	transcriptChanged := !storedLoaded ||
+		!transcriptMessagesEqual(stored, msgs)
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
@@ -1272,6 +1325,11 @@ func (db *DB) ReplaceSessionContent(
 		}
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
+	}
+	if transcriptChanged {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
@@ -1476,6 +1534,18 @@ func restorePinsTx(
 func (db *DB) attachToolCalls(
 	ctx context.Context, msgs []Message,
 ) error {
+	return attachToolCallsWithQuerier(ctx, db.getReader(), msgs)
+}
+
+type messageRowsQuerier interface {
+	QueryContext(
+		ctx context.Context, query string, args ...any,
+	) (*sql.Rows, error)
+}
+
+func attachToolCallsWithQuerier(
+	ctx context.Context, q messageRowsQuerier, msgs []Message,
+) error {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -1489,20 +1559,21 @@ func (db *DB) attachToolCalls(
 
 	for i := 0; i < len(ids); i += attachToolCallBatchSize {
 		end := min(i+attachToolCallBatchSize, len(ids))
-		if err := db.attachToolCallsBatch(
-			ctx, msgs, idToIdx, ids[i:end],
+		if err := attachToolCallsBatch(
+			ctx, q, msgs, idToIdx, ids[i:end],
 		); err != nil {
 			return err
 		}
 	}
-	if err := db.attachToolResultEvents(ctx, msgs); err != nil {
+	if err := attachToolResultEvents(ctx, q, msgs); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (db *DB) attachToolCallsBatch(
+func attachToolCallsBatch(
 	ctx context.Context,
+	q messageRowsQuerier,
 	msgs []Message,
 	idToIdx map[int64]int,
 	batch []int64,
@@ -1528,7 +1599,7 @@ func (db *DB) attachToolCallsBatch(
 		ORDER BY message_id, call_index`,
 		strings.Join(placeholders, ","))
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying tool_calls: %w", err)
 	}
@@ -1584,8 +1655,8 @@ func (db *DB) attachToolCallsBatch(
 	return rows.Err()
 }
 
-func (db *DB) attachToolResultEvents(
-	ctx context.Context, msgs []Message,
+func attachToolResultEvents(
+	ctx context.Context, q messageRowsQuerier, msgs []Message,
 ) error {
 	if len(msgs) == 0 {
 		return nil
@@ -1600,8 +1671,8 @@ func (db *DB) attachToolResultEvents(
 	}
 	for i := 0; i < len(ordinals); i += attachToolCallBatchSize {
 		end := min(i+attachToolCallBatchSize, len(ordinals))
-		if err := db.attachToolResultEventsBatch(
-			ctx, msgs, ordToIdx, sessionID, ordinals[i:end],
+		if err := attachToolResultEventsBatch(
+			ctx, q, msgs, ordToIdx, sessionID, ordinals[i:end],
 		); err != nil {
 			return err
 		}
@@ -1609,8 +1680,9 @@ func (db *DB) attachToolResultEvents(
 	return nil
 }
 
-func (db *DB) attachToolResultEventsBatch(
+func attachToolResultEventsBatch(
 	ctx context.Context,
+	q messageRowsQuerier,
 	msgs []Message,
 	ordToIdx map[int]int,
 	sessionID string,
@@ -1637,7 +1709,7 @@ func (db *DB) attachToolResultEventsBatch(
 		ORDER BY tool_call_message_ordinal, call_index, event_index`,
 		strings.Join(placeholders, ","))
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying tool_result_events: %w", err)
 	}
@@ -2035,13 +2107,19 @@ func (db *DB) SetToolCallSubagentSession(
 		return fmt.Errorf("beginning subagent linkage tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := applyToolCallSubagentLinkTx(
+	changed, err := applyToolCallSubagentLinkTx(
 		tx, sessionID, ToolCallSubagentLink{
 			ToolUseID:         toolUseID,
 			SubagentSessionID: subagentSessionID,
 		}, nil,
-	); err != nil {
+	)
+	if err != nil {
 		return err
+	}
+	if changed {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -2049,38 +2127,53 @@ func (db *DB) SetToolCallSubagentSession(
 func applyToolCallSubagentLinkTx(
 	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
 	blockedResultCategories map[string]bool,
-) error {
-	var toolName, category, currentSubagent string
+) (bool, error) {
+	var toolName, category, currentSubagent, currentResultContent string
+	var currentResultContentLen int
 	if err := tx.QueryRow(
-		`SELECT tool_name, category, COALESCE(subagent_session_id, '')
+		`SELECT tool_name, category, COALESCE(subagent_session_id, ''),
+		        COALESCE(result_content_length, 0),
+		        COALESCE(result_content, '')
 		 FROM tool_calls
 		 WHERE session_id = ? AND tool_use_id = ?`,
 		sessionID, link.ToolUseID,
-	).Scan(&toolName, &category, &currentSubagent); err != nil {
+	).Scan(
+		&toolName, &category, &currentSubagent,
+		&currentResultContentLen, &currentResultContent,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"checking tool_call for %s/%s: %w",
 			sessionID, link.ToolUseID, err,
 		)
 	}
+	storedSubagent := currentSubagent
 	if currentSubagent == "" &&
 		(category == "Task" || strings.Contains(toolName, "subagent")) {
 		currentSubagent = link.SubagentSessionID
 	}
 
 	if !link.HasResult {
+		if currentSubagent == storedSubagent {
+			return false, nil
+		}
 		_, err := tx.Exec(
 			`UPDATE tool_calls SET subagent_session_id = ?
 			 WHERE session_id = ? AND tool_use_id = ?`,
 			nilIfEmpty(currentSubagent), sessionID, link.ToolUseID,
 		)
-		return err
+		return err == nil, err
 	}
 	resultContent := link.ResultContent
 	if blockedResultCategories[category] {
 		resultContent = ""
+	}
+	if currentSubagent == storedSubagent &&
+		currentResultContentLen == link.ResultContentLen &&
+		currentResultContent == resultContent {
+		return false, nil
 	}
 	_, err := tx.Exec(
 		`UPDATE tool_calls
@@ -2090,7 +2183,7 @@ func applyToolCallSubagentLinkTx(
 		nilIfEmpty(currentSubagent), link.ResultContentLen, resultContent,
 		sessionID, link.ToolUseID,
 	)
-	return err
+	return err == nil, err
 }
 
 // SystemMessageFingerprint returns the ordered, comma-separated list of
