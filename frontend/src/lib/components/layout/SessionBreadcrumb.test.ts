@@ -335,6 +335,43 @@ describe("SessionBreadcrumb", () => {
     unmount(component);
   });
 
+  it("offers a Codex Desktop deep link for a local terminal-created session", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("codex", {
+          id: "codex:terminal-session-123",
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+
+    const link = document.querySelector<HTMLAnchorElement>(
+      '[data-testid="codex-desktop-link"]',
+    );
+    expect(link).toBeTruthy();
+    expect(link?.getAttribute("href")).toBe(
+      "codex://threads/terminal-session-123",
+    );
+    expect(link?.textContent).toContain("Codex Desktop");
+
+    const menuLabels = Array.from(
+      document.querySelectorAll(".open-menu-name"),
+    ).map((node) => node.textContent?.trim());
+    const codexMenuIndex = menuLabels.findIndex((label) =>
+      label?.includes("Codex Desktop"),
+    );
+    expect(codexMenuIndex).toBeLessThan(
+      menuLabels.indexOf("Copy command"),
+    );
+
+    await unmount(component);
+  });
+
   it("renders gemini with rose badge color", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,
@@ -355,6 +392,36 @@ describe("SessionBreadcrumb", () => {
     );
 
     unmount(component);
+  });
+
+  it("offers a Claude Code deep link using the session directory", async () => {
+    sessionsService.getApiV1SessionsIdDirectory.mockResolvedValue({
+      path: "/tmp/claude project",
+    });
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector<HTMLAnchorElement>(
+          '[data-testid="claude-code-link"]',
+        )?.getAttribute("href"),
+      ).toBe(
+        "claude://code/new?folder=%2Ftmp%2Fclaude%20project",
+      );
+    });
+
+    await unmount(component);
   });
 
   it("falls back to blue for unknown agents", async () => {

@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use tauri::async_runtime::Receiver;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::plugin::Builder as PluginBuilder;
+#[cfg(target_os = "macos")]
+use tauri::tray::TrayIconBuilder;
 use tauri::{App, AppHandle, Emitter, Manager, RunEvent, Url, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
@@ -47,7 +49,11 @@ const DATA_VERSION_TOO_NEW_EXIT_CODE: i32 = 3;
 const DESKTOP_LOG_FILE_NAME: &str = "agentsview-desktop.log";
 const DESKTOP_LOG_QUEUE_CAPACITY: usize = 64;
 const STARTUP_OUTPUT_MAX_CHARS: usize = 12_000;
+const ABOUT_MENU_ID: &str = "about";
+const CHECK_UPDATES_MENU_ID: &str = "check_updates";
 const OPEN_LOGS_FOLDER_MENU_ID: &str = "open_logs_folder";
+const SHOW_MAIN_WINDOW_MENU_ID: &str = "show_main_window";
+const QUIT_FROM_STATUS_ITEM_MENU_ID: &str = "quit_from_status_item";
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
 // process time to spawn so we don't false-positive on slow startup.
@@ -74,6 +80,15 @@ struct SidecarState {
 struct SidecarProcess {
     child: CommandChild,
     generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DesktopMenuAction {
+    About,
+    CheckUpdates,
+    OpenLogsFolder,
+    Quit,
+    ShowMainWindow,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +157,14 @@ pub fn run() {
             if let Err(err) = setup_menu(app) {
                 eprintln!("[agentsview] failed to set up desktop menu: {err}");
             }
+            #[cfg(target_os = "macos")]
+            if let Err(err) = setup_macos_status_item(app) {
+                eprintln!("[agentsview] failed to set up macOS status item: {err}");
+            }
+            #[cfg(target_os = "macos")]
+            if let Err(err) = setup_macos_window_lifecycle(app) {
+                eprintln!("[agentsview] failed to set up macOS window lifecycle: {err}");
+            }
             match tauri::async_runtime::block_on(run_data_version_preflight(app.handle())) {
                 Ok(()) => {
                     if let Err(err) = launch_backend(app) {
@@ -187,22 +210,83 @@ pub fn run() {
         .expect("failed to build tauri app")
         .run(|app_handle, event| {
             if let RunEvent::MenuEvent(event) = &event {
-                if event.id().0 == "about" {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.eval("window.dispatchEvent(new CustomEvent('show-about'));");
-                    }
-                }
-                if event.id().0 == OPEN_LOGS_FOLDER_MENU_ID {
-                    open_logs_folder(app_handle);
-                }
-                if event.id().0 == "check_updates" {
-                    let handle = app_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        check_for_updates(&handle, false).await;
-                    });
-                }
+                handle_desktop_menu_event(app_handle, event.id().0.as_str());
             }
         });
+}
+
+fn desktop_menu_action(id: &str) -> Option<DesktopMenuAction> {
+    match id {
+        ABOUT_MENU_ID => Some(DesktopMenuAction::About),
+        CHECK_UPDATES_MENU_ID => Some(DesktopMenuAction::CheckUpdates),
+        OPEN_LOGS_FOLDER_MENU_ID => Some(DesktopMenuAction::OpenLogsFolder),
+        QUIT_FROM_STATUS_ITEM_MENU_ID => Some(DesktopMenuAction::Quit),
+        SHOW_MAIN_WINDOW_MENU_ID => Some(DesktopMenuAction::ShowMainWindow),
+        _ => None,
+    }
+}
+
+fn handle_desktop_menu_event(handle: &AppHandle, id: &str) {
+    match desktop_menu_action(id) {
+        Some(DesktopMenuAction::About) => {
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window.eval("window.dispatchEvent(new CustomEvent('show-about'));");
+            }
+        }
+        Some(DesktopMenuAction::CheckUpdates) => {
+            let handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                check_for_updates(&handle, false).await;
+            });
+        }
+        Some(DesktopMenuAction::OpenLogsFolder) => open_logs_folder(handle),
+        Some(DesktopMenuAction::Quit) => handle.exit(0),
+        Some(DesktopMenuAction::ShowMainWindow) => show_main_window(handle),
+        None => {}
+    }
+}
+
+fn show_main_window(handle: &AppHandle) {
+    let Some(window) = handle.get_webview_window("main") else {
+        return;
+    };
+    restore_main_window(&window);
+}
+
+trait MainWindowVisibility {
+    fn hide_main_window(&self);
+    fn show_main_window(&self);
+    fn unminimize_main_window(&self);
+    fn focus_main_window(&self);
+}
+
+impl MainWindowVisibility for WebviewWindow {
+    fn hide_main_window(&self) {
+        let _ = self.hide();
+    }
+
+    fn show_main_window(&self) {
+        let _ = self.show();
+    }
+
+    fn unminimize_main_window(&self) {
+        let _ = self.unminimize();
+    }
+
+    fn focus_main_window(&self) {
+        let _ = self.set_focus();
+    }
+}
+
+fn hide_main_window_on_close(window: &impl MainWindowVisibility, prevent_close: impl FnOnce()) {
+    prevent_close();
+    window.hide_main_window();
+}
+
+fn restore_main_window(window: &impl MainWindowVisibility) {
+    window.show_main_window();
+    window.unminimize_main_window();
+    window.focus_main_window();
 }
 
 fn launch_backend(app: &mut App) -> Result<(), DynError> {
@@ -263,6 +347,8 @@ fn sidecar_args() -> Vec<String> {
         "--background".to_string(),
         "--host".to_string(),
         HOST.to_string(),
+        "--port".to_string(),
+        "0".to_string(),
     ]
 }
 
@@ -406,7 +492,10 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
 }
 
 fn is_allowed_external_open_url(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https" | "mailto")
+    matches!(
+        url.scheme(),
+        "http" | "https" | "mailto" | "codex" | "claude"
+    )
 }
 
 // sidecar_env returns the environment passed to the backend
@@ -1874,11 +1963,11 @@ fn parse_writable_listening_port_from_status(buffer: &str) -> Option<u16> {
 }
 
 fn setup_menu(app: &mut App) -> Result<(), DynError> {
-    let about = MenuItemBuilder::with_id("about", "About AgentsView").build(app)?;
+    let about = MenuItemBuilder::with_id(ABOUT_MENU_ID, "About AgentsView").build(app)?;
     let open_logs_folder =
         MenuItemBuilder::with_id(OPEN_LOGS_FOLDER_MENU_ID, "Open Logs Folder").build(app)?;
     let check_updates =
-        MenuItemBuilder::with_id("check_updates", "Check for Updates...").build(app)?;
+        MenuItemBuilder::with_id(CHECK_UPDATES_MENU_ID, "Check for Updates...").build(app)?;
 
     let builder = SubmenuBuilder::new(app, "File")
         .item(&about)
@@ -1908,6 +1997,53 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
         .build()?;
     app.set_menu(menu)?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn setup_macos_status_item(app: &mut App) -> Result<(), DynError> {
+    let show = MenuItemBuilder::with_id(SHOW_MAIN_WINDOW_MENU_ID, "Show AgentsView").build(app)?;
+    let open_logs =
+        MenuItemBuilder::with_id(OPEN_LOGS_FOLDER_MENU_ID, "Open Logs Folder").build(app)?;
+    let check_updates =
+        MenuItemBuilder::with_id(CHECK_UPDATES_MENU_ID, "Check for Updates...").build(app)?;
+    let quit =
+        MenuItemBuilder::with_id(QUIT_FROM_STATUS_ITEM_MENU_ID, "Quit AgentsView").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .item(&show)
+        .separator()
+        .item(&open_logs)
+        .item(&check_updates)
+        .separator()
+        .item(&quit)
+        .build()?;
+
+    let icon = macos_status_item_icon()?;
+    TrayIconBuilder::with_id("agentsview")
+        .icon(icon)
+        .icon_as_template(true)
+        .tooltip("AgentsView")
+        .menu(&menu)
+        .build(app)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn setup_macos_window_lifecycle(app: &App) -> Result<(), DynError> {
+    let window = main_window(app)?;
+    let close_window = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            hide_main_window_on_close(&close_window, || api.prevent_close());
+        }
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_status_item_icon() -> Result<tauri::image::Image<'static>, DynError> {
+    Ok(tauri::image::Image::from_bytes(include_bytes!(
+        "../icons/trayTemplate.png"
+    ))?)
 }
 
 fn open_logs_folder(handle: &AppHandle) {
@@ -2912,6 +3048,8 @@ mod tests {
                 "--background".to_string(),
                 "--host".to_string(),
                 HOST.to_string(),
+                "--port".to_string(),
+                "0".to_string(),
             ]
         );
     }
@@ -3760,11 +3898,111 @@ agentsview running at http://127.0.0.1:18082
         let mailto = Url::parse("mailto:test@example.com").expect("valid mailto url");
         assert!(is_allowed_external_open_url(&mailto));
 
+        let codex = Url::parse("codex://threads/session-123").expect("valid codex url");
+        assert!(is_allowed_external_open_url(&codex));
+
+        let claude =
+            Url::parse("claude://code/new?folder=%2Ftmp%2Fproject").expect("valid Claude Code url");
+        assert!(is_allowed_external_open_url(&claude));
+
+        let obsolete_claude =
+            Url::parse("claude-cli://open?cwd=%2Ftmp%2Fproject").expect("valid obsolete URL");
+        assert!(!is_allowed_external_open_url(&obsolete_claude));
+
         let file = Url::parse("file:///tmp/foo").expect("valid file url");
         assert!(!is_allowed_external_open_url(&file));
 
         let custom = Url::parse("custom-scheme://foo").expect("valid custom url");
         assert!(!is_allowed_external_open_url(&custom));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_status_item_actions_share_desktop_menu_routing() {
+        assert_eq!(
+            desktop_menu_action(ABOUT_MENU_ID),
+            Some(DesktopMenuAction::About)
+        );
+        assert_eq!(
+            desktop_menu_action(SHOW_MAIN_WINDOW_MENU_ID),
+            Some(DesktopMenuAction::ShowMainWindow)
+        );
+        assert_eq!(
+            desktop_menu_action(OPEN_LOGS_FOLDER_MENU_ID),
+            Some(DesktopMenuAction::OpenLogsFolder)
+        );
+        assert_eq!(
+            desktop_menu_action(CHECK_UPDATES_MENU_ID),
+            Some(DesktopMenuAction::CheckUpdates)
+        );
+        assert_eq!(
+            desktop_menu_action(QUIT_FROM_STATUS_ITEM_MENU_ID),
+            Some(DesktopMenuAction::Quit)
+        );
+        assert_eq!(desktop_menu_action("unknown"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[derive(Clone, Default)]
+    struct FakeMainWindow {
+        calls: std::sync::Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl MainWindowVisibility for FakeMainWindow {
+        fn hide_main_window(&self) {
+            self.calls.lock().expect("lock calls").push("hide");
+        }
+
+        fn show_main_window(&self) {
+            self.calls.lock().expect("lock calls").push("show");
+        }
+
+        fn unminimize_main_window(&self) {
+            self.calls.lock().expect("lock calls").push("unminimize");
+        }
+
+        fn focus_main_window(&self) {
+            self.calls.lock().expect("lock calls").push("focus");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_close_hides_the_existing_window_and_show_restores_it() {
+        let window = FakeMainWindow::default();
+        let close_calls = window.calls.clone();
+
+        hide_main_window_on_close(&window, move || {
+            close_calls
+                .lock()
+                .expect("lock close calls")
+                .push("prevent_close");
+        });
+        restore_main_window(&window);
+
+        assert_eq!(
+            *window.calls.lock().expect("lock calls for assertion"),
+            vec!["prevent_close", "hide", "show", "unminimize", "focus"]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_status_item_icon_is_a_key_only_template() {
+        let icon = macos_status_item_icon().expect("load macOS status item icon");
+
+        assert_eq!((icon.width(), icon.height()), (32, 32));
+        assert_eq!(image_alpha_at(&icon, 3, 3), 0, "tile stays transparent");
+        assert!(image_alpha_at(&icon, 8, 8) > 200, "key head is opaque");
+        assert_eq!(image_alpha_at(&icon, 20, 9), 0, "keyhole is transparent");
+        assert!(image_alpha_at(&icon, 16, 24) > 200, "key stem is opaque");
+    }
+
+    #[cfg(target_os = "macos")]
+    fn image_alpha_at(icon: &tauri::image::Image<'_>, x: u32, y: u32) -> u8 {
+        let offset = ((y * icon.width() + x) * 4 + 3) as usize;
+        icon.rgba()[offset]
     }
 
     #[test]

@@ -358,10 +358,10 @@ thread JSON files.
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
 
 Grok sessions are read from `summary.json` (title, timestamps, project),
-optional `signals.json` (token counters), and `chat_history.jsonl` when
-present for the full transcript (user turns, assistant replies, thinking,
-and tool calls). If `chat_history.jsonl` is missing, AgentsView falls back
-to summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
+optional `signals.json` (token counters), and `chat_history.jsonl` when present
+for the full transcript (user turns, assistant replies, thinking, and tool
+calls). If `chat_history.jsonl` is missing, AgentsView falls back to
+summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
 
 Each directory can be overridden with an environment variable. See the
