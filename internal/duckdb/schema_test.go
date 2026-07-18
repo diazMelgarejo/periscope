@@ -378,6 +378,112 @@ func TestCheckSchemaCompatPassesAfterEnsureSchema(t *testing.T) {
 	require.NoError(t, CheckSchemaCompat(ctx, db), "CheckSchemaCompat")
 }
 
+func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	_, err := db.ExecContext(ctx,
+		`CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			machine TEXT NOT NULL,
+			project TEXT NOT NULL,
+			agent TEXT NOT NULL
+		)`,
+	)
+	require.NoError(t, err, "simulate older server schema")
+
+	err = CheckSchemaCompatViaQuack(ctx, db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sessions.entrypoint")
+	assert.Contains(t, err.Error(), "older AgentsView build",
+		"remote incompat must point at the server build")
+	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
+		"remote incompat must tell the operator the fix")
+	assert.NotContains(t, err.Error(),
+		"run agentsview duckdb push to migrate",
+		"push cannot migrate a remote server schema")
+}
+
+func TestCheckSchemaCompatKeepsLocalMigrationHintOnMissingColumns(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	_, err := db.ExecContext(ctx,
+		`CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			machine TEXT NOT NULL,
+			project TEXT NOT NULL,
+			agent TEXT NOT NULL
+		)`,
+	)
+	require.NoError(t, err, "simulate stale local mirror")
+
+	err = CheckSchemaCompat(ctx, db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sessions.entrypoint")
+	assert.Contains(t, err.Error(), "run agentsview duckdb push to migrate",
+		"local mirrors migrate through push")
+	assert.NotContains(t, err.Error(), "older AgentsView build")
+}
+
+func TestCheckSchemaCompatViaQuackReportsServerBehindOnOldVersion(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+	_, err := db.ExecContext(ctx,
+		`UPDATE sync_metadata SET value = '1' WHERE key = ?`,
+		schemaVersionMetadataKey,
+	)
+	require.NoError(t, err, "simulate older server schema version")
+
+	err = CheckSchemaCompatViaQuack(ctx, db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "older than required")
+	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
+		"remote version skew must tell the operator the fix")
+}
+
+func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingVersionRow(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+	_, err := db.ExecContext(ctx,
+		`DELETE FROM sync_metadata WHERE key = ?`,
+		schemaVersionMetadataKey,
+	)
+	require.NoError(t, err, "simulate server without a schema version row")
+
+	err = CheckSchemaCompatViaQuack(ctx, db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), schemaVersionMetadataKey)
+	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
+		"remote missing version row must tell the operator the fix")
+}
+
+func TestSchemaRepairErrorPointsRemoteRepairsAtServer(t *testing.T) {
+	require.NoError(t, schemaRepairError(nil, remoteSchema))
+
+	err := schemaRepairError([]string{"messages.id primary key"}, remoteSchema)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messages.id primary key")
+	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
+		"remote pending repairs must tell the operator the fix")
+	assert.NotContains(t, err.Error(),
+		"run full DuckDB schema migration on the base database")
+
+	err = schemaRepairError([]string{"messages.id primary key"}, localSchema)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"run full DuckDB schema migration on the base database",
+		"local pending repairs keep the base-database hint")
+}
+
 // TestEnsureSchemaCreatesToolCallsFilePathIndex verifies the DuckDB mirror
 // builds idx_tool_calls_file_path, the parity counterpart to SQLite's
 // Recent Edits index. DuckDB has no partial indexes, so it omits the
