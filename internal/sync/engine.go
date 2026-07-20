@@ -99,8 +99,12 @@ type EngineConfig struct {
 
 // Engine orchestrates session file discovery and sync.
 type Engine struct {
-	db                      *db.DB
-	openCodeArchiveStore    db.Store
+	db *db.DB
+	// archiveStore is the database holding previously archived
+	// sessions for the preserve guards in prepareSessionWrite.
+	// During a resync/rebuild it points at the original DB while
+	// e.db points at the fresh one; nil means e.db is the archive.
+	archiveStore            db.Store
 	agentDirs               map[parser.AgentType][]string
 	machine                 string
 	blockedResultCategories map[string]bool
@@ -1494,7 +1498,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	// its first syncing event, and on a large archive that walk takes
 	// minutes. Without this marker the progress printer credits that
 	// silent time to the preceding (instant) "Disabling ..." phase.
-	e.openCodeArchiveStore = origDB
+	e.archiveStore = origDB
 	e.db = newDB
 	reportResyncPhase(
 		PhaseDiscovering,
@@ -1505,7 +1509,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true, false,
 	)
 	e.db = origDB // restore immediately
-	e.openCodeArchiveStore = nil
+	e.archiveStore = nil
 	e.phaseStats.Log("resync")
 	if opts.includePhaseDiagnostics {
 		stats.RebuildPhases = append(stats.RebuildPhases,
@@ -1532,7 +1536,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 
 	for contributorIndex, contributor := range opts.Contributors {
 		contributorEngine := NewEngine(newDB, contributor.Config)
-		contributorEngine.openCodeArchiveStore = origDB
+		contributorEngine.archiveStore = origDB
 		contributorProgress := func(p Progress) {
 			if contributor.Progress != nil {
 				p = contributor.Progress(p)
@@ -3238,6 +3242,22 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// The threaded object metadata (or a HEAD stat) gives the timestamp directly.
 	if isS3SourcePath(file.Path) {
 		return discoveredFileMtime(file)
+	}
+	// RooCode is excluded from the provider-Fingerprint path for cost, not
+	// correctness: its Fingerprint content-hashes history_item.json plus
+	// ui_messages.json, so consulting it here would read every task's full
+	// transcript on each incremental sync, scaling cutoff filtering with
+	// the archive instead of the changed batch. The stat-only composite
+	// carries the same cutoff signal — the max mtime of both files — so a
+	// sibling-only transcript append still looks fresh. Sources that pass
+	// the cutoff go on to the full fingerprint as usual.
+	if file.Agent == parser.AgentRooCode {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		_, mtime := roocodeEffectiveStat(file.Path, info)
+		return mtime, nil
 	}
 	// Provider-authoritative sources resolve freshness through the provider
 	// Fingerprint so composite provider-owned source state participates in
@@ -5723,6 +5743,22 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		if e.shouldSkipByPath(path, effectiveInfo) {
 			return mtime, true
 		}
+	case parser.AgentRooCode:
+		// RooCode's fingerprint is composite (history_item.json plus
+		// ui_messages.json) and content-hashes both files. The
+		// stat-only composite below matches the stored Size/Mtime the
+		// fingerprint stamps, so unchanged tasks skip without reading
+		// transcript bytes, and a sibling-only transcript append
+		// still changes the composite and falls through to the full
+		// fingerprint.
+		size, mtime := roocodeEffectiveStat(path, info)
+		effectiveInfo := fakeSnapshotInfo{
+			fSize:  size,
+			fMtime: mtime,
+		}
+		if e.shouldSkipByPath(path, effectiveInfo) {
+			return mtime, true
+		}
 	}
 	return 0, false
 }
@@ -6445,6 +6481,25 @@ func pickPreferredCodexDiscoveredFile(
 // copilotEffectiveMtime returns max(events.jsonl mtime,
 // workspace.yaml mtime). For flat .jsonl sessions (no
 // workspace.yaml sibling) it returns the events.jsonl mtime.
+// roocodeEffectiveStat returns the composite size and latest mtime of
+// a RooCode task's history_item.json and its ui_messages.json sibling
+// using stat calls only. The values mirror what
+// rooCodeFingerprintSource stamps on stored sessions (summed size,
+// max mtime), so a stat-only comparison against the stored row is
+// sufficient to detect any change to either file.
+func roocodeEffectiveStat(historyPath string, info os.FileInfo) (int64, int64) {
+	size := info.Size()
+	mtime := info.ModTime().UnixNano()
+	msgPath := filepath.Join(filepath.Dir(historyPath), "ui_messages.json")
+	if msgInfo, err := os.Stat(msgPath); err == nil && !msgInfo.IsDir() {
+		size += msgInfo.Size()
+		if ts := msgInfo.ModTime().UnixNano(); ts > mtime {
+			mtime = ts
+		}
+	}
+	return size, mtime
+}
+
 func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
 	m := info.ModTime().UnixNano()
 	if filepath.Base(eventsPath) != "events.jsonl" {
@@ -7012,6 +7067,9 @@ func (e *Engine) prepareSessionWrite(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
 		pw.sess.File.Mtime, derefString(s.FileHash), msgs,
 	) {
+		return db.Session{}, nil, sessionWritePreserved
+	}
+	if e.shouldPreserveRooCodeArchive(pw.sess.Agent, s.ID, msgs) {
 		return db.Session{}, nil, sessionWritePreserved
 	}
 	if mergedMsgs, preserve, archived := e.reconcileVisualStudioCopilotArchive(
@@ -8224,6 +8282,11 @@ func shouldReplaceFullParseMessages(
 		// only add the new ordinals and leave the existing tool call's
 		// result_content empty, so force a full replace.
 		pw.sess.Agent == parser.AgentVibe ||
+		// RooCode pairs later command_output, MCP response, subtask
+		// result, and error records back to earlier tool-call
+		// messages, and strips embedded read results into them. An
+		// append would leave the existing rows' result events stale.
+		pw.sess.Agent == parser.AgentRooCode ||
 		pw.sess.Agent == parser.AgentReasonix
 }
 
@@ -8496,6 +8559,37 @@ func (e *Engine) writeSessionFullWithResolver(
 	return nil
 }
 
+// shouldPreserveRooCodeArchive reports whether a zero-message RooCode
+// parse must not overwrite an archived transcript. A vanished (or
+// torn) ui_messages.json parses as a zero-message session while
+// history_item.json keeps the task discoverable, so writing that
+// parse would corrupt the session's counts on normal sync and — with
+// RooCode on the full-replace path — delete the archived messages
+// outright; on a rebuild it would recreate the session empty in the
+// fresh DB, which also blocks the orphan-copy pass from restoring it.
+// Newly created metadata-only tasks have no archived messages and
+// still write normally.
+func (e *Engine) shouldPreserveRooCodeArchive(
+	agent parser.AgentType, sessionID string, msgs []db.Message,
+) bool {
+	if agent != parser.AgentRooCode || len(msgs) > 0 {
+		return false
+	}
+	store := e.archiveStore
+	if store == nil {
+		store = e.db
+	}
+	stored, err := store.GetAllMessages(context.Background(), sessionID)
+	if err != nil || len(stored) == 0 {
+		return false
+	}
+	log.Printf(
+		"skip roocode session %s: transcript parsed empty but archive has %d messages",
+		sessionID, len(stored),
+	)
+	return true
+}
+
 func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	agent parser.AgentType, path, sessionID string,
 	currentMtime int64,
@@ -8505,7 +8599,7 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	if !isOpenCodeFormatStorageAgent(agent) {
 		return false
 	}
-	store := e.openCodeArchiveStore
+	store := e.archiveStore
 	if store == nil {
 		store = e.db
 	}
@@ -9195,7 +9289,16 @@ func providerSourcePathNeedsFingerprint(path string) bool {
 }
 
 func providerSourceMtimeNeedsFingerprint(agent parser.AgentType) bool {
-	return agent == parser.AgentQoder
+	switch agent {
+	case parser.AgentQoder:
+		// Qoder stores a sidecar whose mtime the plain path stat misses.
+		return true
+	default:
+		// RooCode is deliberately absent: its fingerprint content-hashes
+		// both session files, and SourceMtime is polled by the session
+		// watcher, so it uses the stat-only composite branch instead.
+		return false
+	}
 }
 
 // providerSessionIsFork reports whether the session ID addresses a fork child
@@ -9312,6 +9415,18 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		if err != nil {
 			return 0
 		}
+		return mtime
+	}
+	if def.Type == parser.AgentRooCode {
+		// Freshness spans history_item.json (the stored path) plus its
+		// sibling ui_messages.json. The session watcher polls
+		// SourceMtime, so this must stay stat-only — content hashing
+		// is reserved for the sync fingerprint.
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		_, mtime := roocodeEffectiveStat(path, info)
 		return mtime
 	}
 	if def.Type == parser.AgentKiro {

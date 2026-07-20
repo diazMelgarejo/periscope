@@ -1,6 +1,9 @@
 package remotesync_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -397,4 +400,241 @@ func TestSelectAllowedFilesRejectsFileScopedAgentDirs(t *testing.T) {
 	})
 	require.True(t, ok)
 	assert.Equal(t, []string{"/home/u/.claude/projects/p/s.jsonl"}, selected)
+}
+
+func TestRooCodeRemoteSyncExportsOnlySessionFiles(t *testing.T) {
+	root := t.TempDir()
+	rooRoot := filepath.Join(root, "globalStorage", "rooveterinaryinc.roo-cline")
+	task1 := filepath.Join(rooRoot, "tasks", "task-1")
+	task2 := filepath.Join(rooRoot, "tasks", "task-2")
+	settingsDir := filepath.Join(rooRoot, "settings")
+	checkpoints := filepath.Join(task1, "checkpoints")
+	cacheDir := filepath.Join(rooRoot, "cache")
+	require.NoError(t, os.MkdirAll(task1, 0o755))
+	require.NoError(t, os.MkdirAll(task2, 0o755))
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.MkdirAll(checkpoints, 0o755))
+	require.NoError(t, os.MkdirAll(cacheDir, 0o755))
+
+	task1History := filepath.Join(task1, "history_item.json")
+	task1Messages := filepath.Join(task1, "ui_messages.json")
+	task2History := filepath.Join(task2, "history_item.json")
+	mcpSettings := filepath.Join(settingsDir, "mcp_settings.json")
+	checkpointBlob := filepath.Join(checkpoints, "checkpoint.bin")
+	cacheBlob := filepath.Join(cacheDir, "models.json")
+	require.NoError(t, os.WriteFile(task1History,
+		[]byte(`{"id":"task-1","ts":1,"task":"t"}`), 0o644))
+	require.NoError(t, os.WriteFile(task1Messages, []byte(`[]`), 0o644))
+	require.NoError(t, os.WriteFile(task2History,
+		[]byte(`{"id":"task-2","ts":2,"task":"t"}`), 0o644))
+	require.NoError(t, os.WriteFile(mcpSettings,
+		[]byte(`{"mcpServers":{"s":{"env":{"API_KEY":"sk-secret"}}}}`), 0o644))
+	require.NoError(t, os.WriteFile(checkpointBlob, []byte("checkpoint"), 0o644))
+	require.NoError(t, os.WriteFile(cacheBlob, []byte("cache"), 0o644))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentRooCode: {rooRoot},
+		},
+	})
+
+	// The root stays in Dirs for target bookkeeping, but the export
+	// is file-scoped to the discovered session files only.
+	assert.Equal(t, []string{rooRoot}, targets.Dirs[parser.AgentRooCode])
+	assert.ElementsMatch(t, []string{
+		task1History,
+		task1Messages,
+		task2History,
+	}, targets.Files[parser.AgentRooCode])
+
+	// Full transfer: the archive must contain the session files and
+	// nothing else from the RooCode tree.
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "task-1/history_item.json")
+	assert.Contains(t, joined, "task-1/ui_messages.json")
+	assert.Contains(t, joined, "task-2/history_item.json")
+	assert.NotContains(t, joined, "mcp_settings.json")
+	assert.NotContains(t, joined, "checkpoint")
+	assert.NotContains(t, joined, "cache")
+
+	// Delta transfer: raw files under the RooCode root must not
+	// validate as delta requests, and the root is not a delta root.
+	_, ok := remotesync.SelectAllowedFiles(targets, []string{mcpSettings})
+	assert.False(t, ok, "settings under the RooCode root must be rejected")
+	_, ok = remotesync.SelectAllowedFiles(targets, []string{checkpointBlob})
+	assert.False(t, ok, "checkpoint data under the RooCode root must be rejected")
+	assert.NotContains(t, targets.DeltaAllowedRoots(), rooRoot)
+
+	// The export is verbatim, so the curated files ride the
+	// manifest/delta path: the manifest lists exactly them, they are
+	// valid delta requests and delta roots, and no separate per-sync
+	// full archive remains (the file-scoped split is empty).
+	manifest, err := remotesync.BuildManifest(targets)
+	require.NoError(t, err)
+	manifestPaths := make([]string, 0, len(manifest.Files))
+	for _, entry := range manifest.Files {
+		manifestPaths = append(manifestPaths, entry.Path)
+	}
+	assert.ElementsMatch(t, []string{
+		task1History,
+		task1Messages,
+		task2History,
+	}, manifestPaths)
+
+	dirScoped, fileScoped := targets.SplitFileScoped()
+	assert.True(t, fileScoped.IsEmpty(),
+		"a verbatim agent must not fall back to per-sync full archives")
+	assert.Equal(t, targets.Files, dirScoped.Files)
+
+	files, ok := remotesync.SelectAllowedFiles(targets, []string{task1Messages})
+	require.True(t, ok, "a curated transcript must validate as a delta request")
+	var delta bytes.Buffer
+	require.NoError(t, remotesync.WriteArchiveFiles(
+		&delta, targets.DeltaAllowedRoots(), files))
+	deltaNames := []string{}
+	dr := tar.NewReader(&delta)
+	for {
+		hdr, err := dr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		deltaNames = append(deltaNames, hdr.Name)
+	}
+	require.Len(t, deltaNames, 1,
+		"one changed transcript must transfer alone")
+	assert.Contains(t, deltaNames[0], "task-1/ui_messages.json")
+}
+
+// A transcript deleted between the client's target fetch and its next
+// request must not fail validation: targets are re-resolved per
+// request, so the stale client set names a file the fresh resolution
+// no longer contains. Session-shaped paths under a still-allowed root
+// are authorized (the writers tolerate the missing file); everything
+// else under the root stays rejected.
+func TestRooCodeRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
+	root := t.TempDir()
+	rooRoot := filepath.Join(root, "globalStorage", "rooveterinaryinc.roo-cline")
+	task1 := filepath.Join(rooRoot, "tasks", "task-1")
+	task2 := filepath.Join(rooRoot, "tasks", "task-2")
+	require.NoError(t, os.MkdirAll(task1, 0o755))
+	require.NoError(t, os.MkdirAll(task2, 0o755))
+	task1History := filepath.Join(task1, "history_item.json")
+	task1Messages := filepath.Join(task1, "ui_messages.json")
+	task2History := filepath.Join(task2, "history_item.json")
+	require.NoError(t, os.WriteFile(task1History,
+		[]byte(`{"id":"task-1","ts":1,"task":"t"}`), 0o644))
+	require.NoError(t, os.WriteFile(task1Messages, []byte(`[]`), 0o644))
+	require.NoError(t, os.WriteFile(task2History,
+		[]byte(`{"id":"task-2","ts":2,"task":"t"}`), 0o644))
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentRooCode: {rooRoot},
+		},
+	}
+	staleClientTargets := remotesync.ResolveTargets(cfg)
+	require.Contains(t, staleClientTargets.Files[parser.AgentRooCode],
+		task1Messages)
+
+	// The whole task vanishes on the remote before the next request.
+	require.NoError(t, os.RemoveAll(task1))
+	freshServerTargets := remotesync.ResolveTargets(cfg)
+	assert.NotContains(t, freshServerTargets.Files[parser.AgentRooCode],
+		task1Messages)
+
+	// Target validation must still accept the stale set, and the full
+	// archive must stream the surviving files while skipping the
+	// vanished ones.
+	selected, ok := remotesync.SelectAllowedTargets(
+		freshServerTargets, staleClientTargets,
+	)
+	require.True(t, ok,
+		"a vanished session file must not fail the whole request")
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, selected))
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "task-2/history_item.json")
+	assert.NotContains(t, joined, "task-1")
+
+	// The manifest tolerates the vanished entries the same way.
+	manifest, err := remotesync.BuildManifest(selected)
+	require.NoError(t, err)
+	require.Len(t, manifest.Files, 1)
+	assert.Equal(t, task2History, manifest.Files[0].Path)
+
+	// Delta requests for the vanished file validate and stream nothing.
+	files, ok := remotesync.SelectAllowedFiles(
+		freshServerTargets, []string{task1Messages},
+	)
+	require.True(t, ok,
+		"a vanished session file must validate as a delta request")
+	var delta bytes.Buffer
+	require.NoError(t, remotesync.WriteArchiveFiles(
+		&delta, freshServerTargets.DeltaAllowedRoots(), files))
+	dr := tar.NewReader(&delta)
+	_, err = dr.Next()
+	assert.Equal(t, io.EOF, err, "the vanished file streams nothing")
+
+	// The shape authorization stays strict: nothing else under the
+	// root validates, present or not.
+	for _, path := range []string{
+		filepath.Join(rooRoot, "settings", "mcp_settings.json"),
+		filepath.Join(rooRoot, "tasks", "task-1", "checkpoint.bin"),
+		filepath.Join(rooRoot, "tasks", "_marker", "history_item.json"),
+		filepath.Join(rooRoot, "history_item.json"),
+	} {
+		_, ok := remotesync.SelectAllowedFiles(freshServerTargets, []string{path})
+		assert.False(t, ok, "non-session path must stay rejected: %s", path)
+		stale := staleClientTargets
+		stale.Files = map[parser.AgentType][]string{
+			parser.AgentRooCode: {path},
+		}
+		_, ok = remotesync.SelectAllowedTargets(freshServerTargets, stale)
+		assert.False(t, ok,
+			"non-session target must stay rejected: %s", path)
+	}
+}
+
+func TestRooCodeRemoteSyncSkipsRootWithoutSessions(t *testing.T) {
+	root := t.TempDir()
+	rooRoot := filepath.Join(root, "globalStorage", "rooveterinaryinc.roo-cline")
+	settingsDir := filepath.Join(rooRoot, "settings")
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(settingsDir, "mcp_settings.json"),
+		[]byte(`{"mcpServers":{}}`), 0o644))
+
+	targets := remotesync.ResolveTargets(config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentRooCode: {rooRoot},
+		},
+	})
+
+	// With no discovered sessions there is nothing to export — the
+	// root must not fall back to a recursive directory target.
+	assert.NotContains(t, targets.Dirs, parser.AgentRooCode)
+	assert.NotContains(t, targets.Files, parser.AgentRooCode)
 }

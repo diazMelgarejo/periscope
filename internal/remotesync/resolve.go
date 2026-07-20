@@ -36,6 +36,14 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				}
 				continue
 			}
+			if def.Type == parser.AgentRooCode {
+				root, targetFiles := resolveRooCodeTarget(dir)
+				if root != "" && len(targetFiles) > 0 {
+					dirs[def.Type] = append(dirs[def.Type], root)
+					files[def.Type] = append(files[def.Type], targetFiles...)
+				}
+				continue
+			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				continue
 			}
@@ -100,6 +108,46 @@ func resolveWindsurfTarget(root string) (string, []string) {
 		return "", nil
 	}
 	files := resolveWindsurfFiles(workspaceRoot)
+	if len(files) == 0 {
+		return "", nil
+	}
+	return targetRoot, files
+}
+
+// resolveRooCodeTarget curates a file-scoped target for a RooCode
+// root. The configured directory is VSCode's whole
+// globalStorage/rooveterinaryinc.roo-cline tree, which also holds
+// settings/mcp_settings.json (MCP env vars, API keys, auth headers),
+// caches, and checkpoints — none of which may be archived. Only the
+// discovered tasks/<id>/history_item.json files and their
+// ui_messages.json siblings are exported.
+func resolveRooCodeTarget(root string) (string, []string) {
+	targetRoot := filepath.Clean(root)
+	if info, err := os.Stat(targetRoot); err != nil || !info.IsDir() {
+		return "", nil
+	}
+	provider, ok := parser.NewProvider(parser.AgentRooCode, parser.ProviderConfig{
+		Roots: []string{targetRoot},
+	})
+	if !ok {
+		return "", nil
+	}
+	sources, err := provider.Discover(context.Background())
+	if err != nil {
+		return "", nil
+	}
+	var files []string
+	for _, source := range sources {
+		historyPath := providerDiscoveredPath(source)
+		if historyPath == "" || !regularRemoteSyncFile(historyPath) {
+			continue
+		}
+		files = append(files, historyPath)
+		msgPath := filepath.Join(filepath.Dir(historyPath), "ui_messages.json")
+		if regularRemoteSyncFile(msgPath) {
+			files = append(files, msgPath)
+		}
+	}
 	if len(files) == 0 {
 		return "", nil
 	}
@@ -197,7 +245,17 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 		for _, file := range files {
 			selectedFile, ok := selectAllowedString(allowedFiles, file)
 			if !ok {
-				return TargetSet{}, false
+				// Targets are re-resolved for every request, so a
+				// session file deleted between the client's target
+				// fetch and this request is no longer in the fresh
+				// resolution. Failing the whole request would abort
+				// the sync over a routine deletion race; the archive
+				// writers tolerate missing files, so authorize
+				// session-shaped paths under a still-allowed root.
+				if !verbatimSessionFileUnderAllowedRoot(allowed, agent, file) {
+					return TargetSet{}, false
+				}
+				selectedFile = file
 			}
 			if selected.Files == nil {
 				selected.Files = make(map[parser.AgentType][]string)
@@ -222,6 +280,62 @@ func selectAllowedString(allowed []string, requested string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// rooCodeSessionFileShape reports whether rel — a slash-separated path
+// relative to a RooCode root — names exactly a session file the
+// provider would discover: tasks/<taskID>/history_item.json or
+// tasks/<taskID>/ui_messages.json. Task IDs starting with "_" or "."
+// are rejected, matching discovery's marker-directory skip.
+func rooCodeSessionFileShape(rel string) bool {
+	parts := strings.Split(rel, "/")
+	if len(parts) != 3 || parts[0] != "tasks" {
+		return false
+	}
+	taskID := parts[1]
+	if taskID == "" || strings.HasPrefix(taskID, "_") ||
+		strings.HasPrefix(taskID, ".") {
+		return false
+	}
+	return parts[2] == "history_item.json" || parts[2] == "ui_messages.json"
+}
+
+// verbatimSessionFileUnderAllowedRoot authorizes a session-shaped file
+// under a verbatim file-scoped agent's still-allowed root when the
+// file itself is absent from the fresh per-request resolution — the
+// deletion race between a client's target fetch and its next request.
+// The strict shape keeps everything else under the root
+// (settings/mcp_settings.json, checkpoints, caches) unreachable, and
+// the symlink walk rejects components that would escape the root.
+func verbatimSessionFileUnderAllowedRoot(
+	allowed TargetSet, agent parser.AgentType, file string,
+) bool {
+	if !verbatimFileScopedAgent(agent) {
+		return false
+	}
+	if !isAbsRemotePath(file) {
+		return false
+	}
+	if _, err := safeRemotePathArchiveName(file); err != nil {
+		return false
+	}
+	for _, dir := range allowed.Dirs[agent] {
+		if remotePathDialect(file) != remotePathDialect(dir) {
+			continue
+		}
+		rel, ok := remoteArchiveRel(dir, file)
+		if !ok || rel == "" {
+			continue
+		}
+		if !rooCodeSessionFileShape(rel) {
+			continue
+		}
+		if symlinkEscapesRoot(dir, file) {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 func isAiderUnsafeRoot(dir string) bool {
@@ -262,6 +376,24 @@ func selectAllowedFile(allowed TargetSet, file string) (string, bool) {
 	if canonical, ok := selectAllowedString(allowed.ExtraFiles, file); ok {
 		return canonical, true
 	}
+	for agent, files := range allowed.Files {
+		if !verbatimFileScopedAgent(agent) {
+			continue
+		}
+		// Verbatim file-scoped agents (RooCode) delta-stream exactly
+		// their curated files; the exact-match requirement keeps
+		// settings and caches under their directory unreachable. A
+		// session-shaped file missing from the fresh resolution is
+		// still authorized (deletion race); WriteArchiveFiles then
+		// skips it because its delta roots come from the same fresh
+		// resolution.
+		if canonical, ok := selectAllowedString(files, file); ok {
+			return canonical, true
+		}
+		if verbatimSessionFileUnderAllowedRoot(allowed, agent, file) {
+			return file, true
+		}
+	}
 	if !isAbsRemotePath(file) {
 		return "", false
 	}
@@ -270,13 +402,14 @@ func selectAllowedFile(allowed TargetSet, file string) (string, bool) {
 	}
 	for agent, dirs := range allowed.Dirs {
 		if _, fileScoped := allowed.Files[agent]; fileScoped {
-			// File-scoped agents (Windsurf) export a curated, sanitized
-			// file list, not a raw directory walk. Accepting a delta
-			// request by directory prefix would stream the raw file
-			// (e.g. an unsanitized state.vscdb or a secret) that the
-			// full-archive writer never exposes. Such agents fall back
-			// to the full-archive flow, so a legitimate client never
-			// requests these as deltas.
+			// File-scoped agents export a curated file list, not a raw
+			// directory walk. Accepting a delta request by directory
+			// prefix would stream a raw file (an unsanitized
+			// state.vscdb, an mcp_settings.json secret) that the
+			// archive writer never exposes. Verbatim agents already
+			// matched by exact file above; sanitized agents (Windsurf)
+			// fall back to the full-archive flow, so a legitimate
+			// client never requests these as deltas.
 			continue
 		}
 		for _, dir := range dirs {
