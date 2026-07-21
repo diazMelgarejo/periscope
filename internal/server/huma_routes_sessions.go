@@ -730,12 +730,21 @@ func (s *Server) humaDeleteSession(
 		}
 		return nil, internalError("soft delete session", err)
 	}
+	s.notifySessionMutation()
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
 type batchDeleteInput struct {
 	Body struct {
 		SessionIDs []string `json:"session_ids" required:"true" nullable:"false" doc:"Session IDs to soft-delete"`
+	}
+}
+
+// notifySessionMutation reports a completed session-lifecycle change to the
+// registered notifier, if any.
+func (s *Server) notifySessionMutation() {
+	if s.sessionMutationNotify != nil {
+		s.sessionMutationNotify()
 	}
 }
 
@@ -752,6 +761,7 @@ func (s *Server) humaBatchDeleteSessions(
 		}
 		return nil, internalError("batch delete sessions", err)
 	}
+	s.notifySessionMutation()
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
@@ -769,6 +779,7 @@ func (s *Server) humaRestoreSession(
 	if n == 0 {
 		return nil, apiError(http.StatusNotFound, "session not found or not in trash")
 	}
+	s.notifySessionMutation()
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
@@ -786,6 +797,7 @@ func (s *Server) humaPermanentDeleteSession(
 	if n == 0 {
 		return nil, apiError(http.StatusConflict, "session not found or not in trash")
 	}
+	s.notifySessionMutation()
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
@@ -811,6 +823,7 @@ func (s *Server) humaEmptyTrash(
 		}
 		return nil, internalError("empty trash", err)
 	}
+	s.notifySessionMutation()
 	return &jsonOutput[emptyTrashResponse]{Body: emptyTrashResponse{Deleted: count}}, nil
 }
 
