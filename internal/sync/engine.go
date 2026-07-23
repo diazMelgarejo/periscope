@@ -7080,6 +7080,9 @@ func (e *Engine) processProviderFile(
 		providerFailureCount++
 	}
 	if outcome.SkipReason != parser.SkipNone {
+		if outcome.SkipReason == parser.SkipUnsupportedSource {
+			e.anomalies.recordUnsupportedSourceLayout(string(file.Agent), file.Path)
+		}
 		excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
 		var missingMembers []sourceMissingMember
 		if outcome.ForceReplace && outcome.ResultSetComplete {
