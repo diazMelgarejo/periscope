@@ -52,6 +52,7 @@ CREATE TABLE session (
 	project_id TEXT NOT NULL,
 	parent_id TEXT,
 	title TEXT,
+	directory TEXT NOT NULL DEFAULT '',
 	time_created INTEGER NOT NULL,
 	time_updated INTEGER NOT NULL,
 	FOREIGN KEY (project_id) REFERENCES project(id)
@@ -104,9 +105,39 @@ func (s *OpenCodeSeeder) AddSession(id, projectID, parentID, title string, timeC
 		tStr = title
 	}
 
-	_, err := s.db.Exec(`INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, projectID, pID, tStr, timeCreated, timeUpdated)
+	// Omit directory so the same helper works on legacy schemas that
+	// lack the column; modern fixtures default directory to ''.
+	_, err := s.db.Exec(
+		`INSERT INTO session
+			(id, project_id, parent_id, title, time_created, time_updated)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, projectID, pID, tStr, timeCreated, timeUpdated,
+	)
 	require.NoError(s.t, err, "add session")
+}
+
+func (s *OpenCodeSeeder) AddSessionDirectory(
+	id, projectID, parentID, title, directory string,
+	timeCreated, timeUpdated int64,
+) {
+	s.t.Helper()
+
+	var pID, tStr any
+	if parentID != "" {
+		pID = parentID
+	}
+	if title != "" {
+		tStr = title
+	}
+
+	_, err := s.db.Exec(
+		`INSERT INTO session
+			(id, project_id, parent_id, title, directory,
+			 time_created, time_updated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, projectID, pID, tStr, directory, timeCreated, timeUpdated,
+	)
+	require.NoError(s.t, err, "add session with directory")
 }
 
 func (s *OpenCodeSeeder) AddMessage(id, sessionID string, timeCreated, timeUpdated int64, data string) {
@@ -909,13 +940,16 @@ func TestParseOpenCodeDB_SkillNameFromReadToolRelativePath(t *testing.T) {
 	// Frontmatter name intentionally differs from the folder name
 	// ("renamed") to prove we read frontmatter, not the directory.
 	path := writeTestSkill(t, "renamed", "actual-skill")
-	worktree := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+	directory := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
-	seeder.AddProject("prj_1", worktree)
-	seeder.AddSession("ses_rel", "prj_1", "", "", 1700000000000, 1700000030000)
+	seeder.AddProject("prj_1", filepath.Join(t.TempDir(), "project-root"))
+	seeder.AddSessionDirectory(
+		"ses_rel", "prj_1", "", "", directory,
+		1700000000000, 1700000030000,
+	)
 
 	seeder.AddMessage("msg_u", "ses_rel", 1700000000000, 1700000000000, `{"role":"user"}`)
 	seeder.AddPart("prt_u", "msg_u", "ses_rel", 1700000000000, 1700000000000, `{"type":"text","text":"read the skill"}`)
@@ -1010,6 +1044,238 @@ func TestParseOpenCodeDB_ProjectFromWorktree(t *testing.T) {
 	assertEq(t, "sessions len", len(sessions), 1)
 
 	assertEq(t, "Project", sessions[0].Session.Project, "my_project")
+}
+
+func TestResolveOpenCodeWorktree(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		session string
+		project string
+		want    string
+	}{
+		{
+			name:    "prefers concrete session directory over global project",
+			session: "/home/user/code/myapp",
+			project: "/",
+			want:    "/home/user/code/myapp",
+		},
+		{
+			name:    "falls back when session directory empty",
+			session: "",
+			project: "/home/user/code/myapp",
+			want:    "/home/user/code/myapp",
+		},
+		{
+			name:    "falls back when session directory is root",
+			session: "/",
+			project: "/home/user/code/myapp",
+			want:    "/home/user/code/myapp",
+		},
+		{
+			name:    "trims session directory whitespace",
+			session: "  /home/user/code/myapp  ",
+			project: "/",
+			want:    "/home/user/code/myapp",
+		},
+		{
+			name:    "keeps project root when session unusable",
+			session: "/",
+			project: "/",
+			want:    "/",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveOpenCodeWorktree(tt.session, tt.project)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseOpenCodeDB_PrefersSessionDirectoryOverGlobalProject(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	// OpenCode's synthetic global project uses worktree="/".
+	seeder.AddProject("global", "/")
+	seeder.AddSessionDirectory(
+		"ses_global", "global", "", "Global Session",
+		"/home/user/code/lonely-app",
+		1700000000000, 1700000010000,
+	)
+	seeder.AddMessage("msg_1", "ses_global", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart(
+		"prt_1", "msg_1", "ses_global",
+		1700000000000, 1700000000000,
+		`{"type":"text","text":"hello from global project"}`,
+	)
+
+	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1)
+
+	s := sessions[0].Session
+	assert.Equal(t, "/home/user/code/lonely-app", s.Cwd)
+	assert.Equal(t, "lonely_app", s.Project)
+	assert.NotEqual(t, "unknown", s.Project)
+}
+
+func TestParseOpenCodeDB_ProjectFromUnavailableProjectWorktree(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	worktree := filepath.Join(t.TempDir(), "unavailable-repo")
+	directory := filepath.Join(worktree, "subdir")
+	_, err := os.Stat(worktree)
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err), "project checkout must be unavailable")
+
+	seeder.AddProject("prj_unavailable", worktree)
+	seeder.AddSessionDirectory(
+		"ses_subdir", "prj_unavailable", "", "Unavailable Checkout",
+		directory, 1700000000000, 1700000010000,
+	)
+	seeder.AddMessage(
+		"msg_1", "ses_subdir", 1700000000000, 1700000000000,
+		`{"role":"user"}`,
+	)
+	seeder.AddPart(
+		"prt_1", "msg_1", "ses_subdir",
+		1700000000000, 1700000000000,
+		`{"type":"text","text":"hello"}`,
+	)
+
+	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+
+	assert.Equal(t, directory, sessions[0].Session.Cwd)
+	assert.Equal(t, "unavailable_repo", sessions[0].Session.Project)
+}
+
+func TestParseOpenCodeDB_EmptySessionDirectoryUsesProjectWorktree(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/home/user/code/myapp")
+	seeder.AddSessionDirectory(
+		"ses_empty_dir", "prj_1", "", "No Directory",
+		"",
+		1700000000000, 1700000010000,
+	)
+	seeder.AddMessage("msg_1", "ses_empty_dir", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart(
+		"prt_1", "msg_1", "ses_empty_dir",
+		1700000000000, 1700000000000,
+		`{"type":"text","text":"hello"}`,
+	)
+
+	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1)
+
+	s := sessions[0].Session
+	assert.Equal(t, "/home/user/code/myapp", s.Cwd)
+	assert.Equal(t, "myapp", s.Project)
+}
+
+// openCodeSchemaLegacy omits session.directory, matching older OpenCode-family
+// SQLite layouts still used by Kilo/MiMoCode/ICodeMate archives.
+const openCodeSchemaLegacy = `
+CREATE TABLE project (
+	id TEXT PRIMARY KEY,
+	worktree TEXT NOT NULL,
+	time_created INTEGER NOT NULL DEFAULT 0,
+	time_updated INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE session (
+	id TEXT PRIMARY KEY,
+	project_id TEXT NOT NULL,
+	parent_id TEXT,
+	title TEXT,
+	time_created INTEGER NOT NULL,
+	time_updated INTEGER NOT NULL,
+	FOREIGN KEY (project_id) REFERENCES project(id)
+);
+
+CREATE TABLE message (
+	id TEXT PRIMARY KEY,
+	session_id TEXT NOT NULL,
+	time_created INTEGER NOT NULL,
+	time_updated INTEGER NOT NULL,
+	data TEXT NOT NULL,
+	FOREIGN KEY (session_id) REFERENCES session(id)
+);
+
+CREATE TABLE part (
+	id TEXT PRIMARY KEY,
+	message_id TEXT NOT NULL,
+	session_id TEXT NOT NULL,
+	time_created INTEGER NOT NULL,
+	time_updated INTEGER NOT NULL,
+	data TEXT NOT NULL,
+	FOREIGN KEY (message_id) REFERENCES message(id)
+);
+`
+
+func newLegacyOpenCodeTestDB(t *testing.T) (string, *OpenCodeSeeder, *sql.DB) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "opencode-legacy.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "open legacy test db")
+	_, err = db.Exec(openCodeSchemaLegacy)
+	require.NoError(t, err, "create legacy schema")
+	return dbPath, &OpenCodeSeeder{db: db, t: t}, db
+}
+
+func TestParseOpenCodeDB_LegacySchemaWithoutDirectoryUsesProjectWorktree(t *testing.T) {
+	dbPath, seeder, db := newLegacyOpenCodeTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_legacy", "/home/user/code/legacy-app")
+	// AddSession inserts without directory; legacy schema has no such column.
+	seeder.AddSession(
+		"ses_legacy", "prj_legacy", "", "Legacy Session",
+		1700000000000, 1700000010000,
+	)
+	seeder.AddMessage("msg_1", "ses_legacy", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart(
+		"prt_1", "msg_1", "ses_legacy",
+		1700000000000, 1700000000000,
+		`{"type":"text","text":"hello from legacy schema"}`,
+	)
+
+	// Confirm the column is actually absent so the test would fail closed
+	// if the modern SELECT path were used.
+	hasDir, err := openCodeSessionTableHasDirectory(db)
+	require.NoError(t, err)
+	require.False(t, hasDir, "legacy fixture must omit session.directory")
+
+	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
+	require.NoError(t, err, "ParseOpenCodeDB on legacy schema")
+	require.Len(t, sessions, 1)
+
+	s := sessions[0].Session
+	assert.Equal(t, "/home/user/code/legacy-app", s.Cwd)
+	assert.Equal(t, "legacy_app", s.Project)
+}
+
+func TestParseOpenCodeDB_ModernSchemaDirectoryColumnDetected(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+	seedStandardSession(t, seeder)
+
+	hasDir, err := openCodeSessionHasDirectoryCached(db, dbPath)
+	require.NoError(t, err)
+	assert.True(t, hasDir, "modern fixture must include session.directory")
+
+	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "/home/user/code/myapp", sessions[0].Session.Cwd)
 }
 
 func TestParseOpenCodeSession_SingleSession(t *testing.T) {

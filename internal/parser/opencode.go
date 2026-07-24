@@ -148,7 +148,14 @@ func parseOpenCodeDBSession(
 		)
 	}
 
-	s, err := loadOneOpenCodeSession(db, sessionID)
+	hasDirectory, err := openCodeSessionHasDirectoryCached(db, dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"probing opencode session schema: %w", err,
+		)
+	}
+
+	s, err := loadOneOpenCodeSession(db, sessionID, hasDirectory)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"loading opencode session %s: %w",
@@ -156,10 +163,35 @@ func parseOpenCodeDBSession(
 		)
 	}
 
-	worktree := projects[s.projectID]
+	projectWorktree := strings.TrimSpace(projects[s.projectID])
+	cwd := resolveOpenCodeWorktree(s.directory, projectWorktree)
+	if !openCodeUsableWorktree(projectWorktree) {
+		projectWorktree = cwd
+	}
 	return buildOpenCodeSession(
-		db, s, worktree, dbPath, machine,
+		db, s, cwd, projectWorktree, dbPath, machine,
 	)
+}
+
+// resolveOpenCodeWorktree picks the session working directory used for
+// cwd/project. OpenCode's synthetic "global" project stores worktree="/",
+// while session.directory still holds the real path the session ran in.
+// Prefer a concrete session directory; fall back to the project worktree.
+func resolveOpenCodeWorktree(
+	sessionDirectory, projectWorktree string,
+) string {
+	if dir := strings.TrimSpace(sessionDirectory); openCodeUsableWorktree(dir) {
+		return dir
+	}
+	return strings.TrimSpace(projectWorktree)
+}
+
+func openCodeUsableWorktree(path string) bool {
+	if path == "" {
+		return false
+	}
+	// Root is OpenCode's global-project placeholder, not a real project cwd.
+	return path != string(filepath.Separator) && path != "/"
 }
 
 // parseOpenCodeStorageFile parses a file-backed OpenCode storage
@@ -220,6 +252,7 @@ func parseOpenCodeStorageFile(
 			timeUpdated: sf.Time.Updated,
 		},
 		sf.Directory,
+		sf.Directory,
 		sessionPath,
 		fileMtime,
 		machine,
@@ -237,6 +270,7 @@ func parseOpenCodeStorageFile(
 			timeCreated: sf.Time.Created,
 			timeUpdated: sf.Time.Updated,
 		},
+		sf.Directory,
 		sf.Directory,
 		msgs,
 		parts,
@@ -339,14 +373,115 @@ type openCodeSessionRow struct {
 	projectID   string
 	parentID    string
 	title       string
+	directory   string
 	timeCreated int64
 	timeUpdated int64
 }
 
+type openCodeSessionSchemaCacheEntry struct {
+	state        SQLiteContainerState
+	hasDirectory bool
+}
+
+// openCodeSessionSchemaCache memoizes whether session.directory exists for
+// each shared OpenCode SQLite path. Legacy OpenCode-family DBs (older
+// OpenCode, Kilo, MiMoCode, ICodeMate) omit the column; probing once per
+// container state avoids a PRAGMA on every session parse.
+var (
+	openCodeSessionSchemaCacheMu sync.Mutex
+	openCodeSessionSchemaCache   = map[string]openCodeSessionSchemaCacheEntry{}
+)
+
+func openCodeSessionHasDirectoryCached(
+	db *sql.DB, dbPath string,
+) (bool, error) {
+	state, ok := StatSQLiteContainerState(dbPath)
+	if !ok {
+		return openCodeSessionTableHasDirectory(db)
+	}
+	openCodeSessionSchemaCacheMu.Lock()
+	entry, hit := openCodeSessionSchemaCache[dbPath]
+	openCodeSessionSchemaCacheMu.Unlock()
+	if hit && entry.state == state {
+		return entry.hasDirectory, nil
+	}
+	hasDirectory, err := openCodeSessionTableHasDirectory(db)
+	if err != nil {
+		return false, err
+	}
+	openCodeSessionSchemaCacheMu.Lock()
+	openCodeSessionSchemaCache[dbPath] = openCodeSessionSchemaCacheEntry{
+		state:        state,
+		hasDirectory: hasDirectory,
+	}
+	openCodeSessionSchemaCacheMu.Unlock()
+	return hasDirectory, nil
+}
+
+func openCodeSessionTableHasDirectory(db *sql.DB) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(session)`)
+	if err != nil {
+		return false, fmt.Errorf(
+			"listing opencode session table info: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			typeName   string
+			notNull    int
+			defaultV   sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(
+			&cid, &name, &typeName, &notNull, &defaultV, &primaryKey,
+		); err != nil {
+			return false, fmt.Errorf(
+				"scanning opencode session table info: %w", err,
+			)
+		}
+		if strings.EqualFold(name, "directory") {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 func loadOneOpenCodeSession(
-	db *sql.DB, sessionID string,
+	db *sql.DB, sessionID string, hasDirectory bool,
 ) (openCodeSessionRow, error) {
-	row := db.QueryRow(`
+	var (
+		row *sql.Row
+		s   openCodeSessionRow
+		err error
+	)
+	if hasDirectory {
+		row = db.QueryRow(`
+			SELECT s.id, s.project_id,
+			       COALESCE(s.parent_id, ''),
+			       COALESCE(s.title, ''),
+			       COALESCE(s.directory, ''),
+			       s.time_created, s.time_updated
+			FROM session s
+			WHERE s.id = ?
+		`, sessionID)
+		err = row.Scan(
+			&s.id, &s.projectID, &s.parentID,
+			&s.title, &s.directory,
+			&s.timeCreated, &s.timeUpdated,
+		)
+		return s, err
+	}
+
+	// Legacy OpenCode-family schemas omit session.directory; cwd falls
+	// back to project.worktree via resolveOpenCodeWorktree.
+	row = db.QueryRow(`
 		SELECT s.id, s.project_id,
 		       COALESCE(s.parent_id, ''),
 		       COALESCE(s.title, ''),
@@ -354,9 +489,7 @@ func loadOneOpenCodeSession(
 		FROM session s
 		WHERE s.id = ?
 	`, sessionID)
-
-	var s openCodeSessionRow
-	err := row.Scan(
+	err = row.Scan(
 		&s.id, &s.projectID, &s.parentID,
 		&s.title, &s.timeCreated, &s.timeUpdated,
 	)
@@ -406,6 +539,7 @@ type openCodeStorageFingerprintSession struct {
 	ProjectID   string `json:"project_id,omitempty"`
 	ParentID    string `json:"parent_id,omitempty"`
 	Title       string `json:"title,omitempty"`
+	Directory   string `json:"directory,omitempty"`
 	Worktree    string `json:"worktree,omitempty"`
 	TimeCreated int64  `json:"time_created,omitempty"`
 	TimeUpdated int64  `json:"time_updated,omitempty"`
@@ -486,7 +620,7 @@ func loadOpenCodeParts(
 func buildOpenCodeSession(
 	db *sql.DB,
 	s openCodeSessionRow,
-	worktree, dbPath, machine string,
+	cwd, projectWorktree, dbPath, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	msgs, err := loadOpenCodeMessages(db, s.id)
 	if err != nil {
@@ -504,7 +638,8 @@ func buildOpenCodeSession(
 
 	sess, parsed, err := buildOpenCodeParsedSession(
 		s,
-		worktree,
+		cwd,
+		projectWorktree,
 		dbPath+"#"+s.id,
 		s.timeUpdated*1_000_000,
 		machine,
@@ -515,14 +650,14 @@ func buildOpenCodeSession(
 		return sess, parsed, err
 	}
 	sess.File.Hash = buildOpenCodeSessionFingerprint(
-		s, worktree, msgs, parts,
+		s, cwd, projectWorktree, msgs, parts,
 	)
 	return sess, parsed, nil
 }
 
 func buildOpenCodeParsedSession(
 	s openCodeSessionRow,
-	worktree, filePath string,
+	cwd, projectWorktree, filePath string,
 	fileMtime int64,
 	machine string,
 	msgs []openCodeMessageRow,
@@ -566,7 +701,7 @@ func buildOpenCodeParsedSession(
 		})
 
 		pm := buildOpenCodeMessage(
-			ordinal, role, m.timeCreated, msgParts, worktree,
+			ordinal, role, m.timeCreated, msgParts, cwd,
 		)
 		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
 		if strings.TrimSpace(pm.Content) == "" &&
@@ -589,7 +724,7 @@ func buildOpenCodeParsedSession(
 		return nil, nil, nil
 	}
 
-	project := ExtractProjectFromCwd(worktree)
+	project := ExtractProjectFromCwd(projectWorktree)
 	if project == "" {
 		project = "unknown"
 	}
@@ -614,7 +749,7 @@ func buildOpenCodeParsedSession(
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentOpenCode,
-		Cwd:              worktree,
+		Cwd:              cwd,
 		ParentSessionID:  parentID,
 		FirstMessage:     firstMsg,
 		StartedAt:        startedAt,
@@ -1150,7 +1285,7 @@ func buildOpenCodeStorageFingerprint(
 
 func buildOpenCodeSessionFingerprint(
 	s openCodeSessionRow,
-	worktree string,
+	directory, worktree string,
 	msgs []openCodeMessageRow,
 	parts map[string][]openCodePartRow,
 ) string {
@@ -1160,6 +1295,7 @@ func buildOpenCodeSessionFingerprint(
 			ProjectID:   s.projectID,
 			ParentID:    s.parentID,
 			Title:       s.title,
+			Directory:   directory,
 			Worktree:    worktree,
 			TimeCreated: s.timeCreated,
 			TimeUpdated: s.timeUpdated,
