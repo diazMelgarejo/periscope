@@ -1014,13 +1014,26 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 		skillName = inferOpenCodeSkillName(d.ToolName, inputJSON, cwd)
 	}
 
-	return ParsedToolCall{
+	tc := ParsedToolCall{
 		ToolUseID: d.CallID,
 		ToolName:  d.ToolName,
 		Category:  NormalizeToolCategory(d.ToolName),
 		InputJSON: inputJSON,
 		SkillName: skillName,
 	}
+
+	// OpenCode records model calls to unknown or malformed tools as a
+	// synthetic "invalid" tool whose execute succeeds, so state.status
+	// is "completed" and carries no error signal. Attach an errored
+	// result event so tool health counts these as failures.
+	if d.ToolName == "invalid" {
+		tc.ResultEvents = append(tc.ResultEvents, ParsedToolResultEvent{
+			ToolUseID: d.CallID,
+			Status:    "errored",
+		})
+	}
+
+	return tc
 }
 
 func inferOpenCodeSkillName(toolName, inputJSON, cwd string) string {
