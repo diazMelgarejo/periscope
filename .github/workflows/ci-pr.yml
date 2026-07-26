@@ -11,5 +11,3 @@ permissions: read-all
 jobs:
   run:
     uses: kenn-io/agentsview/.github/workflows/ci.yml@main
-    with:
-      checkout_ref: refs/pull/${{ github.event.pull_request.number }}/merge
