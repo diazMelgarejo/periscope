@@ -124,9 +124,9 @@ describe("SettingsPage", () => {
     trigger!.click();
     await tick();
 
-    const option = Array.from(document.body.querySelectorAll('[role="option"]')).find((el) =>
-      el.textContent?.includes("Simplified Chinese"),
-    );
+    const option = Array.from(
+      document.body.querySelectorAll('[role="option"]'),
+    ).find((el) => el.textContent?.includes("简体中文"));
     expect(option).toBeTruthy();
 
     (option as HTMLElement).dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
