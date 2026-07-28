@@ -466,11 +466,6 @@
           onSelectTab={setSessionTab}
           onOpenStandalone={() => router.navigateToContext(sessions.activeSessionId!)}
         />
-        {#if ui.activityMinimapOpen && sessions.activeSessionId && sessionTab() === "transcript"}
-          <ActivityMinimap
-            sessionId={sessions.activeSessionId}
-          />
-        {/if}
         {#if sessionTab() === "context"}
           <ContextPage
             sessionId={sessions.activeSessionId}

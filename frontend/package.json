@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "@tanstack/virtual-core": "3.14.0",
-    "dompurify": "3.4.2"
+    "dompurify": "3.4.2",
+    "marked": "18.0.3"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",
@@ -24,7 +25,6 @@
     "@tsconfig/svelte": "5.0.8",
     "@types/dompurify": "3.2.0",
     "jsdom": "29.1.1",
-    "marked": "^18.0.2",
     "svelte": "^5.55.9",
     "svelte-check": "4.4.8",
     "typescript": "6.0.3",

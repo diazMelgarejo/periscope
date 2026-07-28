@@ -52,7 +52,7 @@
   ];
 
   function turnColor(index: number): string {
-    return TURN_COLORS[index % TURN_COLORS.length];
+    return TURN_COLORS[index % TURN_COLORS.length] ?? "var(--accent-blue)";
   }
 
   function turnLabel(turn: ContextTimelineTurn): string {
@@ -131,7 +131,7 @@
       .map((value, index) => ({
         index,
         remainder: value - Math.floor(value),
-        weight: safeValues[index],
+        weight: safeValues[index] ?? 0,
       }))
       .sort((a, b) => {
         if (b.remainder !== a.remainder) return b.remainder - a.remainder;
@@ -140,7 +140,8 @@
 
     for (const item of order) {
       if (remaining <= 0) break;
-      base[item.index] += 1;
+      const idx = item.index;
+      base[idx] = (base[idx] ?? 0) + 1;
       remaining -= 1;
     }
 
@@ -178,7 +179,7 @@
     parts.push(Math.max(0, capacity.max_tokens - cappedTokensInUse));
 
     const blocks = allocateBlocks(parts, TOTAL_BLOCKS);
-    const turnSegments =
+    const turnSegments: Segment[] =
       visibleTurns.length > 0
         ? visibleTurns.map((turn, index) => ({
             key: `turn-${turn.turn}`,
@@ -255,10 +256,12 @@
     return items.map((item) => {
       const sweep = (item.percentage / 100) * 360;
       const endAngle = startAngle + sweep;
+      const color =
+        CATEGORY_COLORS[item.category] ?? CATEGORY_COLORS.other ?? "#6b7280";
       const slice = {
         ...item,
         label: categoryLabel(item.category),
-        color: CATEGORY_COLORS[item.category] ?? CATEGORY_COLORS.other,
+        color,
         path: describeArc(72, 72, 56, startAngle, endAngle),
       };
       startAngle = endAngle;

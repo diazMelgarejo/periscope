@@ -21,6 +21,11 @@ The generated baseline enables GitHub, Context7, Exa, Memory, Playwright, and Se
 
 ## Workflow Files
 
-- No dedicated workflow command files were generated for this repo.
+- `.claude/commands/database-migration.md`
+- `.claude/commands/feature-development.md`
+- `.claude/commands/refactoring.md`
 
 Use these workflow files as reusable task scaffolds when the detected repository workflows recur.
+Pair them with the synthesized instincts in
+`.claude/homunculus/instincts/inherited/periscope-instincts.yaml` and the workflow
+sections in the repo skill files above.
