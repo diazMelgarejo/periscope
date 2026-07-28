@@ -10,25 +10,27 @@ import "github.com/latentsignal-org/periscope/internal/db"
 // re-hash every exported manifest; extending THIS struct is an explicit wire
 // format decision (see TestManifestSessionMatchesDBSessionWireFormat).
 type manifestSession struct {
-	ID                   string  `json:"id"`
-	Project              string  `json:"project"`
-	Machine              string  `json:"machine"`
-	Agent                string  `json:"agent"`
-	AgentLabel           string  `json:"agent_label,omitempty"`
-	Entrypoint           string  `json:"entrypoint,omitempty"`
-	FirstMessage         *string `json:"first_message"`
-	DisplayName          *string `json:"display_name,omitempty"`
-	StartedAt            *string `json:"started_at"`
-	EndedAt              *string `json:"ended_at"`
-	MessageCount         int     `json:"message_count"`
-	UserMessageCount     int     `json:"user_message_count"`
-	ParentSessionID      *string `json:"parent_session_id,omitempty"`
-	RelationshipType     string  `json:"relationship_type,omitempty"`
-	TotalOutputTokens    int     `json:"total_output_tokens"`
-	PeakContextTokens    int     `json:"peak_context_tokens"`
-	HasTotalOutputTokens bool    `json:"has_total_output_tokens"`
-	HasPeakContextTokens bool    `json:"has_peak_context_tokens"`
-	IsAutomated          bool    `json:"is_automated"`
+	ID                          string  `json:"id"`
+	Project                     string  `json:"project"`
+	Machine                     string  `json:"machine"`
+	Agent                       string  `json:"agent"`
+	AgentLabel                  string  `json:"agent_label,omitempty"`
+	Entrypoint                  string  `json:"entrypoint,omitempty"`
+	FirstMessage                *string `json:"first_message"`
+	DisplayName                 *string `json:"display_name,omitempty"`
+	StartedAt                   *string `json:"started_at"`
+	EndedAt                     *string `json:"ended_at"`
+	MessageCount                int     `json:"message_count"`
+	UserMessageCount            int     `json:"user_message_count"`
+	ParentSessionID             *string `json:"parent_session_id,omitempty"`
+	RelationshipType            string  `json:"relationship_type,omitempty"`
+	TotalOutputTokens           int     `json:"total_output_tokens"`
+	PeakContextTokens           int     `json:"peak_context_tokens"`
+	ModelContextWindowTokens    int     `json:"model_context_window_tokens,omitempty"`
+	HasTotalOutputTokens        bool    `json:"has_total_output_tokens"`
+	HasPeakContextTokens        bool    `json:"has_peak_context_tokens"`
+	HasModelContextWindowTokens bool    `json:"has_model_context_window_tokens,omitempty"`
+	IsAutomated                 bool    `json:"is_automated"`
 
 	ToolFailureSignalCount int      `json:"tool_failure_signal_count"`
 	ToolRetryCount         int      `json:"tool_retry_count"`
@@ -89,25 +91,27 @@ type manifestQualitySignals struct {
 
 func manifestSessionFromDB(s db.Session) manifestSession {
 	return manifestSession{
-		ID:                   s.ID,
-		Project:              s.Project,
-		Machine:              s.Machine,
-		Agent:                s.Agent,
-		AgentLabel:           s.AgentLabel,
-		Entrypoint:           s.Entrypoint,
-		FirstMessage:         s.FirstMessage,
-		DisplayName:          s.DisplayName,
-		StartedAt:            s.StartedAt,
-		EndedAt:              s.EndedAt,
-		MessageCount:         s.MessageCount,
-		UserMessageCount:     s.UserMessageCount,
-		ParentSessionID:      s.ParentSessionID,
-		RelationshipType:     s.RelationshipType,
-		TotalOutputTokens:    s.TotalOutputTokens,
-		PeakContextTokens:    s.PeakContextTokens,
-		HasTotalOutputTokens: s.HasTotalOutputTokens,
-		HasPeakContextTokens: s.HasPeakContextTokens,
-		IsAutomated:          s.IsAutomated,
+		ID:                          s.ID,
+		Project:                     s.Project,
+		Machine:                     s.Machine,
+		Agent:                       s.Agent,
+		AgentLabel:                  s.AgentLabel,
+		Entrypoint:                  s.Entrypoint,
+		FirstMessage:                s.FirstMessage,
+		DisplayName:                 s.DisplayName,
+		StartedAt:                   s.StartedAt,
+		EndedAt:                     s.EndedAt,
+		MessageCount:                s.MessageCount,
+		UserMessageCount:            s.UserMessageCount,
+		ParentSessionID:             s.ParentSessionID,
+		RelationshipType:            s.RelationshipType,
+		TotalOutputTokens:           s.TotalOutputTokens,
+		PeakContextTokens:           s.PeakContextTokens,
+		ModelContextWindowTokens:    s.ModelContextWindowTokens,
+		HasTotalOutputTokens:        s.HasTotalOutputTokens,
+		HasPeakContextTokens:        s.HasPeakContextTokens,
+		HasModelContextWindowTokens: s.HasModelContextWindowTokens,
+		IsAutomated:                 s.IsAutomated,
 
 		ToolFailureSignalCount: s.ToolFailureSignalCount,
 		ToolRetryCount:         s.ToolRetryCount,
@@ -149,25 +153,27 @@ func manifestSessionFromDB(s db.Session) manifestSession {
 
 func (m manifestSession) dbSession() db.Session {
 	return db.Session{
-		ID:                   m.ID,
-		Project:              m.Project,
-		Machine:              m.Machine,
-		Agent:                m.Agent,
-		AgentLabel:           m.AgentLabel,
-		Entrypoint:           m.Entrypoint,
-		FirstMessage:         m.FirstMessage,
-		DisplayName:          m.DisplayName,
-		StartedAt:            m.StartedAt,
-		EndedAt:              m.EndedAt,
-		MessageCount:         m.MessageCount,
-		UserMessageCount:     m.UserMessageCount,
-		ParentSessionID:      m.ParentSessionID,
-		RelationshipType:     m.RelationshipType,
-		TotalOutputTokens:    m.TotalOutputTokens,
-		PeakContextTokens:    m.PeakContextTokens,
-		HasTotalOutputTokens: m.HasTotalOutputTokens,
-		HasPeakContextTokens: m.HasPeakContextTokens,
-		IsAutomated:          m.IsAutomated,
+		ID:                          m.ID,
+		Project:                     m.Project,
+		Machine:                     m.Machine,
+		Agent:                       m.Agent,
+		AgentLabel:                  m.AgentLabel,
+		Entrypoint:                  m.Entrypoint,
+		FirstMessage:                m.FirstMessage,
+		DisplayName:                 m.DisplayName,
+		StartedAt:                   m.StartedAt,
+		EndedAt:                     m.EndedAt,
+		MessageCount:                m.MessageCount,
+		UserMessageCount:            m.UserMessageCount,
+		ParentSessionID:             m.ParentSessionID,
+		RelationshipType:            m.RelationshipType,
+		TotalOutputTokens:           m.TotalOutputTokens,
+		PeakContextTokens:           m.PeakContextTokens,
+		ModelContextWindowTokens:    m.ModelContextWindowTokens,
+		HasTotalOutputTokens:        m.HasTotalOutputTokens,
+		HasPeakContextTokens:        m.HasPeakContextTokens,
+		HasModelContextWindowTokens: m.HasModelContextWindowTokens,
+		IsAutomated:                 m.IsAutomated,
 
 		ToolFailureSignalCount: m.ToolFailureSignalCount,
 		ToolRetryCount:         m.ToolRetryCount,

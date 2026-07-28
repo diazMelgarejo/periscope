@@ -194,13 +194,6 @@
     margin-top: 4px;
   }
 
-  .tokens-of,
-  .tokens-pct {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-muted);
-  }
-
   .stat-pct {
     font-weight: 500;
     color: var(--text-muted);
