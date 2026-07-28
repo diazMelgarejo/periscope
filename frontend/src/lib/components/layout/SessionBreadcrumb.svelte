@@ -1267,26 +1267,6 @@
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
 
-  .standalone-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .standalone-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--accent-blue);
-  }
-
   .agent-badge {
     font-size: 9px;
     font-weight: 600;
