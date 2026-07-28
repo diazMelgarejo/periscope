@@ -7,6 +7,8 @@
 **Upstream merge rename checklist:** [`docs/guides/agentsview-to-periscope-rename-catalogue.md`](guides/agentsview-to-periscope-rename-catalogue.md)
 (machine index: [`agentsview-rename-index.json`](guides/agentsview-rename-index.json))
 
+**Orchestration stack (L4):** [`docs/INTEGRATION-ORAMASYS-STACK-PLAN.md`](INTEGRATION-ORAMASYS-STACK-PLAN.md)
+
 ---
 
 ## The Matryoshka Model
