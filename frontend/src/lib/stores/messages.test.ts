@@ -39,6 +39,7 @@ function makeSession(
     user_message_count: messageCount,
     total_output_tokens: 0,
     peak_context_tokens: 0,
+    is_automated: false,
     created_at: new Date(0).toISOString(),
   };
 }
@@ -52,6 +53,7 @@ function makeMessage(ordinal: number): Message {
     content: `msg ${ordinal}`,
     timestamp: new Date(ordinal * 1000).toISOString(),
     has_thinking: false,
+    thinking_text: "",
     has_tool_use: false,
     content_length: 6,
     model: "",

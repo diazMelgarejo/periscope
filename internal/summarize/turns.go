@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // PromptVersion is bumped when the summariser prompt or output schema

@@ -2,12 +2,16 @@ package sync
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // startTestWatcherNoCleanup sets up a watcher without registering
@@ -215,6 +219,39 @@ func TestWatcherIgnoresNonWriteCreate(t *testing.T) {
 	}
 }
 
+func TestWatcherHandlesRemoveAndRename(t *testing.T) {
+	pathsCh := make(chan []string, 1)
+	w, err := NewWatcher(time.Millisecond, func(paths []string) {
+		pathsCh <- paths
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	w.Start()
+	t.Cleanup(func() { w.Stop() })
+	base := time.Unix(0, 0)
+	w.now = func() time.Time { return base }
+
+	w.handleEvent(fsnotify.Event{
+		Name: "/tmp/remove.json",
+		Op:   fsnotify.Remove,
+	})
+	w.handleEvent(fsnotify.Event{
+		Name: "/tmp/rename.json",
+		Op:   fsnotify.Rename,
+	})
+	w.now = func() time.Time { return base.Add(2 * time.Millisecond) }
+	w.flush()
+
+	got := <-pathsCh
+	if !slices.Contains(got, "/tmp/remove.json") {
+		t.Fatalf("remove event missing from %v", got)
+	}
+	if !slices.Contains(got, "/tmp/rename.json") {
+		t.Fatalf("rename event missing from %v", got)
+	}
+}
+
 func TestWatcherDebounceLogic(t *testing.T) {
 	var mu sync.Mutex
 	mockTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -313,6 +350,42 @@ func TestWatchRecursive_ExcludesDirectoryNames(t *testing.T) {
 	}
 	if !slices.Contains(got, included) {
 		t.Fatalf("expected included dir %s in watch list", included)
+	}
+}
+
+func TestWatchRecursiveBudget_DegradesWhenBudgetExhausted(t *testing.T) {
+	root := t.TempDir()
+	for i := range 5 {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("dir-%d", i)), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	w, err := NewWatcher(time.Second, func(_ []string) {}, nil)
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	w.Start()
+	t.Cleanup(func() { w.Stop() })
+
+	result := w.WatchRecursiveBudgeted(root, 3)
+	if result.Watched != 3 {
+		t.Fatalf("Watched = %d, want 3", result.Watched)
+	}
+	if !result.BudgetExhausted {
+		t.Fatal("BudgetExhausted = false, want true")
+	}
+}
+
+func TestIsWatchResourceExhaustion(t *testing.T) {
+	if !isWatchResourceExhaustion(syscall.EMFILE) {
+		t.Fatal("EMFILE should be resource exhaustion")
+	}
+	if !isWatchResourceExhaustion(syscall.ENOSPC) {
+		t.Fatal("ENOSPC should be resource exhaustion")
+	}
+	if isWatchResourceExhaustion(os.ErrNotExist) {
+		t.Fatal("ErrNotExist should not be resource exhaustion")
 	}
 }
 

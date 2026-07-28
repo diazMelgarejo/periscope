@@ -6,9 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/dbtest"
-	"github.com/wesm/agentsview/internal/server"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/server"
 )
 
 // tokenUsageJSON is a valid token_usage blob for test messages.
@@ -61,6 +60,42 @@ func TestParseUsageFilterExplicit(t *testing.T) {
 	}
 }
 
+func TestParseUsageFilterDefaultsIncludeOneShot(t *testing.T) {
+	te := setup(t)
+
+	te.seedSession(t, "usage-one-shot", "alpha", 1,
+		func(sess *db.Session) {
+			ts := "2024-06-01T09:00:00Z"
+			sess.Agent = "claude"
+			sess.StartedAt = &ts
+			sess.EndedAt = &ts
+			sess.UserMessageCount = 1
+		},
+	)
+	te.seedMessages(t, "usage-one-shot", 1,
+		func(_ int, m *db.Message) {
+			m.Role = "assistant"
+			m.Timestamp = "2024-06-01T09:00:00Z"
+			m.Model = "claude-sonnet-4-20250514"
+			m.TokenUsage = tokenUsageJSON
+		},
+	)
+
+	w := te.get(t, buildPathURL("/api/v1/usage/summary",
+		map[string]string{
+			"from":     "2024-06-01",
+			"to":       "2024-06-02",
+			"timezone": "UTC",
+		}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[server.UsageSummaryResponse](t, w)
+	if resp.SessionCounts.Total != 1 {
+		t.Fatalf("SessionCounts.Total = %d, want 1",
+			resp.SessionCounts.Total)
+	}
+}
+
 func TestParseUsageFilterInvalidDate(t *testing.T) {
 	te := setup(t)
 
@@ -89,7 +124,7 @@ func seedUsageEnv(t *testing.T, te *testEnv) {
 				sess.Agent = e.agent
 				sess.StartedAt = &e.started
 				sess.EndedAt = &e.started
-				sess.FirstMessage = dbtest.Ptr("Usage test")
+				sess.FirstMessage = new("Usage test")
 			},
 		)
 		started := e.started

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 func parseTestContent(t *testing.T, name, content string, expectedLen int) []ParseResult {

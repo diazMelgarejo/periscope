@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/llm"
+	"github.com/latentsignal-org/periscope/internal/llm"
 )
 
 type captureClient struct {

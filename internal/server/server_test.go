@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net"
@@ -19,13 +20,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/config"
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/dbtest"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/server"
-	"github.com/wesm/agentsview/internal/sync"
-	"github.com/wesm/agentsview/internal/testjsonl"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/server"
+	"github.com/latentsignal-org/periscope/internal/service"
+	"github.com/latentsignal-org/periscope/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 // Timestamp constants for test data.
@@ -109,7 +114,8 @@ func setupWithServerOpts(
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	broadcaster := server.NewBroadcaster()
+	// Disable coalescing in tests so emits fan out deterministically.
+	broadcaster := server.NewBroadcaster(0)
 	engineCfg := sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
@@ -373,9 +379,9 @@ func (te *testEnv) seedSession(
 		s.Machine = "test"
 		s.MessageCount = msgCount
 		s.UserMessageCount = max(msgCount, 2)
-		s.StartedAt = dbtest.Ptr(tsSeed)
-		s.EndedAt = dbtest.Ptr(tsSeedEnd)
-		s.FirstMessage = dbtest.Ptr("Hello world")
+		s.StartedAt = new(tsSeed)
+		s.EndedAt = new(tsSeedEnd)
+		s.FirstMessage = new("Hello world")
 		for _, opt := range opts {
 			opt(s)
 		}
@@ -864,16 +870,16 @@ func TestGetChildSessions_Found(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "parent-1", "my-app", 10)
 	te.seedSession(t, "child-a", "my-app", 3, func(s *db.Session) {
-		s.ParentSessionID = dbtest.Ptr("parent-1")
+		s.ParentSessionID = new("parent-1")
 		s.RelationshipType = "subagent"
-		s.StartedAt = dbtest.Ptr("2025-01-15T10:05:00Z")
-		s.EndedAt = dbtest.Ptr("2025-01-15T10:10:00Z")
+		s.StartedAt = new("2025-01-15T10:05:00Z")
+		s.EndedAt = new("2025-01-15T10:10:00Z")
 	})
 	te.seedSession(t, "child-b", "my-app", 2, func(s *db.Session) {
-		s.ParentSessionID = dbtest.Ptr("parent-1")
+		s.ParentSessionID = new("parent-1")
 		s.RelationshipType = "fork"
-		s.StartedAt = dbtest.Ptr("2025-01-15T10:15:00Z")
-		s.EndedAt = dbtest.Ptr("2025-01-15T10:20:00Z")
+		s.StartedAt = new("2025-01-15T10:15:00Z")
+		s.EndedAt = new("2025-01-15T10:20:00Z")
 	})
 
 	w := te.get(t, "/api/v1/sessions/parent-1/children")
@@ -2143,7 +2149,7 @@ func TestMarkdownSessionExport_DepthOneIncludesChildSessions(t *testing.T) {
 		}}
 	})
 	te.seedSession(t, "child-a", "my-app", 1, func(s *db.Session) {
-		s.ParentSessionID = dbtest.Ptr("parent")
+		s.ParentSessionID = new("parent")
 		s.RelationshipType = "subagent"
 	})
 	te.seedMessages(t, "child-a", 1)
@@ -2170,7 +2176,7 @@ func TestMarkdownSessionExport_DefaultOmitsChildSessions(t *testing.T) {
 		}}
 	})
 	te.seedSession(t, "child-a", "my-app", 1, func(s *db.Session) {
-		s.ParentSessionID = dbtest.Ptr("parent")
+		s.ParentSessionID = new("parent")
 		s.RelationshipType = "subagent"
 	})
 	te.seedMessages(t, "child-a", 1)
@@ -2198,7 +2204,7 @@ func TestMarkdownSessionExport_DepthAllRecurses(t *testing.T) {
 		}}
 	})
 	te.seedSession(t, "child-a", "my-app", 1, func(s *db.Session) {
-		s.ParentSessionID = dbtest.Ptr("root")
+		s.ParentSessionID = new("root")
 		s.RelationshipType = "subagent"
 	})
 	te.seedMessages(t, "child-a", 1, func(i int, m *db.Message) {
@@ -2214,7 +2220,7 @@ func TestMarkdownSessionExport_DepthAllRecurses(t *testing.T) {
 		}}
 	})
 	te.seedSession(t, "child-b", "my-app", 1, func(s *db.Session) {
-		s.ParentSessionID = dbtest.Ptr("child-a")
+		s.ParentSessionID = new("child-a")
 		s.RelationshipType = "subagent"
 	})
 	te.seedMessages(t, "child-b", 1)
@@ -2458,6 +2464,137 @@ func TestUploadSession_Errors(t *testing.T) {
 				tt.filename, tt.content, tt.query)
 			assertStatus(t, w, http.StatusBadRequest)
 		})
+	}
+}
+
+func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, te *testEnv, id string)
+	}{
+		{
+			name: "excluded",
+			setup: func(t *testing.T, te *testEnv, id string) {
+				t.Helper()
+				require.NoError(t, te.db.UpsertSession(db.Session{
+					ID: id, Project: "myproj", Machine: "remote", Agent: "claude",
+				}), "seed session")
+				require.NoError(t, te.db.DeleteSession(id), "DeleteSession")
+			},
+		},
+		{
+			name: "trashed",
+			setup: func(t *testing.T, te *testEnv, id string) {
+				t.Helper()
+				require.NoError(t, te.db.UpsertSession(db.Session{
+					ID: id, Project: "myproj", Machine: "remote", Agent: "claude",
+				}), "seed session")
+				require.NoError(t, te.db.SoftDeleteSession(id), "SoftDeleteSession")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := setup(t)
+			const id = "upload-conflict"
+			tt.setup(t, te, id)
+
+			content := testjsonl.NewSessionBuilder().
+				AddClaudeUser(tsEarly, "Hello upload").
+				AddClaudeAssistant(tsEarlyS5, "Done.").
+				String()
+			w := te.upload(t, id+".jsonl", content, "project=myproj&machine=remote")
+			assertStatus(t, w, http.StatusConflict)
+			assertErrorResponse(t, w, "session upload rejected: session is excluded or trashed")
+			destPath := filepath.Join(
+				te.dataDir, "uploads", "myproj", id+".jsonl",
+			)
+			if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected upload file exists at %s: %v", destPath, err)
+			}
+		})
+	}
+}
+
+func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
+	te := setup(t)
+
+	const filename = "upload-multi-conflict.jsonl"
+	const mainID = "upload-multi-conflict"
+	const forkID = "upload-multi-conflict-i"
+
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: forkID, Project: "myproj", Machine: "remote", Agent: "claude",
+	}), "seed fork session")
+	require.NoError(t, te.db.DeleteSession(forkID), "DeleteSession")
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID(tsEarly, "q1", "a", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "a1", "b", "a").
+		AddClaudeUserWithUUID(tsEarlyS5, "q2", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:06Z", "a2", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:07Z", "q3", "e", "d").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:08Z", "a3", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:09Z", "q4", "g", "f").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:10Z", "a4", "h", "g").
+		AddClaudeUserWithUUID("2024-01-01T10:00:11Z", "q5", "k", "h").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:12Z", "a5", "l", "k").
+		AddClaudeUserWithUUID("2024-01-01T10:00:13Z", "fork q", "i", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:14Z", "fork a", "j", "i").
+		String()
+
+	w := te.upload(t, filename, content, "project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusConflict)
+	assertErrorResponse(t, w, "session upload rejected: session is excluded or trashed")
+
+	main, err := te.db.GetSessionFull(context.Background(), mainID)
+	require.NoError(t, err, "GetSessionFull main")
+	if main != nil {
+		t.Fatalf("main session was partially written: %+v", main)
+	}
+	destPath := filepath.Join(te.dataDir, "uploads", "myproj", filename)
+	if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected upload file exists at %s: %v", destPath, err)
+	}
+}
+
+func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
+	te := setup(t)
+
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "original upload").
+		AddClaudeAssistant(tsEarlyS5, "original reply").
+		String()
+	w := te.upload(t, "upload-pinned.jsonl", initial,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	msgs, err := te.db.GetAllMessages(context.Background(), "upload-pinned")
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, msgs, 2, "initial messages")
+	note := "keep this"
+	_, err = te.db.PinMessage("upload-pinned", msgs[0].ID, &note)
+	require.NoError(t, err, "PinMessage")
+
+	updated := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "updated upload").
+		AddClaudeAssistant(tsEarlyS5, "updated reply").
+		String()
+	w = te.upload(t, "upload-pinned.jsonl", updated,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	pins, err := te.db.ListPinnedMessages(
+		context.Background(), "upload-pinned", "",
+	)
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "pins after re-upload")
+	if pins[0].Ordinal != 0 {
+		t.Fatalf("pin ordinal = %d, want 0", pins[0].Ordinal)
+	}
+	if pins[0].Note == nil || *pins[0].Note != note {
+		t.Fatalf("pin note = %v, want %q", pins[0].Note, note)
 	}
 }
 
@@ -3027,6 +3164,31 @@ func TestGetMessages_Limits(t *testing.T) {
 	}
 }
 
+// TestGetMessages_InvalidDirection verifies that the HTTP
+// endpoint rejects direction values outside {asc, desc} with
+// 400 instead of silently coercing to asc. The CLI enforces the
+// same contract; both must agree.
+func TestGetMessages_InvalidDirection(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 1)
+
+	w := te.get(t, "/api/v1/sessions/s1/messages?direction=backwards")
+	assertStatus(t, w, http.StatusBadRequest)
+	assert.Contains(t, w.Body.String(), "direction",
+		"error body should mention 'direction'")
+}
+
+// TestHandleWatchSession_UnknownID_Returns404 verifies that the
+// SSE watch endpoint fails fast on an unknown session id so a
+// typo doesn't leave a heartbeat stream open indefinitely.
+func TestHandleWatchSession_UnknownID_Returns404(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/sessions/no-such-id/watch")
+	assertStatus(t, w, http.StatusNotFound)
+	assert.Contains(t, w.Body.String(), "no-such-id")
+}
+
 func TestGetVersion(t *testing.T) {
 	v := server.VersionInfo{
 		Version:   "v1.2.3",
@@ -3267,4 +3429,77 @@ func TestSessionWatch_AuthViaQueryTokenSucceeds(t *testing.T) {
 	if w.Code == http.StatusUnauthorized {
 		t.Fatalf("query-token auth failed on /watch: status %d", w.Code)
 	}
+}
+
+func TestHandleToolCalls_Basic(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "tc-1", "my-app", 2)
+	te.seedMessages(t, "tc-1", 2, func(i int, m *db.Message) {
+		if i == 1 {
+			m.Role = "assistant"
+			m.HasToolUse = true
+			m.ToolCalls = []db.ToolCall{
+				{
+					ToolName:  "Read",
+					Category:  "Read",
+					ToolUseID: "toolu_1",
+					InputJSON: `{"file_path":"/tmp/x"}`,
+				},
+				{
+					ToolName:  "Bash",
+					Category:  "Bash",
+					ToolUseID: "toolu_2",
+					InputJSON: `{"command":"ls"}`,
+				},
+			}
+		}
+	})
+
+	w := te.get(t, "/api/v1/sessions/tc-1/tool-calls")
+	assertStatus(t, w, http.StatusOK)
+
+	var body struct {
+		ToolCalls []service.ToolCall `json:"tool_calls"`
+		Count     int                `json:"count"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	require.Equal(t, 2, body.Count)
+	require.Len(t, body.ToolCalls, 2)
+	assert.Equal(t, "Read", body.ToolCalls[0].ToolName)
+	assert.Equal(t, "toolu_1", body.ToolCalls[0].ToolUseID)
+	assert.Equal(t, `{"file_path":"/tmp/x"}`, body.ToolCalls[0].InputJSON)
+	assert.Equal(t, "Bash", body.ToolCalls[1].ToolName)
+	assert.NotEmpty(t, body.ToolCalls[0].Timestamp)
+	assert.Equal(t, 1, body.ToolCalls[0].Ordinal)
+}
+
+func TestHandleSyncSession_MissingFields(t *testing.T) {
+	te := setup(t)
+	body := strings.NewReader(`{}`)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/sessions/sync", body)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestHandleSyncSession_BothFields(t *testing.T) {
+	te := setup(t)
+	body := strings.NewReader(
+		`{"path":"/tmp/a","id":"s-1"}`)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/sessions/sync", body)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestHandleSyncSession_InvalidJSON(t *testing.T) {
+	te := setup(t)
+	body := strings.NewReader(`not json`)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/sessions/sync", body)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusBadRequest)
 }

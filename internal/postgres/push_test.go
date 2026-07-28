@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 type syncStateReaderStub struct {
@@ -175,6 +175,14 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 			modify: func(s db.Session) db.Session {
 				hash := "abc123"
 				s.FileHash = &hash
+				return s
+			},
+		},
+		{
+			name: "termination_status change",
+			modify: func(s db.Session) db.Session {
+				ts := "tool_call_pending"
+				s.TerminationStatus = &ts
 				return s
 			},
 		},

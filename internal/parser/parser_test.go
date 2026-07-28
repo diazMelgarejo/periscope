@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
-	"github.com/wesm/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 func TestGetProjectName(t *testing.T) {
@@ -213,7 +213,7 @@ func TestExtractTextContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := gjson.Parse(tt.json)
-			text, hasThinking, hasToolUse, tcs, _ :=
+			text, _, hasThinking, hasToolUse, tcs, _ :=
 				ExtractTextContent(result)
 			if text != tt.wantText {
 				t.Errorf("text = %q, want %q", text, tt.wantText)
@@ -236,7 +236,7 @@ func TestExtractTextContent_AmpSkillNameExtraction(t *testing.T) {
 		`[{"type":"tool_use","id":"toolu_amp_skill","name":"skill","input":{"name":"walkthrough"}}]`,
 	)
 
-	text, hasThinking, hasToolUse, toolCalls, toolResults :=
+	text, _, hasThinking, hasToolUse, toolCalls, toolResults :=
 		ExtractTextContent(result)
 
 	if text != "[Skill: walkthrough]" {
@@ -306,7 +306,7 @@ func TestExtractToolResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := gjson.Parse(tt.json)
-			_, _, _, _, trs := ExtractTextContent(result)
+			_, _, _, _, _, trs := ExtractTextContent(result)
 			if len(trs) != len(tt.wantResults) {
 				t.Fatalf("tool_results count = %d, want %d",
 					len(trs), len(tt.wantResults))
@@ -368,7 +368,7 @@ func TestExtractTextContent_IflowToolResult(t *testing.T) {
 		"tool_use_id":"tu_123",
 		"content":{"responseParts":{"functionResponse":{"response":{"output":"result text"}}}}
 	}]`
-	_, _, _, _, trs := ExtractTextContent(gjson.Parse(content))
+	_, _, _, _, _, trs := ExtractTextContent(gjson.Parse(content))
 	if len(trs) != 1 {
 		t.Fatalf("expected 1 tool result, got %d", len(trs))
 	}
@@ -396,7 +396,7 @@ func TestExtractTextContent_IflowToolResult(t *testing.T) {
 		"tool_use_id":"tu_456",
 		"content":{"other":"data"}
 	}]`
-	_, _, _, _, trs2 := ExtractTextContent(gjson.Parse(noOutput))
+	_, _, _, _, _, trs2 := ExtractTextContent(gjson.Parse(noOutput))
 	if len(trs2) != 1 {
 		t.Fatalf("expected 1 tool result, got %d", len(trs2))
 	}
@@ -1409,6 +1409,11 @@ func TestGeminiSessionID(t *testing.T) {
 	got := GeminiSessionID(data)
 	if got != "abc-123" {
 		t.Errorf("GeminiSessionID = %q, want %q", got, "abc-123")
+	}
+
+	got = GeminiSessionID([]byte("{\"sessionId\":\"jsonl-123\"}\n{\"type\":\"user\"}\n"))
+	if got != "jsonl-123" {
+		t.Errorf("GeminiSessionID JSONL = %q, want %q", got, "jsonl-123")
 	}
 
 	got = GeminiSessionID([]byte(`{}`))

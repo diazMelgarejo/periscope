@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/sync"
 )
 
 // SyncStats summarizes the outcome of a remote sync run.
@@ -76,8 +76,8 @@ func (rs *RemoteSync) Run(
 	// and track remote<->temp dir mappings for path
 	// translation.
 	engineDirs := make(map[parser.AgentType][]string)
-	var remoteDirs []string
-	var tempDirs []string
+	remoteDirs := make([]string, 0)
+	tempDirs := make([]string, 0)
 	for agentType, agentDirList := range dirs {
 		for _, remoteDir := range agentDirList {
 			local := remappedDir(tmpDir, remoteDir)

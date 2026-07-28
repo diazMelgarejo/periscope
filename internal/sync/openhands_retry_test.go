@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/wesm/agentsview/internal/dbtest"
-	"github.com/wesm/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {

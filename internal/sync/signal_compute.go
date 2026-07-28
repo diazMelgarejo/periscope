@@ -3,8 +3,8 @@ package sync
 import (
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/signals"
 )
 
 // computeSignalsFromMessages produces a SessionSignalUpdate from
@@ -130,7 +130,7 @@ func computeSignalsFromMessages(
 func extractToolCallRows(
 	msgs []db.Message,
 ) []signals.ToolCallRow {
-	var rows []signals.ToolCallRow
+	rows := make([]signals.ToolCallRow, 0)
 	for _, m := range msgs {
 		for callIdx, tc := range m.ToolCalls {
 			status := ""
@@ -217,6 +217,9 @@ func extractMostCommonModel(msgs []db.Message) string {
 func extractLastMessageRole(
 	msgs []db.Message,
 ) (role, content string) {
+	if msgs == nil {
+		return "", ""
+	}
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if !msgs[i].IsSystem {
 			return msgs[i].Role, msgs[i].Content

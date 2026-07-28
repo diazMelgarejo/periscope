@@ -6,15 +6,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	gosync "sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 func openTestDB(t *testing.T) *db.DB {
@@ -960,6 +961,70 @@ func TestBlockedCategorySet(t *testing.T) {
 	}
 }
 
+func TestOpenCodeLegacyArchiveLooksIncomplete(t *testing.T) {
+	stored := []db.Message{
+		{
+			Ordinal:          1,
+			Role:             "assistant",
+			ContentLength:    100,
+			HasOutputTokens:  true,
+			OutputTokens:     200,
+			HasContextTokens: true,
+			ContextTokens:    400,
+			ToolCalls:        []db.ToolCall{{ToolName: "Read"}},
+			HasThinking:      true,
+		},
+	}
+
+	t.Run("extra parsed messages still preserve incomplete prefix", func(t *testing.T) {
+		parsed := []db.Message{
+			{
+				Ordinal:          1,
+				Role:             "assistant",
+				ContentLength:    50,
+				HasOutputTokens:  false,
+				HasContextTokens: false,
+				ToolCalls:        nil,
+				HasThinking:      false,
+			},
+			{
+				Ordinal:       2,
+				Role:          "assistant",
+				ContentLength: 25,
+			},
+		}
+
+		if !openCodeLegacyArchiveLooksIncomplete(parsed, stored) {
+			t.Fatal("want incomplete archive detection")
+		}
+	})
+
+	t.Run("extra parsed messages with complete prefix do not preserve", func(t *testing.T) {
+		parsed := []db.Message{
+			{
+				Ordinal:          1,
+				Role:             "assistant",
+				ContentLength:    100,
+				HasOutputTokens:  true,
+				OutputTokens:     200,
+				HasContextTokens: true,
+				ContextTokens:    400,
+				ToolCalls:        []db.ToolCall{{ToolName: "Read"}},
+				HasThinking:      true,
+			},
+			{
+				Ordinal:       2,
+				Role:          "assistant",
+				ContentLength: 25,
+			},
+		}
+
+		if openCodeLegacyArchiveLooksIncomplete(parsed, stored) {
+			t.Fatal("got incomplete archive detection, want false")
+		}
+	})
+}
+
 // fakeEmitter records scopes passed to Emit. Thread-safe so it
 // can be called from engine goroutines under test.
 type fakeEmitter struct {
@@ -1161,6 +1226,334 @@ func TestEngine_SyncPathsDoesNotEmitOnNoMatches(t *testing.T) {
 	}
 }
 
+func TestEngine_ClassifyOnePathClaudeStatPermissionErrorStillClassifies(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission semantics differ on Windows")
+	}
+
+	db := openTestDB(t)
+	claudeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+		},
+		Machine: "local",
+	})
+
+	projectDir := filepath.Join(claudeDir, "proj")
+	path := filepath.Join(projectDir, "session.jsonl")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", projectDir, err)
+	}
+	if err := os.WriteFile(path, []byte("[]"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	if err := os.Chmod(projectDir, 0o000); err != nil {
+		t.Fatalf("Chmod(%q): %v", projectDir, err)
+	}
+	defer func() {
+		_ = os.Chmod(projectDir, 0o755)
+	}()
+
+	got, ok := engine.classifyOnePath(path, nil)
+	if !ok {
+		t.Fatal("expected path to classify despite stat permission error")
+	}
+	if got.Path != path {
+		t.Fatalf("Path = %q, want %q", got.Path, path)
+	}
+	if got.Agent != parser.AgentClaude {
+		t.Fatalf("Agent = %q, want %q", got.Agent, parser.AgentClaude)
+	}
+}
+
+func TestEngine_ClassifyPathsDedupesOpenCodeChildPaths(t *testing.T) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	partPath := filepath.Join(
+		opencodeDir, "storage", "part", "msg_1",
+		"part_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+		partPath:    `{"id":"part_1","sessionID":"ses_123","messageID":"msg_1","type":"text","text":"hi","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	files := engine.classifyPaths([]string{
+		messagePath,
+		partPath,
+	})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
+func TestEngine_ClassifyPathsOpenCodeRemovedMessageDir(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	messageDir := filepath.Dir(messagePath)
+	if err := os.RemoveAll(messageDir); err != nil {
+		t.Fatalf("RemoveAll(%q): %v", messageDir, err)
+	}
+
+	files := engine.classifyPaths([]string{messageDir})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
+func TestEngine_ClassifyPathsOpenCodeSQLiteWALFile(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	dbPath := filepath.Join(opencodeDir, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", dbPath, err)
+	}
+	walPath := filepath.Join(opencodeDir, "opencode.db-wal")
+	if err := os.WriteFile(walPath, []byte("wal"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", walPath, err)
+	}
+
+	files := engine.classifyPaths([]string{walPath})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != dbPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, dbPath)
+	}
+}
+
+func TestEngine_ClassifyPathsOpenCodeRemovedMessageFile(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("Remove(%q): %v", messagePath, err)
+	}
+
+	files := engine.classifyPaths([]string{messagePath})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
+func TestEngine_ClassifyPathsOpenCodeRemovedPartDir(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	partPath := filepath.Join(
+		opencodeDir, "storage", "part", "msg_1",
+		"part_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+		partPath:    `{"id":"part_1","messageID":"msg_1","type":"text","text":"hi","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	partDir := filepath.Dir(partPath)
+	if err := os.RemoveAll(partDir); err != nil {
+		t.Fatalf("RemoveAll(%q): %v", partDir, err)
+	}
+
+	files := engine.classifyPaths([]string{partDir})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
+func TestEngine_ClassifyPathsOpenCodeRemovedPartFile(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	partPath := filepath.Join(
+		opencodeDir, "storage", "part", "msg_1",
+		"part_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+		partPath:    `{"id":"part_1","messageID":"msg_1","type":"text","text":"hi","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	if err := os.Remove(partPath); err != nil {
+		t.Fatalf("Remove(%q): %v", partPath, err)
+	}
+
+	files := engine.classifyPaths([]string{partPath})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
 func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
 	fx := newEngineFixture(t)
 	em := &fakeEmitter{}
@@ -1186,5 +1579,46 @@ func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
 	}
 	if got[0] != "messages" {
 		t.Errorf("SyncSingleSession scope: got %q, want %q", got[0], "messages")
+	}
+}
+
+func TestToDBSessionTerminationStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		in   parser.TerminationStatus
+		want *string
+	}{
+		{name: "empty maps to nil", in: "", want: nil},
+		{name: "clean maps to pointer", in: parser.TerminationClean, want: new("clean")},
+		{name: "tool_call_pending maps to pointer", in: parser.TerminationToolCallPending, want: new("tool_call_pending")},
+		{name: "truncated maps to pointer", in: parser.TerminationTruncated, want: new("truncated")},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pw := pendingWrite{
+				sess: parser.ParsedSession{
+					ID:                "s1",
+					Project:           "p",
+					Machine:           "m",
+					Agent:             parser.AgentClaude,
+					StartedAt:         time.Now(),
+					EndedAt:           time.Now(),
+					MessageCount:      1,
+					UserMessageCount:  1,
+					TerminationStatus: tc.in,
+				},
+			}
+			got := toDBSession(pw)
+
+			if (got.TerminationStatus == nil) != (tc.want == nil) {
+				t.Fatalf("nil mismatch: got=%v want=%v",
+					got.TerminationStatus, tc.want)
+			}
+			if got.TerminationStatus != nil && *got.TerminationStatus != *tc.want {
+				t.Fatalf("value mismatch: got=%q want=%q",
+					*got.TerminationStatus, *tc.want)
+			}
+		})
 	}
 }

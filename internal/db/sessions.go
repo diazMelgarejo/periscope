@@ -21,6 +21,11 @@ var ErrInvalidCursor = errors.New("invalid cursor")
 // skip any follow-up writes (messages, tool_calls) for this session.
 var ErrSessionExcluded = errors.New("session excluded")
 
+// ErrSessionTrashed is returned by UpsertSession when the
+// session currently exists in the trash. Upload/import callers
+// should surface a conflict instead of silently overwriting it.
+var ErrSessionTrashed = errors.New("session trashed")
+
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
@@ -44,7 +49,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, created_at`
+	deleted_at, termination_status, created_at`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -69,7 +74,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, file_path, file_size, created_at`
+	deleted_at, termination_status, file_path, file_size, created_at`
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
@@ -93,7 +98,8 @@ const sessionFullCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, file_path, file_size, file_mtime,
+	deleted_at, termination_status, file_path, file_size, file_mtime,
+	file_inode, file_device,
 	file_hash, local_modified_at, created_at`
 
 const (
@@ -135,7 +141,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.DeletedAt, &s.CreatedAt,
+		&s.DeletedAt, &s.TerminationStatus, &s.CreatedAt,
 	)
 	return s, err
 }
@@ -187,13 +193,16 @@ type Session struct {
 	ParserMalformedLines   int      `json:"parser_malformed_lines,omitempty"`
 	IsTruncated            bool     `json:"is_truncated,omitempty"`
 
-	DeletedAt       *string `json:"deleted_at,omitempty"`
-	FilePath        *string `json:"file_path,omitempty"`
-	FileSize        *int64  `json:"file_size,omitempty"`
-	FileMtime       *int64  `json:"file_mtime,omitempty"`
-	FileHash        *string `json:"file_hash,omitempty"`
-	LocalModifiedAt *string `json:"local_modified_at,omitempty"`
-	CreatedAt       string  `json:"created_at"`
+	DeletedAt         *string `json:"deleted_at,omitempty"`
+	TerminationStatus *string `json:"termination_status,omitempty"`
+	FilePath          *string `json:"file_path,omitempty"`
+	FileSize          *int64  `json:"file_size,omitempty"`
+	FileMtime         *int64  `json:"file_mtime,omitempty"`
+	FileInode         *int64  `json:"file_inode,omitempty"`
+	FileDevice        *int64  `json:"file_device,omitempty"`
+	FileHash          *string `json:"file_hash,omitempty"`
+	LocalModifiedAt   *string `json:"local_modified_at,omitempty"`
+	CreatedAt         string  `json:"created_at"`
 }
 
 // SessionCursor is the opaque pagination token.
@@ -294,6 +303,76 @@ type SessionFilter struct {
 	MinToolFailures  *int     // minimum tool_failure_signal_count
 	Cursor           string   // opaque cursor from previous page
 	Limit            int
+	// Termination filters by termination_status:
+	//   "" or "all"  → no filter (default)
+	//   "clean"      → only sessions with status = 'clean'
+	//   "unclean"    → only sessions with status IN
+	//                  ('tool_call_pending', 'truncated')
+	Termination string
+}
+
+// activeWindow is the freshness window for "active" sessions
+// (last activity within this duration).
+const activeWindow = 10 * time.Minute
+
+// staleWindow is the upper bound for "stale" sessions. Past this
+// idle duration with an orphan tool call, the session is "unclean".
+const staleWindow = 60 * time.Minute
+
+// activityExprSQLite computes seconds-since-epoch of the most
+// recent activity timestamp. Used by both sessions and analytics
+// filters when classifying by status.
+const activityExprSQLite = "CAST(strftime('%s', " +
+	"COALESCE(ended_at, started_at, created_at)) AS INTEGER)"
+
+// buildTerminationPredSQLite returns a WHERE fragment and args for
+// the multi-state termination filter (active / stale / unclean).
+// The status value may be comma-separated to OR multiple states
+// (e.g. "stale,unclean"). Returns ("", nil) when empty or "all".
+//
+// Stale and unclean both require a parser red flag
+// (tool_call_pending or truncated). Sessions classified as clean
+// or with NULL termination_status never appear under those
+// filters — the parser-side classifier is the only positive
+// signal that something is wrong. Active is purely time-based:
+// any session written to in the last activeWindow qualifies.
+func buildTerminationPredSQLite(status string) (string, []any) {
+	if status == "" || status == "all" {
+		return "", nil
+	}
+	now := time.Now().Unix()
+	activeCutoff := now - int64(activeWindow.Seconds())
+	staleCutoff := now - int64(staleWindow.Seconds())
+	const flagged = "termination_status IN ('tool_call_pending', 'truncated')"
+
+	parts := strings.Split(status, ",")
+	preds := make([]string, 0, len(parts))
+	args := make([]any, 0, len(parts)*2)
+	for _, p := range parts {
+		switch strings.TrimSpace(p) {
+		case "active":
+			preds = append(preds, activityExprSQLite+" > ?")
+			args = append(args, activeCutoff)
+		case "stale":
+			preds = append(preds, "("+activityExprSQLite+" > ? AND "+
+				activityExprSQLite+" <= ? AND "+flagged+")")
+			args = append(args, staleCutoff, activeCutoff)
+		case "unclean":
+			preds = append(preds, "("+activityExprSQLite+" <= ? AND "+flagged+")")
+			args = append(args, staleCutoff)
+		case "clean":
+			preds = append(preds, "termination_status = 'clean'")
+		case "awaiting_user":
+			preds = append(preds, "termination_status = 'awaiting_user'")
+		}
+	}
+	if len(preds) == 0 {
+		return "", nil
+	}
+	if len(preds) == 1 {
+		return preds[0], args
+	}
+	return "(" + strings.Join(preds, " OR ") + ")", args
 }
 
 // SessionPage is a page of session results.
@@ -401,6 +480,11 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		filterPreds = append(filterPreds, "user_message_count >= ?")
 		filterArgs = append(filterArgs, f.MinUserMessages)
 	}
+	if pred, args := buildTerminationPredSQLite(f.Termination); pred != "" {
+		filterPreds = append(filterPreds, pred)
+		filterArgs = append(filterArgs, args...)
+	}
+	// "" and "all" add no predicate.
 
 	// ExcludeOneShot is handled separately from filterPreds
 	// when IncludeChildren is true. Children (subagents, forks)
@@ -454,42 +538,52 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		filterArgs = append(filterArgs, *f.MinToolFailures)
 	}
 
-	// Simple case: no IncludeChildren or no user filters.
-	hasFilters := len(filterPreds) > 0 || oneShotPred != ""
-	if !f.IncludeChildren || !hasFilters {
+	// Simple case: children not included — basePreds already
+	// carries the relationship_type guard, so subagent/fork
+	// rows are dropped and no OR-branch is needed.
+	if !f.IncludeChildren {
 		allPreds := append(basePreds, filterPreds...)
+		if oneShotPred != "" {
+			allPreds = append(allPreds, oneShotPred)
+		}
 		return strings.Join(allPreds, " AND "), filterArgs
 	}
 
-	// IncludeChildren + filters: match the filter directly,
-	// or be a child of a session that matches the filter.
-	// This scopes children to their parent's filter match
-	// instead of including all children in the database.
+	// IncludeChildren: compute the transitive closure of rows
+	// reachable from qualifying roots via parent_session_id,
+	// then restrict the outer query to that set. A plain
+	// single-level parent subquery is not sufficient — a
+	// subagent that passes the user filters can appear in
+	// that subquery and drag its own children through as fake
+	// roots, even when the subagent itself is filtered out by
+	// the relationship guard. The CTE invariant "every
+	// included row has a full parent chain back to a
+	// rootMatch-passing root" handles this at any depth.
 	baseWhere := strings.Join(basePreds, " AND ")
 
-	// Root match: must pass all filter predicates + one-shot.
 	rootMatchParts := append([]string{}, filterPreds...)
 	if oneShotPred != "" {
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
+	rootMatchParts = append(rootMatchParts,
+		"relationship_type NOT IN ('subagent', 'fork')")
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 
-	// Subquery for parent inclusion: same criteria as root
-	// match so only children of qualifying parents appear.
-	subqWhere := "message_count > 0 AND deleted_at IS NULL"
-	if rootMatch != "" {
-		subqWhere += " AND " + rootMatch
-	}
+	// UNION (not UNION ALL) in the recursive step deduplicates
+	// and guards against cyclic parent chains. Depth in real
+	// data is 1-2, so the perf cost is negligible.
+	cte := "WITH RECURSIVE tree(id) AS (" +
+		"SELECT id FROM sessions" +
+		" WHERE message_count > 0 AND deleted_at IS NULL AND " +
+		rootMatch +
+		" UNION " +
+		"SELECT s.id FROM sessions s" +
+		" JOIN tree t ON s.parent_session_id = t.id" +
+		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
+		") SELECT id FROM tree"
 
-	where := baseWhere + " AND (" + rootMatch +
-		" OR parent_session_id IN" +
-		" (SELECT id FROM sessions WHERE " + subqWhere + "))"
-
-	// Args appear twice: outer root match + subquery.
-	allArgs := make([]any, 0, len(filterArgs)*2)
-	allArgs = append(allArgs, filterArgs...)
-	allArgs = append(allArgs, filterArgs...)
-	return where, allArgs
+	where := baseWhere + " AND id IN (" + cte + ")"
+	return where, filterArgs
 }
 
 // ListSessions returns a cursor-paginated list of sessions.
@@ -629,8 +723,9 @@ func (db *DB) GetSessionFull(
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.DeletedAt, &s.FilePath, &s.FileSize,
-		&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
+		&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
+		&s.FileMtime, &s.FileInode, &s.FileDevice,
+		&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -664,35 +759,7 @@ func (db *DB) PurgeExcludedSessions() error {
 	return err
 }
 
-// UpsertSession inserts or updates a session.
-// Sessions that were permanently deleted (in excluded_sessions)
-// are silently skipped.
-func (db *DB) UpsertSession(s Session) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	// Check exclusion under the write lock to avoid a race with
-	// concurrent DeleteSession/EmptyTrash.
-	var excluded int
-	_ = db.getWriter().QueryRow(
-		"SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
-	).Scan(&excluded)
-	if excluded == 1 {
-		return ErrSessionExcluded
-	}
-
-	isAutomated := s.UserMessageCount <= 1 &&
-		s.FirstMessage != nil &&
-		IsAutomatedSession(*s.FirstMessage)
-
-	// data_version is intentionally NOT advanced here. The
-	// caller must call SetSessionDataVersion only after the
-	// associated message rewrite succeeds, so a transient
-	// failure to write messages doesn't mark the file as
-	// up-to-date and starve the rewrite on the next sync.
-	// New rows are seeded with 0 (the default) and bumped to
-	// the current version once their messages land.
-	_, err := db.getWriter().Exec(`
+const upsertSessionSQL = `
 		INSERT INTO sessions (
 			id, project, machine, agent, first_message, display_name,
 			started_at, ended_at, message_count,
@@ -703,11 +770,13 @@ func (db *DB) UpsertSession(s Session) error {
 			has_total_output_tokens, has_peak_context_tokens,
 			has_model_context_window_tokens,
 			is_automated,
+			termination_status,
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
 			is_truncated,
-			file_path, file_size, file_mtime, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			file_path, file_size, file_mtime,
+			file_inode, file_device, file_hash
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -726,6 +795,7 @@ func (db *DB) UpsertSession(s Session) error {
 			has_peak_context_tokens = excluded.has_peak_context_tokens,
 			has_model_context_window_tokens = excluded.has_model_context_window_tokens,
 			is_automated = excluded.is_automated,
+			termination_status = excluded.termination_status,
 			cwd = excluded.cwd,
 			git_branch = excluded.git_branch,
 			source_session_id = excluded.source_session_id,
@@ -735,7 +805,18 @@ func (db *DB) UpsertSession(s Session) error {
 			file_path = excluded.file_path,
 			file_size = excluded.file_size,
 			file_mtime = excluded.file_mtime,
-			file_hash = excluded.file_hash`,
+			file_inode = excluded.file_inode,
+			file_device = excluded.file_device,
+			file_hash = excluded.file_hash`
+
+func sessionIsAutomated(s Session) bool {
+	return s.UserMessageCount <= 1 &&
+		s.FirstMessage != nil &&
+		IsAutomatedSession(*s.FirstMessage)
+}
+
+func upsertSessionArgs(s Session) []any {
+	return []any{
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.DisplayName,
 		s.StartedAt, s.EndedAt, s.MessageCount,
 		s.UserMessageCount, s.ParentSessionID,
@@ -744,11 +825,51 @@ func (db *DB) UpsertSession(s Session) error {
 		s.ModelContextWindowTokens,
 		s.HasTotalOutputTokens, s.HasPeakContextTokens,
 		s.HasModelContextWindowTokens,
-		isAutomated,
+		sessionIsAutomated(s),
+		s.TerminationStatus,
 		s.Cwd, s.GitBranch, s.SourceSessionID,
 		s.SourceVersion, s.ParserMalformedLines,
 		s.IsTruncated,
-		s.FilePath, s.FileSize, s.FileMtime, s.FileHash)
+		s.FilePath, s.FileSize, s.FileMtime,
+		s.FileInode, s.FileDevice, s.FileHash,
+	}
+}
+
+// UpsertSession inserts or updates a session.
+// Sessions that were permanently deleted (in excluded_sessions)
+// or currently in the trash are rejected.
+func (db *DB) UpsertSession(s Session) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Check exclusion/trash state under the write lock to avoid a race with
+	// concurrent DeleteSession/EmptyTrash/RestoreSession.
+	var excluded int
+	_ = db.getWriter().QueryRow(
+		"SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
+	).Scan(&excluded)
+	if excluded == 1 {
+		return ErrSessionExcluded
+	}
+	var trashed int
+	_ = db.getWriter().QueryRow(
+		"SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL", s.ID,
+	).Scan(&trashed)
+	if trashed == 1 {
+		return ErrSessionTrashed
+	}
+
+	// data_version is intentionally NOT advanced here. The
+	// caller must call SetSessionDataVersion only after the
+	// associated message rewrite succeeds, so a transient
+	// failure to write messages doesn't mark the file as
+	// up-to-date and starve the rewrite on the next sync.
+	// New rows are seeded with 0 (the default) and bumped to
+	// the current version once their messages land.
+	_, err := db.getWriter().Exec(
+		upsertSessionSQL,
+		upsertSessionArgs(s)...,
+	)
 	if err != nil {
 		return fmt.Errorf("upserting session %s: %w", s.ID, err)
 	}
@@ -998,12 +1119,19 @@ func (db *DB) GetSessionVersion(
 }
 
 // IncrementalInfo holds the data needed for incremental
-// re-parsing of an append-only session file.
+// re-parsing of an append-only session file. FirstMessage is
+// the currently stored preview text; the sync engine uses it to
+// decide whether the Claude parser's skip-command path has left
+// the preview empty and a full parse should be forced.
 type IncrementalInfo struct {
 	ID                          string
 	FileSize                    int64
+	FileMtime                   int64
+	FileInode                   int64
+	FileDevice                  int64
 	MsgCount                    int
 	UserMsgCount                int
+	FirstMessage                string
 	TotalOutputTokens           int
 	PeakContextTokens           int
 	ModelContextWindowTokens    int
@@ -1025,25 +1153,33 @@ func (db *DB) GetSessionForIncremental(
 	var count int
 	err := db.getReader().QueryRow(
 		`SELECT COUNT(*) FROM sessions
-		 WHERE file_path = ?`, path,
+		 WHERE file_path = ?
+		   AND deleted_at IS NULL`, path,
 	).Scan(&count)
 	if err != nil || count != 1 {
 		return nil, false
 	}
 
 	var info IncrementalInfo
-	var fs sql.NullInt64
+	var fs, fm, fi, fd sql.NullInt64
+	var firstMsg sql.NullString
 	err = db.getReader().QueryRow(
-		`SELECT id, file_size, message_count,
-			user_message_count,
+		`SELECT id, file_size, file_mtime,
+			file_inode, file_device,
+			message_count, user_message_count,
+			first_message,
 			total_output_tokens, peak_context_tokens,
 			model_context_window_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
 			has_model_context_window_tokens
-		 FROM sessions WHERE file_path = ?`,
+		 FROM sessions
+		 WHERE file_path = ?
+		   AND deleted_at IS NULL`,
 		path,
 	).Scan(
-		&info.ID, &fs, &info.MsgCount, &info.UserMsgCount,
+		&info.ID, &fs, &fm, &fi, &fd,
+		&info.MsgCount, &info.UserMsgCount,
+		&firstMsg,
 		&info.TotalOutputTokens, &info.PeakContextTokens,
 		&info.ModelContextWindowTokens,
 		&info.HasTotalOutputTokens, &info.HasPeakContextTokens,
@@ -1052,8 +1188,20 @@ func (db *DB) GetSessionForIncremental(
 	if err != nil {
 		return nil, false
 	}
+	if firstMsg.Valid {
+		info.FirstMessage = firstMsg.String
+	}
 	if fs.Valid {
 		info.FileSize = fs.Int64
+	}
+	if fm.Valid {
+		info.FileMtime = fm.Int64
+	}
+	if fi.Valid {
+		info.FileInode = fi.Int64
+	}
+	if fd.Valid {
+		info.FileDevice = fd.Int64
 	}
 	info.HasTotalOutputTokens =
 		info.HasTotalOutputTokens || info.TotalOutputTokens != 0
@@ -1070,6 +1218,24 @@ func (db *DB) GetSessionForIncremental(
 // user_message_count, file_size, file_mtime, and token
 // aggregates. All values are absolute (not deltas) so the
 // update is idempotent on retry.
+//
+// is_automated is recomputed from the current first_message and
+// the new user_message_count so that classifier additions reach
+// rows that only ever take the incremental path. Without this,
+// a row whose first parse predates a new pattern would stay
+// is_automated=0 indefinitely (UpsertSession sets the flag once
+// at insert; the incremental path never re-evaluates it).
+//
+// termination_status is cleared to NULL on every incremental
+// write. The classifier needs the full message slice to reach the
+// right verdict (orphan tool calls, awaiting_user, etc.) and the
+// incremental path only sees the new tail. Leaving the previous
+// classification in place would surface stale "tool_call_pending"
+// or "awaiting_user" indicators in the UI for up to 15 minutes
+// (the periodic full-resync interval) after the user appended a
+// resolving result or sent a new message. Clearing makes the
+// session render with the time-based StatusDot tier (working /
+// idle / quiet) until the next full sync reclassifies.
 func (db *DB) UpdateSessionIncremental(
 	id string,
 	endedAt *string,
@@ -1082,17 +1248,29 @@ func (db *DB) UpdateSessionIncremental(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// is_automated requires single-turn (user_message_count <= 1).
-	// When the count grows past 1, clear the flag in SQL without
-	// an extra SELECT. UpsertSession already sets the flag for new
-	// sessions, so the only incremental transition is clearing it.
+	isAutomated := false
+	if userMsgCount <= 1 {
+		var fm sql.NullString
+		err := db.getReader().QueryRow(
+			"SELECT first_message FROM sessions WHERE id = ?", id,
+		).Scan(&fm)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf(
+				"reading first_message for incremental update %s: %w",
+				id, err,
+			)
+		}
+		if fm.Valid {
+			isAutomated = IsAutomatedSession(fm.String)
+		}
+	}
+
 	_, err := db.getWriter().Exec(`
 		UPDATE sessions SET
 			ended_at = COALESCE(?, ended_at),
 			message_count = ?,
 			user_message_count = ?,
-			is_automated = CASE WHEN ? > 1 THEN 0
-				ELSE is_automated END,
+			is_automated = ?,
 			file_size = ?,
 			file_mtime = ?,
 			total_output_tokens = ?,
@@ -1100,9 +1278,10 @@ func (db *DB) UpdateSessionIncremental(
 			model_context_window_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
-			has_model_context_window_tokens = ?
+			has_model_context_window_tokens = ?,
+			termination_status = NULL
 		WHERE id = ?`,
-		endedAt, msgCount, userMsgCount, userMsgCount,
+		endedAt, msgCount, userMsgCount, isAutomated,
 		fileSize, fileMtime,
 		totalOutputTokens, peakContextTokens,
 		modelContextWindowTokens,
@@ -1464,7 +1643,9 @@ func (db *DB) FindPruneCandidates(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.ModelContextWindowTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+			&s.HasModelContextWindowTokens,
 			&s.IsAutomated,
 			&s.ToolFailureSignalCount, &s.ToolRetryCount,
 			&s.EditChurnCount, &s.ConsecutiveFailureMax,
@@ -1479,7 +1660,7 @@ func (db *DB) FindPruneCandidates(
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.ParserMalformedLines, &s.IsTruncated,
-			&s.DeletedAt, &s.FilePath, &s.FileSize, &s.CreatedAt,
+			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize, &s.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning prune candidate: %w", err)
@@ -1740,7 +1921,9 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.ModelContextWindowTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+			&s.HasModelContextWindowTokens,
 			&s.IsAutomated,
 			&s.ToolFailureSignalCount, &s.ToolRetryCount,
 			&s.EditChurnCount, &s.ConsecutiveFailureMax,
@@ -1755,8 +1938,9 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.ParserMalformedLines, &s.IsTruncated,
-			&s.DeletedAt, &s.FilePath, &s.FileSize,
-			&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
+			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
+			&s.FileMtime, &s.FileInode, &s.FileDevice,
+			&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)

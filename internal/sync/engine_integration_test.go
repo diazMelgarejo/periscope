@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/dbtest"
-	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/sync"
-	"github.com/wesm/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 type testEnv struct {
@@ -26,6 +26,8 @@ type testEnv struct {
 	cursorDir   string
 	geminiDir   string
 	opencodeDir string
+	forgeDir    string
+	piebaldDir  string
 	iflowDir    string
 	ampDir      string
 	piDir       string
@@ -34,9 +36,11 @@ type testEnv struct {
 }
 
 type testEnvOpts struct {
-	claudeDirs []string
-	codexDirs  []string
-	cursorDirs []string
+	claudeDirs   []string
+	codexDirs    []string
+	cursorDirs   []string
+	opencodeDirs []string
+	emitter      sync.Emitter
 }
 
 type TestEnvOption func(*testEnvOpts)
@@ -59,6 +63,18 @@ func WithCursorDirs(dirs []string) TestEnvOption {
 	}
 }
 
+func WithOpenCodeDirs(dirs []string) TestEnvOption {
+	return func(o *testEnvOpts) {
+		o.opencodeDirs = dirs
+	}
+}
+
+func WithEmitter(em sync.Emitter) TestEnvOption {
+	return func(o *testEnvOpts) {
+		o.emitter = em
+	}
+}
+
 func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	t.Helper()
 	if testing.Short() {
@@ -71,12 +87,13 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	}
 
 	env := &testEnv{
-		geminiDir:   t.TempDir(),
-		opencodeDir: t.TempDir(),
-		iflowDir:    t.TempDir(),
-		ampDir:      t.TempDir(),
-		piDir:       t.TempDir(),
-		db:          dbtest.OpenTestDB(t),
+		geminiDir:  t.TempDir(),
+		forgeDir:   t.TempDir(),
+		piebaldDir: t.TempDir(),
+		iflowDir:   t.TempDir(),
+		ampDir:     t.TempDir(),
+		piDir:      t.TempDir(),
+		db:         dbtest.OpenTestDB(t),
 	}
 
 	claudeDirs := options.claudeDirs
@@ -103,20 +120,50 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		env.cursorDir = cursorDirs[0]
 	}
 
+	opencodeDirs := options.opencodeDirs
+	if len(opencodeDirs) == 0 {
+		env.opencodeDir = t.TempDir()
+		opencodeDirs = []string{env.opencodeDir}
+	} else {
+		env.opencodeDir = opencodeDirs[0]
+	}
+
 	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude:   claudeDirs,
 			parser.AgentCodex:    codexDirs,
 			parser.AgentCursor:   cursorDirs,
 			parser.AgentGemini:   {env.geminiDir},
-			parser.AgentOpenCode: {env.opencodeDir},
+			parser.AgentOpenCode: opencodeDirs,
+			parser.AgentForge:    {env.forgeDir},
+			parser.AgentPiebald:  {env.piebaldDir},
 			parser.AgentIflow:    {env.iflowDir},
 			parser.AgentAmp:      {env.ampDir},
 			parser.AgentPi:       {env.piDir},
 		},
 		Machine: "local",
+		Emitter: options.emitter,
 	})
 	return env
+}
+
+type fakeEmitter struct {
+	mu     gosync.Mutex
+	scopes []string
+}
+
+func (f *fakeEmitter) Emit(scope string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scopes = append(f.scopes, scope)
+}
+
+func (f *fakeEmitter) got() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.scopes))
+	copy(out, f.scopes)
+	return out
 }
 
 // writeSession creates a JSONL session file under baseDir at
@@ -371,14 +418,114 @@ func TestSyncEngineProgress(t *testing.T) {
 			t, "test-proj", name+".jsonl", msg,
 		)
 	}
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(t, 42, "Piebald", "Prompt.", "Answer.", "2026-05-01T10:05:00Z")
 
 	var progressCalls int
+	var firstTotal int
+	var last sync.Progress
 	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
 		progressCalls++
+		if firstTotal == 0 {
+			firstTotal = p.SessionsTotal
+		}
+		last = p
 	})
 
 	if progressCalls == 0 {
 		t.Error("expected progress callbacks")
+	}
+	if firstTotal != 4 {
+		t.Errorf("first progress total = %d, want 4", firstTotal)
+	}
+	if last.SessionsDone != 4 || last.SessionsTotal != 4 {
+		t.Errorf("last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
+	}
+
+	progressCalls = 0
+	firstTotal = 0
+	last = sync.Progress{}
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		progressCalls++
+		if firstTotal == 0 {
+			firstTotal = p.SessionsTotal
+		}
+		last = p
+	})
+	if progressCalls == 0 {
+		t.Error("expected progress callbacks on second sync")
+	}
+	if firstTotal != 4 {
+		t.Errorf("second first progress total = %d, want 4", firstTotal)
+	}
+	if last.SessionsDone != 4 || last.SessionsTotal != 4 {
+		t.Errorf("second last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
+	}
+}
+
+func TestSyncEngineProgressEmitsPhaseDoneOnce(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "msg").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
+
+	var events []sync.Progress
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		events = append(events, p)
+	})
+
+	var doneCount int
+	var firstDoneIdx = -1
+	for i, e := range events {
+		if e.Phase == sync.PhaseDone {
+			doneCount++
+			if firstDoneIdx == -1 {
+				firstDoneIdx = i
+			}
+		}
+	}
+	if doneCount != 1 {
+		t.Fatalf("PhaseDone emitted %d times, want exactly 1; events=%+v", doneCount, events)
+	}
+	if firstDoneIdx != len(events)-1 {
+		t.Fatalf("PhaseDone at index %d, want last event (index %d)", firstDoneIdx, len(events)-1)
+	}
+	last := events[len(events)-1]
+	if last.SessionsDone != last.SessionsTotal || last.SessionsTotal != 2 {
+		t.Fatalf("final progress = %d/%d, want 2/2", last.SessionsDone, last.SessionsTotal)
+	}
+}
+
+func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "msg").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
+	piebald.addChat(t, 2, "Chat B", "Prompt B.", "Answer B.", "2026-05-01T10:02:00Z")
+
+	var seen []sync.Progress
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		seen = append(seen, p)
+	})
+	if len(seen) == 0 {
+		t.Fatal("expected progress callbacks")
+	}
+	last := seen[len(seen)-1]
+	if last.Phase != sync.PhaseDone {
+		t.Fatalf("last phase = %q, want done", last.Phase)
+	}
+	if last.SessionsDone != last.SessionsTotal || last.SessionsTotal != 3 {
+		t.Fatalf("last progress = %d/%d, want 3/3", last.SessionsDone, last.SessionsTotal)
 	}
 }
 
@@ -1032,6 +1179,41 @@ func TestSyncPathsGemini(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "gemini:"+sessionID, 2)
 }
 
+func TestSyncPathsGeminiJSONL(t *testing.T) {
+	env := setupTestEnv(t)
+
+	sessionID := "gem-test-jsonl"
+	hash := "abcdef1234567890"
+	content := strings.Join([]string{
+		`{"sessionId":"gem-test-jsonl","projectHash":"abcdef1234567890","startTime":"` + tsEarly + `","lastUpdated":"` + tsEarly + `","kind":"main"}`,
+		`{"id":"m1","timestamp":"` + tsEarly + `","type":"user","content":[{"text":"Hello Gemini"}]}`,
+		`{"$set":{"lastUpdated":"` + tsEarlyS5 + `"}}`,
+		`{"id":"m2","timestamp":"` + tsEarlyS5 + `","type":"gemini","content":"Hi there!","model":"gemini-3.1-pro-preview","tokens":{"input":10,"output":5,"cached":0}}`,
+	}, "\n")
+
+	path := env.writeGeminiSession(
+		t,
+		filepath.Join(
+			"tmp", hash, "chats",
+			"session-001.jsonl",
+		),
+		content,
+	)
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			if sess.Agent != "gemini" {
+				t.Errorf("agent = %q, want gemini",
+					sess.Agent)
+			}
+		},
+	)
+	assertSessionMessageCount(t, env.db, "gemini:"+sessionID, 2)
+}
+
 func TestSyncPathsCodexRejectsFlat(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -1317,6 +1499,134 @@ func TestSyncSubagentSetsParentSessionID(t *testing.T) {
 	}
 }
 
+func TestSyncClaudeToolResultAgentIDLinksSubagentToolCall(t *testing.T) {
+	env := setupTestEnv(t)
+
+	parentContent := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"Build the feature"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"u2","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_agent_result","name":"Agent","input":{"description":"inspect schema","subagent_type":"Explore","prompt":"inspect the schema"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:05Z","uuid":"u3","parentUuid":"u2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_agent_result","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"abc123def4567890"}}`,
+	}, "\n")
+
+	env.writeClaudeSession(
+		t, "test-proj", "parent-agentid.jsonl", parentContent,
+	)
+
+	subContent := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			tsEarly, "Do subtask", "parent-agentid",
+		).
+		AddClaudeAssistant(tsEarlyS5, "Subtask done.").
+		String()
+
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"test-proj", "parent-agentid",
+			"subagents", "agent-abc123def4567890.jsonl",
+		),
+		subContent,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2, Skipped: 0})
+
+	var got string
+	err := env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-agentid", "toolu_agent_result",
+	).Scan(&got)
+	if err != nil {
+		t.Fatalf("query linked subagent tool call: %v", err)
+	}
+	if got != "agent-abc123def4567890" {
+		t.Errorf(
+			"subagent_session_id = %q, want %q",
+			got, "agent-abc123def4567890",
+		)
+	}
+}
+
+func TestSyncClaudeSameMessageIDAgentChunksLinkAllSubagents(t *testing.T) {
+	env := setupTestEnv(t)
+
+	parentContent := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"summarize with subagents"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_same","content":[{"type":"text","text":"Launching agents."}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_same","content":[{"type":"tool_use","id":"toolu_first","name":"Agent","input":{"description":"first","subagent_type":"Explore","prompt":"first"}}],"usage":{"input_tokens":1,"output_tokens":2},"stop_reason":"tool_use"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a3","parentUuid":"a2","message":{"id":"msg_same","content":[{"type":"tool_use","id":"toolu_second","name":"Agent","input":{"description":"second","subagent_type":"Explore","prompt":"second"}}],"usage":{"input_tokens":1,"output_tokens":3},"stop_reason":"tool_use"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:04Z","uuid":"a4","parentUuid":"a3","message":{"id":"msg_same","content":[{"type":"tool_use","id":"toolu_third","name":"Agent","input":{"description":"third","subagent_type":"Explore","prompt":"third"}}],"usage":{"input_tokens":1,"output_tokens":4},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:05Z","uuid":"r1","parentUuid":"a2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_first","content":"done first"}]},"toolUseResult":{"status":"completed","agentId":"childfirst"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:06Z","uuid":"r2","parentUuid":"a3","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_second","content":"done second"}]},"toolUseResult":{"status":"completed","agentId":"childsecond"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:07Z","uuid":"r3","parentUuid":"a4","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_third","content":"done third"}]},"toolUseResult":{"status":"completed","agentId":"childthird"}}`,
+	}, "\n")
+
+	env.writeClaudeSession(
+		t, "test-proj", "parent-same-message.jsonl", parentContent,
+	)
+
+	for _, child := range []string{"childfirst", "childsecond", "childthird"} {
+		subContent := testjsonl.NewSessionBuilder().
+			AddClaudeUserWithSessionID(
+				tsEarly, "Do "+child, "parent-same-message",
+			).
+			AddClaudeAssistant(tsEarlyS5, child+" done.").
+			String()
+		env.writeSession(
+			t, env.claudeDir,
+			filepath.Join(
+				"test-proj", "parent-same-message",
+				"subagents", "agent-"+child+".jsonl",
+			),
+			subContent,
+		)
+	}
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 4, Synced: 4, Skipped: 0})
+
+	rows, err := env.db.Reader().Query(`
+		SELECT tool_use_id, subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ?
+		ORDER BY tool_use_id`,
+		"parent-same-message",
+	)
+	if err != nil {
+		t.Fatalf("query linked subagent tool calls: %v", err)
+	}
+	defer rows.Close()
+
+	got := map[string]string{}
+	for rows.Next() {
+		var toolUseID, subagentSessionID string
+		if err := rows.Scan(&toolUseID, &subagentSessionID); err != nil {
+			t.Fatalf("scan linked subagent tool call: %v", err)
+		}
+		got[toolUseID] = subagentSessionID
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate linked subagent tool calls: %v", err)
+	}
+
+	want := map[string]string{
+		"toolu_first":  "agent-childfirst",
+		"toolu_second": "agent-childsecond",
+		"toolu_third":  "agent-childthird",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("linked tool calls = %v, want %v", got, want)
+	}
+	for toolUseID, wantSessionID := range want {
+		if got[toolUseID] != wantSessionID {
+			t.Errorf(
+				"%s subagent_session_id = %q, want %q",
+				toolUseID, got[toolUseID], wantSessionID,
+			)
+		}
+	}
+}
+
 func TestSyncPathsClaudeSubagent(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -1496,6 +1806,1803 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 		t, env.db, agentviewID,
 		"updated question", "updated answer",
 	)
+}
+
+func TestSyncEngineOpenCodeStorageBulkSync(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-1",
+		"/home/user/code/myapp", "Storage Sync",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-storage-1", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-storage-1", "msg-u1", "part-u1",
+		"hello from storage", 1704067200000,
+	)
+	oc.addMessage(
+		t, "oc-storage-1", "msg-a1", "assistant",
+		1704067201000, map[string]any{
+			"modelID": "gpt-5.2-codex",
+		},
+	)
+	oc.addTextPart(
+		t, "oc-storage-1", "msg-a1", "part-a1",
+		"reply from storage", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	assertSessionState(t, env.db, "opencode:oc-storage-1",
+		func(sess *db.Session) {
+			if sess.Agent != "opencode" {
+				t.Errorf("agent = %q, want opencode",
+					sess.Agent)
+			}
+		},
+	)
+	if got := env.engine.FindSourceFile("opencode:oc-storage-1"); got != sessionPath {
+		t.Fatalf("FindSourceFile() = %q, want %q", got, sessionPath)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-1",
+		"hello from storage", "reply from storage",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeSQLiteFallback(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-sync-single"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	oc.replaceTextContent(
+		t, sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeSQLiteFallbackPreservesStorageArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-sqlite-single-preserve"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Archive",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"storage archive answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067205000,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello storage", "storage archive answer",
+	)
+}
+
+func TestSyncPathsOpenCodeSQLiteDBEvent(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-sync-paths"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	oc.replaceTextContent(
+		t, sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
+
+	env.engine.SyncPaths([]string{oc.path})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+	)
+}
+
+func TestSyncAllOpenCodeSQLiteFallbackPreservesStorageArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-sqlite-bulk-preserve"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Archive Bulk",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"storage archive answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067205000,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("stats.Failed = %d, want 0", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello storage", "storage archive answer",
+	)
+}
+
+func TestSyncPathsOpenCodeSQLiteDBEventIgnoresStaleSkipCache(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-sync-paths-skip-cache"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	info, err := os.Stat(oc.path)
+	if err != nil {
+		t.Fatalf("stat opencode db: %v", err)
+	}
+	cachedMtime := info.ModTime()
+	env.engine.InjectSkipCache(map[string]int64{
+		oc.path: cachedMtime.UnixNano(),
+	})
+
+	oc.replaceTextContent(
+		t, sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
+	if err := os.Chtimes(oc.path, cachedMtime, cachedMtime); err != nil {
+		t.Fatalf("restore db mtime: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{oc.path})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+	)
+}
+
+func TestSyncPathsOpenCodeSQLiteDBEventContinuesPastBadSession(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	goodSessionID := "oc-sqlite-watch-good"
+	badSessionID := "oc-sqlite-watch-bad"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, goodSessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "good-msg-u1", goodSessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "good-msg-a1", goodSessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "good-part-u1", goodSessionID, "good-msg-u1",
+		"good original question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "good-part-a1", goodSessionID, "good-msg-a1",
+		"good original answer", timeCreated+1,
+	)
+
+	oc.addSession(
+		t, badSessionID, "proj-1",
+		timeCreated+10, timeUpdated+10,
+	)
+	oc.addMessage(
+		t, "bad-msg-u1", badSessionID, "user", timeCreated+10,
+	)
+	oc.addTextPart(
+		t, "bad-part-u1", badSessionID, "bad-msg-u1",
+		"bad original question", timeCreated+10,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        2,
+		Skipped:       0,
+	})
+
+	oc.replaceTextContent(
+		t, goodSessionID,
+		"good updated question",
+		"good updated answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, goodSessionID, timeUpdated+1000)
+	oc.updateSessionTime(t, badSessionID, timeUpdated+2000)
+	oc.mustExec(
+		t, "corrupt bad session message time",
+		"UPDATE message SET time_created = ? WHERE id = ?",
+		"broken-time", "bad-msg-u1",
+	)
+
+	env.engine.SyncPaths([]string{oc.path})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+goodSessionID,
+		"good updated question",
+		"good updated answer",
+	)
+	assertMessageContent(
+		t, env.db, "opencode:"+badSessionID,
+		"bad original question",
+	)
+}
+
+func TestSyncAllOpenCodeSQLiteReparsesStaleDataVersion(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-stale-version"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	oc.updateMessageData(t, "msg-a1", map[string]any{
+		"role":    "assistant",
+		"modelID": "claude-3-7-sonnet",
+	})
+	if err := env.db.SetSessionDataVersion(
+		"opencode:"+sessionID, 0,
+	); err != nil {
+		t.Fatalf("SetSessionDataVersion: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Synced != 1 {
+		t.Fatalf("SyncAll synced = %d, want 1", stats.Synced)
+	}
+
+	msgs := fetchMessages(t, env.db, "opencode:"+sessionID)
+	if got := msgs[1].Model; got != "claude-3-7-sonnet" {
+		t.Fatalf("assistant model = %q, want claude-3-7-sonnet", got)
+	}
+}
+
+func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-retry",
+		"/home/user/code/myapp", "Retry Session",
+		1704067200000, 1704067205000,
+	)
+	messagePath := filepath.Join(
+		env.opencodeDir, "storage", "message",
+		"oc-storage-retry", "msg-u1.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(messagePath), 0o755); err != nil {
+		t.Fatalf("mkdir message dir: %v", err)
+	}
+	if err := os.WriteFile(
+		messagePath, []byte(`{"id":"msg-u1"`), 0o644,
+	); err != nil {
+		t.Fatalf("write invalid message: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+	if sess, err := env.db.GetSession(
+		context.Background(), "opencode:oc-storage-retry",
+	); err != nil {
+		t.Fatalf("GetSession: %v", err)
+	} else if sess != nil {
+		t.Fatalf("unexpected session after invalid child parse: %+v", sess)
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime().UnixNano()
+
+	oc.addMessage(
+		t, "oc-storage-retry", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-storage-retry", "msg-u1", "part-u1",
+		"hello after retry", 1704067200000,
+	)
+	if err := os.Chtimes(
+		sessionPath,
+		time.Unix(0, sessionMtime),
+		time.Unix(0, sessionMtime),
+	); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-retry",
+		"hello after retry",
+	)
+}
+
+func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-mtime",
+		"/home/user/code/myapp", "Mtime Session",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-storage-mtime", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-storage-mtime", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	_, initialMtime, ok := env.db.GetSessionFileInfo(
+		"opencode:oc-storage-mtime",
+	)
+	if !ok {
+		t.Fatal("expected initial session file_mtime")
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime().UnixNano()
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-storage-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(
+		sessionPath,
+		time.Unix(0, sessionMtime),
+		time.Unix(0, sessionMtime),
+	); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+	if _, parsedMsgs, err := parser.ParseOpenCodeFile(
+		sessionPath, "local",
+	); err != nil {
+		t.Fatalf("ParseOpenCodeFile after rewrite: %v", err)
+	} else if len(parsedMsgs) != 1 ||
+		parsedMsgs[0].Content != "updated reply" {
+		t.Fatalf(
+			"parsed messages after rewrite = %#v, want updated reply",
+			parsedMsgs,
+		)
+	}
+
+	env.engine.SyncPaths([]string{partPath})
+
+	_, updatedMtime, ok := env.db.GetSessionFileInfo(
+		"opencode:oc-storage-mtime",
+	)
+	if !ok {
+		t.Fatal("expected updated session file_mtime")
+	}
+	if updatedMtime <= initialMtime {
+		t.Fatalf(
+			"updated file_mtime = %d, want > %d",
+			updatedMtime, initialMtime,
+		)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-mtime",
+		"updated reply",
+	)
+}
+
+func TestSourceMtimeOpenCodeStorageIncludesChildFiles(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-source-mtime",
+		"/home/user/code/myapp", "Source Mtime",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-mtime", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-mtime", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-mtime")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime()
+	future := time.Now().Add(2 * time.Second)
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-source-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(partPath, future, future); err != nil {
+		t.Fatalf("chtimes part: %v", err)
+	}
+	if err := os.Chtimes(sessionPath, sessionMtime, sessionMtime); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-mtime")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
+func TestSourceMtimeOpenCodeStorageTracksChildRemoval(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove",
+		"/home/user/code/myapp", "Source Remove",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-remove", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-remove", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-remove")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	partDir := filepath.Dir(partPath)
+	if err := os.Remove(partPath); err != nil {
+		t.Fatalf("remove part: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(partDir, future, future); err != nil {
+		t.Fatalf("chtimes part dir: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-remove")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
+func TestSourceMtimeOpenCodeStorageTracksPartDirRemoval(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove-dir",
+		"/home/user/code/myapp", "Source Remove Dir",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-remove-dir", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-remove-dir", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-remove-dir")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.RemoveAll(filepath.Dir(partPath)); err != nil {
+		t.Fatalf("remove part dir: %v", err)
+	}
+	partRoot := filepath.Join(
+		env.opencodeDir, "storage", "part",
+	)
+	if err := os.Chtimes(partRoot, future, future); err != nil {
+		t.Fatalf("chtimes part root: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-remove-dir")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
+func TestSourceMtimeOpenCodeStorageTracksMessageDirRemoval(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove-message-dir",
+		"/home/user/code/myapp", "Source Remove Message Dir",
+		1704067200000, 1704067205000,
+	)
+	messagePath := oc.addMessage(
+		t, "oc-source-remove-message-dir", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-source-remove-message-dir", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime(
+		"opencode:oc-source-remove-message-dir",
+	)
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.RemoveAll(filepath.Dir(messagePath)); err != nil {
+		t.Fatalf("remove message dir: %v", err)
+	}
+	messageRoot := filepath.Join(
+		env.opencodeDir, "storage", "message",
+	)
+	if err := os.Chtimes(messageRoot, future, future); err != nil {
+		t.Fatalf("chtimes message root: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime(
+		"opencode:oc-source-remove-message-dir",
+	)
+	if updatedMtime <= initialMtime {
+		t.Fatalf(
+			"updated source mtime = %d, want > %d",
+			updatedMtime, initialMtime,
+		)
+	}
+}
+
+func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, "oc-source-sqlite", "proj-1",
+		1704067200000, 1704067205000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-sqlite")
+	if initialMtime != 1704067205000*1_000_000 {
+		t.Fatalf("initial source mtime = %d, want %d", initialMtime, 1704067205000*1_000_000)
+	}
+
+	oc.updateSessionTime(t, "oc-source-sqlite", 1704067210000)
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-sqlite")
+	if updatedMtime != 1704067210000*1_000_000 {
+		t.Fatalf("updated source mtime = %d, want %d", updatedMtime, 1704067210000*1_000_000)
+	}
+}
+
+func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "global", "oc-hybrid-storage",
+		"/home/user/code/storage-app", "Hybrid Storage",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, "oc-hybrid-storage", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, "oc-hybrid-storage", "msg-a1", "part-a1",
+		"storage reply", 1704067201000,
+	)
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/sqlite-app")
+	sessionID := "oc-hybrid-sqlite"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user", timeCreated,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-a1", sessionID, "sqlite-msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        2,
+		Skipped:       0,
+	})
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-hybrid-storage",
+		"storage reply",
+	)
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"original sqlite question",
+		"original sqlite answer",
+	)
+
+	virtualPath := parser.OpenCodeSQLiteVirtualPath(sqlite.path, sessionID)
+	if got := env.engine.FindSourceFile("opencode:" + sessionID); got != virtualPath {
+		t.Fatalf("FindSourceFile() = %q, want %q", got, virtualPath)
+	}
+	if got := env.engine.SourceMtime("opencode:" + sessionID); got != timeUpdated*1_000_000 {
+		t.Fatalf("SourceMtime() = %d, want %d", got, timeUpdated*1_000_000)
+	}
+
+	sqlite.replaceTextContent(
+		t, sessionID,
+		"updated by sync paths",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	sqlite.updateSessionTime(t, sessionID, timeUpdated+1000)
+	env.engine.SyncPaths([]string{sqlite.path})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated by sync paths",
+		"updated sqlite answer",
+	)
+
+	sqlite.replaceTextContent(
+		t, sessionID,
+		"updated by single sync",
+		"updated sqlite answer again",
+		timeCreated,
+	)
+	sqlite.updateSessionTime(t, sessionID, timeUpdated+2000)
+	if err := env.engine.SyncSingleSession("opencode:" + sessionID); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated by single sync",
+		"updated sqlite answer again",
+	)
+}
+
+// TestFindSourceFileSkipsHybridRootMissingSession covers the
+// multi-root shadowing case: an early hybrid root with an
+// opencode.db that lacks the requested session must not shadow a
+// later pure-storage root that contains it. Without the
+// session-existence gate in FindOpenCodeSourceFile, the engine
+// would return a virtual SQLite path pointing at the wrong DB.
+func TestFindSourceFileSkipsHybridRootMissingSession(t *testing.T) {
+	hybridRoot := t.TempDir()
+	storageRoot := t.TempDir()
+	if err := os.MkdirAll(
+		filepath.Join(hybridRoot, "storage", "session", "global"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir hybrid storage: %v", err)
+	}
+	if err := os.MkdirAll(
+		filepath.Join(storageRoot, "storage", "session", "global"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir storage root: %v", err)
+	}
+
+	hybridDB := createOpenCodeDB(t, hybridRoot)
+	hybridDB.addProject(t, "proj-x", "/tmp/x")
+	hybridDB.addSession(
+		t, "oc-only-in-hybrid-db", "proj-x",
+		1704067200000, 1704067205000,
+	)
+
+	const wantedID = "oc-real-in-storage"
+	storage := createOpenCodeStorageFixture(t, storageRoot)
+	storage.addSession(
+		t, "global", wantedID,
+		"/home/user/code/realapp", "Real Storage",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, wantedID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, wantedID, "msg-a1", "part-a1",
+		"real storage reply", 1704067201000,
+	)
+
+	env := setupTestEnv(
+		t,
+		WithOpenCodeDirs([]string{hybridRoot, storageRoot}),
+	)
+	wantPath := filepath.Join(
+		storageRoot, "storage", "session", "global",
+		wantedID+".json",
+	)
+	if got := env.engine.FindSourceFile("opencode:" + wantedID); got != wantPath {
+		t.Fatalf(
+			"FindSourceFile() = %q, want %q (hybrid root must not shadow)",
+			got, wantPath,
+		)
+	}
+}
+
+// TestOpenCodeHybridRootStorageWinsOnDuplicateID covers a hybrid
+// OpenCode root where the same session ID exists in both
+// storage/session and opencode.db. Storage is the canonical
+// transcript, so the SQLite duplicate must be skipped during sync
+// even when its time_updated is newer than the storage file mtime
+// — otherwise a stale SQLite row could overwrite live storage data.
+func TestOpenCodeHybridRootStorageWinsOnDuplicateID(t *testing.T) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-hybrid-dup"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/storage-app", "Hybrid Dup",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-storage-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-storage-a1", "part-storage-a1",
+		"canonical storage reply", 1704067201000,
+	)
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/storage-app")
+	// Use a much newer time_updated so that without the
+	// duplicate-ID filter, shouldPreserveOpenCodeArchive's
+	// mtime check would not save the storage transcript.
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1804067200000)
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user", timeCreated,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"stale sqlite question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-a1", sessionID, "sqlite-msg-a1",
+		"stale sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"canonical storage reply",
+	)
+
+	storagePath := filepath.Join(
+		env.opencodeDir, "storage", "session", "global",
+		sessionID+".json",
+	)
+	if got := env.engine.FindSourceFile("opencode:" + sessionID); got != storagePath {
+		t.Fatalf("FindSourceFile() = %q, want %q", got, storagePath)
+	}
+
+	// SyncPaths on opencode.db must also leave the storage
+	// transcript untouched, even though the SQLite session was
+	// just modified.
+	sqlite.replaceTextContent(
+		t, sessionID,
+		"newer stale sqlite question",
+		"newer stale sqlite answer",
+		timeCreated,
+	)
+	sqlite.updateSessionTime(t, sessionID, timeUpdated+1000)
+	env.engine.SyncPaths([]string{sqlite.path})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"canonical storage reply",
+	)
+}
+
+func TestSyncAllSinceOpenCodeStorageRequiresSessionMtime(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-since-child",
+		"/home/user/code/myapp", "Since Child",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-since-child", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-since-child", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	cutoff := time.Now()
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime()
+	future := cutoff.Add(2 * time.Second)
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-since-child","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(partPath, future, future); err != nil {
+		t.Fatalf("chtimes part: %v", err)
+	}
+	if err := os.Chtimes(sessionPath, sessionMtime, sessionMtime); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	if stats.Synced != 0 {
+		t.Fatalf("SyncAllSince synced = %d, want 0", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-since-child",
+		"initial reply",
+	)
+
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("chtimes session path: %v", err)
+	}
+
+	stats = env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	if stats.Synced != 1 {
+		t.Fatalf("SyncAllSince synced = %d, want 1", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-since-child",
+		"updated reply",
+	)
+}
+
+func TestSyncAllOpenCodeStorageSkipsUnchangedSessions(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-skip-unchanged",
+		"/home/user/code/myapp", "Skip Unchanged",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-skip-unchanged", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-skip-unchanged", "msg-a1", "part-a1",
+		"stable reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Skipped != 1 || stats.Synced != 0 {
+		t.Fatalf("SyncAll stats = %+v, want 1 skipped and 0 synced", stats)
+	}
+}
+
+func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-missing-message",
+		"/home/user/code/myapp", "Missing Message",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-missing-message", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-missing-message", "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, "oc-missing-message", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-missing-message", "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-missing-message",
+		"question", "answer",
+	)
+}
+
+func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-storage-upgrade-legacy"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	sqlite.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	sqlite.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	sqlite.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"legacy sqlite question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"legacy sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Upgrade",
+		timeCreated, timeUpdated+1000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		timeCreated, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"legacy sqlite question", timeCreated,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"legacy sqlite question",
+		"legacy sqlite answer",
+	)
+}
+
+func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-missing-part",
+		"/home/user/code/myapp", "Missing Part",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-missing-part", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-missing-part", "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	oc.addMessage(
+		t, "oc-missing-part", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-missing-part", "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(filepath.Dir(partPath)); err != nil {
+		t.Fatalf("remove part dir: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("stats.Failed = %d, want 0", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-missing-part",
+		"question", "answer",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeStorageMissingMessagePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-single"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message Single",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeStoragePreservedUpdateDoesNotEmit(
+	t *testing.T,
+) {
+	em := &fakeEmitter{}
+	env := setupTestEnv(t, WithEmitter(em))
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-no-emit"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message No Emit",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	em.mu.Lock()
+	em.scopes = em.scopes[:0]
+	em.mu.Unlock()
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	if got := em.got(); len(got) != 0 {
+		t.Fatalf("expected no emissions for preserved update, got %v", got)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncPathsOpenCodeStorageMissingMessagePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-paths"
+	oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message Paths",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncPathsOpenCodeStoragePreservedUpdateDoesNotEmitOrCountSynced(
+	t *testing.T,
+) {
+	em := &fakeEmitter{}
+	env := setupTestEnv(t, WithEmitter(em))
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-paths-no-emit"
+	oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message Paths No Emit",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	em.mu.Lock()
+	em.scopes = em.scopes[:0]
+	em.mu.Unlock()
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	if got := em.got(); len(got) != 0 {
+		t.Fatalf("expected no emissions for preserved SyncPaths update, got %v", got)
+	}
+	stats := env.engine.LastSyncStats()
+	if stats.Synced != 0 {
+		t.Fatalf("LastSyncStats().Synced = %d, want 0", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncPathsOpenCodeStorageMissingPartDirPreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-part-paths"
+	oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Part Paths",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(filepath.Dir(partPath)); err != nil {
+		t.Fatalf("remove part dir: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeStorageMissingPartPreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-part-single"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Part Single",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	part1Path := oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"first part", 1704067201000,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a2",
+		"second part", 1704067201001,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(part1Path); err != nil {
+		t.Fatalf("remove part file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"first part\nsecond part",
+	)
+}
+
+func TestSyncAllOpenCodeStorageContentRewritePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-content-rewrite"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Content Rewrite",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"complete response", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	dbtest.WriteTestFile(t, partPath, []byte(
+		`{"id":"part-u1","sessionID":"`+sessionID+`","messageID":"msg-u1","type":"text","text":"cut","time":{"created":1704067200000}}`,
+	))
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"complete response",
+	)
+}
+
+func TestSyncAllOpenCodeStorageMissingStepFinishPreservesTokens(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-step-finish"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Step Finish",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, map[string]any{
+			"modelID": "gpt-5.2-codex",
+		},
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+	stepFinishPath := oc.writeJSON(t, filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-a1", "part-a2.json",
+	), map[string]any{
+		"id":        "part-a2",
+		"sessionID": sessionID,
+		"messageID": "msg-a1",
+		"type":      "step-finish",
+		"tokens": map[string]any{
+			"input":  300,
+			"output": 200,
+		},
+		"time": map[string]any{
+			"created": 1704067201001,
+		},
+	})
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(stepFinishPath); err != nil {
+		t.Fatalf("remove step-finish part: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "opencode:"+sessionID,
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full == nil {
+		t.Fatal("session missing after preserve")
+	}
+	if !full.HasTotalOutputTokens || full.TotalOutputTokens != 200 {
+		t.Fatalf(
+			"session output tokens = (%v, %d), want (true, 200)",
+			full.HasTotalOutputTokens, full.TotalOutputTokens,
+		)
+	}
+	if !full.HasPeakContextTokens || full.PeakContextTokens != 300 {
+		t.Fatalf(
+			"session context tokens = (%v, %d), want (true, 300)",
+			full.HasPeakContextTokens, full.PeakContextTokens,
+		)
+	}
+
+	msgs := fetchMessages(t, env.db, "opencode:"+sessionID)
+	if len(msgs) != 1 {
+		t.Fatalf("len(msgs) = %d, want 1", len(msgs))
+	}
+	if !msgs[0].HasOutputTokens || msgs[0].OutputTokens != 200 {
+		t.Fatalf(
+			"message output tokens = (%v, %d), want (true, 200)",
+			msgs[0].HasOutputTokens, msgs[0].OutputTokens,
+		)
+	}
+	if !msgs[0].HasContextTokens || msgs[0].ContextTokens != 300 {
+		t.Fatalf(
+			"message context tokens = (%v, %d), want (true, 300)",
+			msgs[0].HasContextTokens, msgs[0].ContextTokens,
+		)
+	}
 }
 
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
@@ -2129,6 +4236,172 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	}
 }
 
+func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
+	env := setupTestEnv(t)
+
+	original := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "original trashed prompt").
+		AddClaudeAssistant(tsZeroS5, "original trashed reply").
+		String()
+	path := env.writeClaudeSession(
+		t, "test-proj", "resync-trash.jsonl", original,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	orphanContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "orphan prompt").
+		AddClaudeAssistant(tsZeroS5, "orphan reply").
+		String()
+	orphanPath := env.writeClaudeSession(
+		t, "test-proj", "active-orphan.jsonl", orphanContent,
+	)
+	env.engine.SyncPaths([]string{orphanPath})
+	assertSessionMessageCount(t, env.db, "active-orphan", 2)
+	if err := os.Remove(orphanPath); err != nil {
+		t.Fatalf("remove orphan source: %v", err)
+	}
+
+	if err := env.db.SoftDeleteSession("resync-trash"); err != nil {
+		t.Fatalf("SoftDeleteSession: %v", err)
+	}
+
+	replacement := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "replacement prompt").
+		AddClaudeAssistant(tsZeroS5, "replacement reply").
+		String()
+	dbtest.WriteTestFile(t, path, []byte(replacement))
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	if stats.Aborted {
+		t.Fatalf("ResyncAll aborted: %+v", stats)
+	}
+	assertSessionMessageCount(t, env.db, "active-orphan", 2)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "resync-trash",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full == nil || full.DeletedAt == nil {
+		t.Fatal("trashed session was not preserved as trashed")
+	}
+	msgs := fetchMessages(t, env.db, "resync-trash")
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %d, want 2", len(msgs))
+	}
+	if msgs[0].Content != "original trashed prompt" {
+		t.Fatalf(
+			"trashed content = %q, want original content",
+			msgs[0].Content,
+		)
+	}
+}
+
+// TestResyncAllSurfacesQueuedCommands locks in that bumping
+// dataVersion (which forces a full resync) recovers Claude
+// queued_command attachments dropped by older parser versions.
+// Old DBs synced before the parser fix have no row for the
+// mid-flight user message; ResyncAll must replay the file and
+// reinstate it.
+func TestResyncAllSurfacesQueuedCommands(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsEarly),
+		testjsonl.ClaudeAssistantJSON([]map[string]any{
+			{"type": "text", "text": "starting"},
+		}, tsEarlyS1),
+		testjsonl.ClaudeQueuedCommandJSON(
+			"also do X", "2024-01-01T10:00:02Z",
+		),
+		testjsonl.ClaudeAssistantJSON([]map[string]any{
+			{"type": "text", "text": "done"},
+		}, tsEarlyS5),
+	)
+
+	env.writeClaudeSession(
+		t, "test-proj", "queued-resync.jsonl", content,
+	)
+
+	// Initial sync uses the current parser, which surfaces the
+	// queued_command as message ordinal 2.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	const sessionID = "queued-resync"
+	msgs := fetchMessages(t, env.db, sessionID)
+	if len(msgs) != 4 {
+		t.Fatalf("initial sync: got %d messages, want 4", len(msgs))
+	}
+
+	// Simulate an old-parser DB by removing the queued_command
+	// row directly. Older versions of the parser would never
+	// have stored it.
+	err := env.db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"DELETE FROM messages WHERE session_id = ?"+
+				" AND source_subtype = 'queued_command'",
+			sessionID,
+		)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("delete queued_command row: %v", err)
+	}
+	msgs = fetchMessages(t, env.db, sessionID)
+	if len(msgs) != 3 {
+		t.Fatalf("after stale simulation: got %d, want 3",
+			len(msgs))
+	}
+
+	// SyncAll must NOT recover the dropped row: the source
+	// file is unchanged on disk, so the engine skips it.
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Skipped != 1 {
+		t.Fatalf("SyncAll: expected Skipped=1, got %d",
+			stats.Skipped)
+	}
+	msgs = fetchMessages(t, env.db, sessionID)
+	if len(msgs) != 3 {
+		t.Fatalf("after SyncAll: got %d, want 3", len(msgs))
+	}
+
+	// ResyncAll re-parses every session from scratch and the
+	// queued_command reappears.
+	env.engine.ResyncAll(context.Background(), nil)
+
+	msgs = fetchMessages(t, env.db, sessionID)
+	if len(msgs) != 4 {
+		t.Fatalf("after ResyncAll: got %d, want 4", len(msgs))
+	}
+
+	var queued *db.Message
+	for i := range msgs {
+		if msgs[i].SourceSubtype == "queued_command" {
+			queued = &msgs[i]
+			break
+		}
+	}
+	if queued == nil {
+		t.Fatal("ResyncAll did not restore queued_command row")
+	}
+	if queued.Content != "also do X" {
+		t.Errorf("queued_command content = %q, want %q",
+			queued.Content, "also do X")
+	}
+	if queued.Role != "user" {
+		t.Errorf("queued_command role = %q, want user",
+			queued.Role)
+	}
+	if queued.IsSystem {
+		t.Error("queued_command should not be is_system=true")
+	}
+}
+
 func TestResyncAllPreservesInsights(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -2637,6 +4910,261 @@ func TestResyncAllOpenCodeOnly(t *testing.T) {
 	assertMessageContent(
 		t, env.db, agentviewID,
 		"hello opencode", "hi there",
+	)
+}
+
+func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
+	storageBase := t.TempDir()
+	storageRoot := filepath.Join(storageBase, "storage#root")
+	sqliteRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(
+		storageRoot, "storage", "session", "global",
+	), 0o755); err != nil {
+		t.Fatalf("mkdir storage root: %v", err)
+	}
+
+	env := setupTestEnv(
+		t, WithOpenCodeDirs([]string{storageRoot, sqliteRoot}),
+	)
+
+	oc := createOpenCodeDB(t, sqliteRoot)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-resync-sqlite-fallback"
+	var timeCreated int64 = 1704067200000
+	var timeUpdated int64 = 1704067205000
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello sqlite fallback", timeCreated,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+	agentviewID := "opencode:" + sessionID
+	assertSessionMessageCount(t, env.db, agentviewID, 1)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for mixed OpenCode roots: %s",
+				w,
+			)
+		}
+	}
+	if stats.Synced == 0 {
+		t.Fatal(
+			"expected SQLite fallback OpenCode session to be synced",
+		)
+	}
+
+	assertSessionMessageCount(t, env.db, agentviewID, 1)
+	assertMessageContent(
+		t, env.db, agentviewID,
+		"hello sqlite fallback",
+	)
+}
+
+func TestResyncAllOpenCodeStorageArchivePreservesStaleSQLiteFallback(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-storage-to-sqlite"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Then SQLite",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067209000,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for storage->sqlite fallback: %s",
+				w,
+			)
+		}
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello storage",
+	)
+}
+
+func TestResyncAllOpenCodeStorageArchiveAllowsNewerSQLiteFallback(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-storage-to-newer-sqlite"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Then Newer SQLite",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqliteUpdatedAt := time.Now().Add(2 * time.Second).UnixMilli()
+
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, sqliteUpdatedAt,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello newer sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for newer storage->sqlite fallback: %s",
+				w,
+			)
+		}
+	}
+	if stats.Synced == 0 {
+		t.Fatal("expected newer sqlite fallback to be synced")
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello newer sqlite fallback",
+	)
+}
+
+func TestResyncAllOpenCodeStorageMissingMessagePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-resync-missing-message"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Resync Missing Message",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for missing OpenCode message: %s",
+				w,
+			)
+		}
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
 	)
 }
 
@@ -3179,6 +5707,272 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 	}
 }
 
+// TestIncrementalSync_ClaudeFileReplaced verifies that when a
+// session file is replaced atomically (new inode/device), the
+// sync engine detects the identity change and falls back to a
+// full parse instead of treating the new content as an append.
+func TestIncrementalSync_ClaudeFileReplaced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identity tracking is a no-op on Windows")
+	}
+	env := setupTestEnv(t)
+
+	original := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "replaced.jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionMessageCount(t, env.db, "replaced", 1)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "replaced",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full.FileInode == nil || *full.FileInode == 0 {
+		t.Fatal("file_inode not populated after initial sync")
+	}
+	origInode := *full.FileInode
+
+	// Atomically replace the file. The content is longer than the
+	// original so an incremental parse would mistakenly append the
+	// new file's bytes past the old offset.
+	replacement := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("second", tsZero),
+		testjsonl.ClaudeUserJSON("third", tsZeroS5),
+	)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(replacement), 0o644); err != nil {
+		t.Fatalf("write replacement: %v", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatalf("rename replacement: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{path})
+
+	// The stored inode must track the new file (i.e. a full
+	// parse re-ran and overwrote the identity). If the incremental
+	// path had run instead, the old inode would still be stored
+	// and the appended bytes would be interpreted as continuation
+	// of the original file.
+	full, err = env.db.GetSessionFull(
+		context.Background(), "replaced",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull after replace: %v", err)
+	}
+	if full.FileInode == nil {
+		t.Fatal("file_inode cleared after replace")
+	}
+	if *full.FileInode == origInode {
+		t.Errorf("file_inode = %d, want change from original",
+			*full.FileInode)
+	}
+	// File size in the DB should match the replacement, not the
+	// pre-replacement size that an incremental parse would have
+	// left in place.
+	newInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat replacement: %v", err)
+	}
+	if full.FileSize == nil || *full.FileSize != newInfo.Size() {
+		t.Errorf("file_size = %v, want %d (full-parse size)",
+			full.FileSize, newInfo.Size())
+	}
+}
+
+// TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse covers
+// the cross-sync split case: the first sync stores a partial assistant
+// snapshot (one of several streaming snapshots) and the next sync
+// appends a later snapshot of the SAME response (same message.id).
+// The engine must detect the shared id and fall back to a full parse
+// so the chunk merge collapses both snapshots into one assistant
+// message instead of two.
+func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) {
+	env := setupTestEnv(t)
+
+	first, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": tsZeroS5,
+		"uuid":      "a1",
+		"message": map[string]any{
+			"id":    "msg_split",
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 1,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello"},
+			},
+			"stop_reason": "tool_use",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal first snapshot: %v", err)
+	}
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsZero),
+		string(first),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "split-stream.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionMessageCount(t, env.db, "split-stream", 2)
+
+	// Append a continuation snapshot with the same message.id —
+	// this is the second half of the same streaming response.
+	second, err := json.Marshal(map[string]any{
+		"type":       "assistant",
+		"timestamp":  tsEarly,
+		"uuid":       "a2",
+		"parentUuid": "a1",
+		"message": map[string]any{
+			"id":    "msg_split",
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 2,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello world"},
+			},
+			"stop_reason": "end_turn",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal second snapshot: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	if _, err := f.WriteString(string(second) + "\n"); err != nil {
+		f.Close()
+		t.Fatalf("append: %v", err)
+	}
+	f.Close()
+
+	env.engine.SyncPaths([]string{path})
+
+	// After the full-parse fallback, the two same-message.id
+	// snapshots are merged into ONE assistant message — total
+	// message count stays at 2 (user + merged assistant).
+	assertSessionMessageCount(t, env.db, "split-stream", 2)
+
+	msgs := fetchMessages(t, env.db, "split-stream")
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	if string(msgs[1].Role) != "assistant" {
+		t.Fatalf("msgs[1].Role = %q, want assistant", msgs[1].Role)
+	}
+	// The partial snapshot ("Hello") must be REPLACED by the final
+	// snapshot ("Hello world"), not concatenated as additive content.
+	if msgs[1].Content != "Hello world" {
+		t.Errorf(
+			"msgs[1].Content = %q, want exactly %q",
+			msgs[1].Content, "Hello world",
+		)
+	}
+}
+
+// TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall covers
+// the cross-sync subagent linkage case: the first sync stores an
+// assistant tool_use row with no subagent_session_id, and a later sync
+// appends a tool_result whose toolUseResult.agentId should populate the
+// already-stored tool_call. The parser signals
+// IsIncrementalFullParseFallback, so the full-parse fallback must run
+// with forceReplace=true; otherwise the append-only write path skips
+// the existing row and the linkage is silently dropped.
+func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T) {
+	env := setupTestEnv(t)
+
+	parentInitial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_one","content":[{"type":"tool_use","id":"toolu_late","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+	)
+
+	path := env.writeClaudeSession(
+		t, "proj-late-link", "parent-late-link.jsonl", parentInitial,
+	)
+
+	subContent := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			tsEarly, "do thing", "parent-late-link",
+		).
+		AddClaudeAssistant(tsEarlyS5, "done").
+		String()
+	env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"proj-late-link", "parent-late-link",
+			"subagents", "agent-childlate.jsonl",
+		),
+		subContent,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	// Linkage starts empty (the toolUseResult hasn't appeared yet).
+	var got sql.NullString
+	if err := env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-late-link", "toolu_late",
+	).Scan(&got); err != nil {
+		t.Fatalf("query before append: %v", err)
+	}
+	if got.Valid && got.String != "" {
+		t.Fatalf(
+			"subagent_session_id = %q before tool_result, want empty",
+			got.String,
+		)
+	}
+
+	// Append a tool_result with toolUseResult.agentId pointing at
+	// the existing subagent session. Incremental parse will return
+	// ErrClaudeIncrementalNeedsFullParse so the engine must full-
+	// parse with forceReplace to update the stored tool_call row.
+	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_late","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"childlate"}}`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	if _, err := f.WriteString(toolResult + "\n"); err != nil {
+		f.Close()
+		t.Fatalf("append: %v", err)
+	}
+	f.Close()
+
+	env.engine.SyncPaths([]string{path})
+
+	if err := env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-late-link", "toolu_late",
+	).Scan(&got); err != nil {
+		t.Fatalf("query after append: %v", err)
+	}
+	if got.String != "agent-childlate" {
+		t.Errorf(
+			"subagent_session_id = %q, want %q",
+			got.String, "agent-childlate",
+		)
+	}
+}
+
 func TestIncrementalSync_CodexAppend(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -3600,6 +6394,131 @@ func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
 	}
 }
 
+func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+
+	path := env.writeClaudeSession(
+		t, "test-proj", "trashed-sync.jsonl", content,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "trashed-sync", 2)
+
+	if err := env.db.SoftDeleteSession("trashed-sync"); err != nil {
+		t.Fatalf("SoftDeleteSession: %v", err)
+	}
+	if err := env.db.ResetAllMtimes(); err != nil {
+		t.Fatalf("ResetAllMtimes: %v", err)
+	}
+
+	updated := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello again with a longer prompt").
+		AddClaudeAssistant(tsZeroS5, "still here with a longer reply").
+		String()
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	dbtest.WriteTestFile(t, path, []byte(updated))
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("Failed = %d, want 0 for trashed session", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("Synced = %d, want 0 for trashed session", stats.Synced)
+	}
+	if got := env.engine.SnapshotSkipCache()[path]; got == 0 {
+		t.Fatalf("skip cache missing trashed session path %s", path)
+	}
+}
+
+func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+
+	path := env.writeClaudeSession(
+		t, "test-proj", "trashed-append.jsonl", content,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "trashed-append", 2)
+
+	if err := env.db.SoftDeleteSession("trashed-append"); err != nil {
+		t.Fatalf("SoftDeleteSession: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open append: %v", err)
+	}
+	_, err = f.WriteString(
+		testjsonl.NewSessionBuilder().
+			AddClaudeUser(tsEarly, "new prompt").
+			AddClaudeAssistant(tsEarlyS5, "new reply").
+			String(),
+	)
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("close append: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("Failed = %d, want 0 for trashed append", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("Synced = %d, want 0 for trashed append", stats.Synced)
+	}
+	full, err := env.db.GetSessionFull(
+		context.Background(), "trashed-append",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full == nil || full.MessageCount != 2 {
+		t.Fatalf("MessageCount = %v, want preserved count 2", full)
+	}
+}
+
+func TestSyncSingleSessionTrashedIsNoOp(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+
+	env.writeClaudeSession(
+		t, "test-proj", "trashed-single.jsonl", content,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "trashed-single", 2)
+
+	if err := env.db.SoftDeleteSession("trashed-single"); err != nil {
+		t.Fatalf("SoftDeleteSession: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession("trashed-single"); err != nil {
+		t.Fatalf(
+			"SyncSingleSession on trashed session "+
+				"returned error: %v", err,
+		)
+	}
+}
+
 // TestSyncSingleSessionOpenCodeExcludedIsNoOp verifies that
 // calling SyncSingleSession on an excluded OpenCode session
 // returns nil.
@@ -3637,6 +6556,86 @@ func TestSyncSingleSessionOpenCodeExcludedIsNoOp(
 		t.Fatalf(
 			"SyncSingleSession on excluded OpenCode "+
 				"session returned error: %v", err,
+		)
+	}
+}
+
+func TestIncrementalSync_ClaudeClearOnlyRepairedOnAppend(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Initial sync: session opens with only a /clear command
+	// envelope. Under the new parser rule, first_message is
+	// empty even though UserMsgCount is 1.
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON(
+			"<command-name>/clear</command-name>",
+			tsZero,
+		),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "clear-only.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "clear-only",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull after initial sync: %v", err)
+	}
+	if full.FirstMessage != nil && *full.FirstMessage != "" {
+		t.Fatalf(
+			"initial FirstMessage = %q, want empty",
+			*full.FirstMessage,
+		)
+	}
+	if full.UserMessageCount != 1 {
+		t.Fatalf(
+			"initial UserMessageCount = %d, want 1",
+			full.UserMessageCount,
+		)
+	}
+
+	// Append a real user message — incremental sync must now
+	// fall back to a full parse so first_message gets populated.
+	appended := testjsonl.ClaudeUserJSON(
+		"Fix the login bug", tsZeroS1,
+	) + "\n"
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	_, err = f.WriteString(appended)
+	f.Close()
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{path})
+
+	updated, err := env.db.GetSessionFull(
+		context.Background(), "clear-only",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull after append: %v", err)
+	}
+	if updated.FirstMessage == nil ||
+		*updated.FirstMessage != "Fix the login bug" {
+		got := ""
+		if updated.FirstMessage != nil {
+			got = *updated.FirstMessage
+		}
+		t.Errorf(
+			"FirstMessage after append = %q, want %q",
+			got, "Fix the login bug",
+		)
+	}
+	if updated.UserMessageCount != 2 {
+		t.Errorf(
+			"UserMessageCount after append = %d, want 2",
+			updated.UserMessageCount,
 		)
 	}
 }

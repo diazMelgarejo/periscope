@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // Ptr returns a pointer to v.
-func Ptr[T any](v T) *T { return &v }
+//
+//go:fix inline
+func Ptr[T any](v T) *T { return new(v) }
 
 // WriteTestFile creates a file at path with the given content,
 // creating parent directories as needed. Fails the test on

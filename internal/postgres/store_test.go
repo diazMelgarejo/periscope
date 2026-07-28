@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 const testSchema = "agentsview_store_test"
@@ -893,6 +893,10 @@ func TestStoreWriteMethodsReturnReadOnly(t *testing.T) {
 		}},
 		{"ReplaceSessionMessages", func() error {
 			return store.ReplaceSessionMessages("x", nil)
+		}},
+		{"WriteSessionBatchAtomic", func() error {
+			_, err := store.WriteSessionBatchAtomic(nil)
+			return err
 		}},
 	}
 	for _, tt := range tests {

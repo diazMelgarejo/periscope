@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	githubAPIURL     = "https://api.github.com/repos/wesm/agentsview/releases/latest"
+	githubAPIURL     = "https://api.github.com/repos/diazMelgarejo/periscope/releases/latest"
 	cacheFileName    = "update_check.json"
 	cacheDuration    = 1 * time.Hour
 	devCacheDuration = 15 * time.Minute
@@ -118,7 +118,7 @@ func CheckForUpdate(
 		ext = ".zip"
 	}
 	assetName := fmt.Sprintf(
-		"agentsview_%s_%s_%s%s",
+		"periscope_%s_%s_%s%s",
 		latestVersion, runtime.GOOS, runtime.GOARCH, ext,
 	)
 	asset, checksumsAsset := findAssets(release.Assets, assetName)
@@ -163,7 +163,7 @@ func PerformUpdate(
 	}
 
 	fmt.Printf("Downloading %s...\n", info.AssetName)
-	tempDir, err := os.MkdirTemp("", "agentsview-update-*")
+	tempDir, err := os.MkdirTemp("", "periscope-update-*")
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
@@ -216,9 +216,9 @@ func installFromArchive(
 		return fmt.Errorf("resolve symlinks: %w", err)
 	}
 	binDir := filepath.Dir(currentExe)
-	binaryName := "agentsview"
+	binaryName := "periscope"
 	if runtime.GOOS == "windows" {
-		binaryName = "agentsview.exe"
+		binaryName = "periscope.exe"
 	}
 	dstPath := filepath.Join(binDir, binaryName)
 
@@ -254,7 +254,7 @@ func installFromArchiveTo(
 		)
 	}
 
-	extractDir, err := os.MkdirTemp("", "agentsview-extract-*")
+	extractDir, err := os.MkdirTemp("", "periscope-extract-*")
 	if err != nil {
 		return fmt.Errorf("create extract dir: %w", err)
 	}
@@ -270,9 +270,9 @@ func installFromArchiveTo(
 		}
 	}
 
-	binaryName := "agentsview"
+	binaryName := "periscope"
 	if runtime.GOOS == "windows" {
-		binaryName = "agentsview.exe"
+		binaryName = "periscope.exe"
 	}
 	srcPath := filepath.Join(extractDir, binaryName)
 	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
@@ -285,36 +285,77 @@ func installFromArchiveTo(
 }
 
 // installBinaryTo replaces the binary at dstPath with the one
-// at srcPath using a rename-then-copy pattern that works on
-// all platforms including Windows.
+// at srcPath. The new binary is staged in a sibling tmp file
+// with the executable mode bit set, then renamed into place.
+//
+// On Unix os.Rename atomically replaces dstPath in a single
+// syscall, so concurrent readers always see one of the two
+// binaries — never a missing or partial file. On Windows the
+// existing binary must be moved aside first because os.Rename
+// cannot replace a running executable; this leaves dstPath
+// briefly missing between the two renames.
 func installBinaryTo(srcPath, dstPath string) error {
 	backupPath := dstPath + ".old"
+	tmpPath := dstPath + ".new"
 
-	// Remove stale backup from a previous update.
+	// Clean up leftovers from a prior failed update so they
+	// don't interfere with the renames below.
 	os.Remove(backupPath)
+	os.Remove(tmpPath)
 
-	if _, err := os.Stat(dstPath); err == nil {
-		if err := os.Rename(dstPath, backupPath); err != nil {
-			return fmt.Errorf("backup: %w", err)
+	installed := false
+	defer func() {
+		if !installed {
+			os.Remove(tmpPath)
 		}
+	}()
+
+	// Stage the new binary at tmpPath with executable mode set
+	// BEFORE touching the live binary at dstPath.
+	if err := copyFile(srcPath, tmpPath); err != nil {
+		return fmt.Errorf("install: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		return fmt.Errorf("chmod: %w", err)
 	}
 
-	if err := copyFile(srcPath, dstPath); err != nil {
-		if restoreErr := os.Rename(backupPath, dstPath); restoreErr != nil {
-			return fmt.Errorf(
-				"install: %w (rollback also failed: %v)",
-				err, restoreErr,
-			)
+	movedAside := false
+	if runtime.GOOS == "windows" {
+		aside, err := movePreviousAside(dstPath, backupPath)
+		if err != nil {
+			return err
+		}
+		movedAside = aside
+	}
+
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		if movedAside {
+			if rbErr := os.Rename(backupPath, dstPath); rbErr != nil {
+				return fmt.Errorf(
+					"install: %w (rollback also failed: %v)",
+					err, rbErr,
+				)
+			}
 		}
 		return fmt.Errorf("install: %w", err)
 	}
 
-	if err := os.Chmod(dstPath, 0o755); err != nil {
-		return fmt.Errorf("chmod: %w", err)
-	}
-
+	installed = true
 	os.Remove(backupPath)
 	return nil
+}
+
+// movePreviousAside renames an existing dstPath to backupPath.
+// Used on Windows where os.Rename cannot replace a running
+// executable. Returns true if dstPath was moved.
+func movePreviousAside(dstPath, backupPath string) (bool, error) {
+	if _, err := os.Stat(dstPath); err != nil {
+		return false, nil
+	}
+	if err := os.Rename(dstPath, backupPath); err != nil {
+		return false, fmt.Errorf("backup: %w", err)
+	}
+	return true, nil
 }
 
 func fetchLatestRelease() (*Release, error) {
@@ -325,7 +366,7 @@ func fetchLatestRelease() (*Release, error) {
 	req.Header.Set(
 		"Accept", "application/vnd.github.v3+json",
 	)
-	req.Header.Set("User-Agent", "agentsview-update")
+	req.Header.Set("User-Agent", "periscope-update")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)

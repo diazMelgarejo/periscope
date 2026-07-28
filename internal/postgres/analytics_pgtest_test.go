@@ -3,7 +3,7 @@ package postgres
 import (
 	"testing"
 
-	"github.com/wesm/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func TestRankTopSessions_DurationSort(t *testing.T) {

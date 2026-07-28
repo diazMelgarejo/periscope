@@ -62,11 +62,15 @@ type Panel =
 class AnalyticsStore {
   from: string = $state(daysAgo(365));
   to: string = $state(today());
+  isPinned: boolean = $state(false);
+  windowDays: number = $state(365);
   granularity: Granularity = $state("day");
   metric: HeatmapMetric = $state("messages");
   selectedDate: string | null = $state(null);
   project: string = $state("");
+  machine: string = $state("");
   agent: string = $state("");
+  termination: string = $state("");
   minUserMessages: number = $state(0);
   includeOneShot: boolean = $state(true);
   includeAutomated: boolean = $state(false);
@@ -133,7 +137,9 @@ class AnalyticsStore {
     return (
       this.selectedDate !== null ||
       this.project !== "" ||
+      this.machine !== "" ||
       this.agent !== "" ||
+      this.termination !== "" ||
       this.minUserMessages > 0 ||
       !this.includeOneShot ||
       this.includeAutomated ||
@@ -146,7 +152,9 @@ class AnalyticsStore {
   clearAllFilters() {
     this.selectedDate = null;
     this.project = "";
+    this.machine = "";
     this.agent = "";
+    this.termination = "";
     this.minUserMessages = 0;
     this.includeOneShot = true;
     this.includeAutomated = false;
@@ -154,7 +162,9 @@ class AnalyticsStore {
     this.selectedDow = null;
     this.selectedHour = null;
     sessions.filters.project = "";
+    sessions.filters.machine = "";
     sessions.filters.agent = "";
+    sessions.filters.termination = "";
     sessions.filters.minUserMessages = 0;
     sessions.filters.includeOneShot = true;
     sessions.filters.includeAutomated = false;
@@ -241,6 +251,45 @@ class AnalyticsStore {
     this.fetchAll();
   }
 
+  clearMachine() {
+    this.machine = "";
+    sessions.filters.machine = "";
+    sessions.activeSessionId = null;
+    sessions.load();
+    this.fetchAll();
+  }
+
+  removeMachine(machine: string) {
+    const current = this.machine ? this.machine.split(",") : [];
+    this.machine = current.filter((m) => m !== machine).join(",");
+    sessions.filters.machine = this.machine;
+    sessions.activeSessionId = null;
+    sessions.load();
+    this.fetchAll();
+  }
+
+  clearTermination() {
+    this.termination = "";
+    sessions.filters.termination = "";
+    sessions.activeSessionId = null;
+    sessions.load();
+    this.fetchAll();
+  }
+
+  toggleTerminationStatus(status: string) {
+    const set = new Set(
+      this.termination.split(",").filter((s) => s.length > 0),
+    );
+    if (set.has(status)) set.delete(status);
+    else set.add(status);
+    const next = [...set].join(",");
+    this.termination = next;
+    sessions.filters.termination = next;
+    sessions.activeSessionId = null;
+    sessions.load();
+    this.fetchAll();
+  }
+
   clearTimeFilter() {
     this.selectedDow = null;
     this.selectedHour = null;
@@ -271,7 +320,9 @@ class AnalyticsStore {
     if (includeProject && this.project) {
       p.project = this.project;
     }
+    if (this.machine) p.machine = this.machine;
     if (this.agent) p.agent = this.agent;
+    if (this.termination) p.termination = this.termination;
     if (this.minUserMessages > 0) {
       p.min_user_messages = this.minUserMessages;
     }
@@ -312,7 +363,9 @@ class AnalyticsStore {
       if (includeProject && this.project) {
         p.project = this.project;
       }
+      if (this.machine) p.machine = this.machine;
       if (this.agent) p.agent = this.agent;
+      if (this.termination) p.termination = this.termination;
       if (this.minUserMessages > 0) {
         p.min_user_messages = this.minUserMessages;
       }
@@ -381,7 +434,14 @@ class AnalyticsStore {
     }
   }
 
+  private rollDates(): void {
+    if (this.isPinned) return;
+    this.from = daysAgo(this.windowDays);
+    this.to = today();
+  }
+
   async fetchAll() {
+    this.rollDates();
     await Promise.all([
       this.fetchSummary(),
       this.fetchActivity(),
@@ -530,11 +590,22 @@ class AnalyticsStore {
   }
 
   setDateRange(from: string, to: string) {
+    this.isPinned = true;
     this.from = from;
     this.to = to;
     this.selectedDate = null;
     this.selectedDow = null;
     this.selectedHour = null;
+    this.fetchAll();
+  }
+
+  setRollingWindow(days: number) {
+    this.windowDays = days;
+    this.isPinned = false;
+    this.selectedDate = null;
+    this.selectedDow = null;
+    this.selectedHour = null;
+    this.rollDates();
     this.fetchAll();
   }
 

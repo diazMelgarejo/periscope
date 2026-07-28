@@ -28,6 +28,8 @@ import type {
   Granularity,
   HeatmapMetric,
   TopSessionsMetric,
+  TrendsGranularity,
+  TrendsTermsResponse,
   Insight,
   InsightsResponse,
   GenerateInsightRequest,
@@ -41,6 +43,7 @@ import type {
   UsageTopSessionsParams,
 } from "./types.js";
 import type { SessionActivityResponse } from "./types/session-activity.js";
+import type { SessionTiming } from "./types/timing.js";
 
 const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
@@ -148,6 +151,7 @@ export interface ListSessionsParams {
   exclude_project?: string;
   machine?: string;
   agent?: string;
+  termination?: string;
   date?: string;
   date_from?: string;
   date_to?: string;
@@ -156,6 +160,7 @@ export interface ListSessionsParams {
   max_messages?: number;
   min_user_messages?: number;
   include_one_shot?: boolean;
+  include_automated?: boolean;
   include_children?: boolean;
   cursor?: string;
   limit?: number;
@@ -437,9 +442,17 @@ export interface DataChangedEvent {
  * limitation of SSE — switching to a fetch-based streaming
  * approach would avoid this but adds significant complexity.
  */
+/** Number of consecutive onerror firings without a successful
+ * connection or event delivery before watchSession gives up. Guards
+ * against the browser hammering `/watch` forever when the session
+ * id is unknown (server returns 404 per the Session API contract)
+ * or the server is permanently refusing the stream. */
+export const WATCH_SESSION_MAX_CONSECUTIVE_ERRORS = 5;
+
 export function watchSession(
   sessionId: string,
   onUpdate: () => void,
+  onTiming?: (t: SessionTiming) => void,
 ): EventSource {
   const url = `${getBase()}/sessions/${sessionId}/watch`;
   const token = getAuthToken();
@@ -448,12 +461,36 @@ export function watchSession(
   const fullUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
   const es = new EventSource(fullUrl);
 
+  // Circuit breaker: mirrors watchEvents. A 404 (unknown session)
+  // or other permanent failure would otherwise have EventSource
+  // reconnect in a loop. Counter resets on `open` or a delivered
+  // event so a healthy-but-quiet stream isn't tripped.
+  let consecutiveErrors = 0;
+
+  es.addEventListener("open", () => {
+    consecutiveErrors = 0;
+  });
+
   es.addEventListener("session_updated", () => {
+    consecutiveErrors = 0;
     onUpdate();
   });
 
+  if (onTiming) {
+    es.addEventListener("session.timing", (ev: MessageEvent) => {
+      try {
+        onTiming(JSON.parse(ev.data) as SessionTiming);
+      } catch (err) {
+        console.warn("session.timing parse failed", err);
+      }
+    });
+  }
+
   es.onerror = () => {
-    // Connection will auto-retry via EventSource spec
+    consecutiveErrors += 1;
+    if (consecutiveErrors >= WATCH_SESSION_MAX_CONSECUTIVE_ERRORS) {
+      es.close();
+    }
   };
 
   return es;
@@ -479,8 +516,22 @@ export function watchSession(
  */
 export const WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS = 5;
 
+export interface WatchEventsOptions {
+  /** Called once when the circuit breaker trips WITHOUT the
+   * EventSource ever having reached the OPEN state. That pattern
+   * indicates the endpoint is permanently unreachable for this
+   * client (PG serve mode returning 503, incompatible server
+   * build, wrong URL, etc.), so callers should stop retrying.
+   * Transient failures — where `open` fired at least once before
+   * the breaker tripped — do not call this, letting callers
+   * recover on their own.
+   */
+  onPermanentFailure?: () => void;
+}
+
 export function watchEvents(
   onEvent: (e: DataChangedEvent) => void,
+  opts: WatchEventsOptions = {},
 ): EventSource {
   const url = `${getBase()}/events`;
   const token = getAuthToken();
@@ -490,20 +541,27 @@ export function watchEvents(
   const es = new EventSource(fullUrl);
 
   // Circuit breaker: on N consecutive onerror firings without any
-  // successful connection or event delivery, assume the endpoint
-  // is permanently unavailable (e.g. PG serve mode 503) and stop
-  // reconnecting. The counter resets on both `open` (a successful
-  // (re)connect) and a delivered `data_changed` event, so a quiet
-  // but healthy stream isn't tripped by transient network blips.
+  // successful connection or event delivery, close the stream.
+  // The counter resets on both `open` (a successful (re)connect)
+  // and a delivered `data_changed` event, so a quiet but healthy
+  // stream isn't tripped by transient network blips.
+  //
+  // `hasOpened` distinguishes "never worked" (permanent failure,
+  // e.g. PG serve 503) from "worked once, then failed" (transient
+  // outage). Permanent failures invoke onPermanentFailure so the
+  // caller can stop retrying.
   let consecutiveErrors = 0;
+  let hasOpened = false;
 
   es.addEventListener("open", () => {
+    hasOpened = true;
     consecutiveErrors = 0;
   });
 
   es.addEventListener("data_changed", (msg) => {
     // Successful delivery also resets the circuit breaker.
     consecutiveErrors = 0;
+    hasOpened = true;
     // Parse and shape-check the payload. Anything that isn't an
     // object with a known scope collapses to a safe refresh signal
     // so subscribers never observe scope === undefined.
@@ -533,6 +591,9 @@ export function watchEvents(
     consecutiveErrors += 1;
     if (consecutiveErrors >= WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS) {
       es.close();
+      if (!hasOpened && opts.onPermanentFailure) {
+        opts.onPermanentFailure();
+      }
     }
   };
 
@@ -799,6 +860,7 @@ export interface AnalyticsParams {
   include_one_shot?: boolean;
   include_automated?: boolean;
   active_since?: string;
+  termination?: string;
 }
 
 export function getAnalyticsSummary(
@@ -867,6 +929,38 @@ export function getAnalyticsSignals(
   return fetchJSON(
     `/analytics/signals${buildQuery({ ...params })}`,
   );
+}
+
+export interface TrendsTermsParams extends AnalyticsParams {
+  granularity?: TrendsGranularity;
+  terms: string[];
+}
+
+function buildTrendsTermsQuery(params: TrendsTermsParams): string {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (
+      key === "terms" ||
+      value === undefined ||
+      value === null ||
+      value === ""
+    ) {
+      continue;
+    }
+    // Match buildQuery semantics: 0 and false are valid query values.
+    q.set(key, String(value));
+  }
+  for (const term of params.terms) {
+    if (term.trim()) q.append("term", term);
+  }
+  const qs = q.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export function getTrendsTerms(
+  params: TrendsTermsParams,
+): Promise<TrendsTermsResponse> {
+  return fetchJSON(`/trends/terms${buildTrendsTermsQuery(params)}`);
 }
 
 /* Insights */

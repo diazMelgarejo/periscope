@@ -8,8 +8,10 @@ import {
 import {
   createSessionsStore,
   buildSessionGroups,
+  getSessionStatus,
   parseFiltersFromParams,
   filtersToParams,
+  splitExcludeProjectParam,
 } from "./sessions.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
@@ -34,6 +36,16 @@ vi.mock("../api/client.js", () => ({
   getSession: vi.fn(),
   getProjects: vi.fn(),
   getAgents: vi.fn(),
+  // invalidateFilterCaches() triggers sync.loadStats() which calls
+  // getStats(). Provide a default so the stale-state guards we
+  // exercise don't trip noisy "no export" stderr from the mock.
+  getStats: vi.fn().mockResolvedValue({
+    session_count: 0,
+    message_count: 0,
+    project_count: 0,
+    machine_count: 0,
+    earliest_session: null,
+  }),
   // Live-refresh subscription opens an EventSource via watchEvents.
   // Stub it so the mocked client doesn't blow up when the store
   // calls events.subscribeDebounced() during load().
@@ -205,6 +217,13 @@ describe("SessionsStore", () => {
       expect(f.hideUnknownProject).toBe(true);
     });
 
+    it("should set hideUnknown from CSV exclude_project values", () => {
+      const f = parseFiltersFromParams({
+        exclude_project: "alpha,unknown",
+      });
+      expect(f.hideUnknownProject).toBe(true);
+    });
+
     it("should handle non-numeric min_messages", () => {
       const f = parseFiltersFromParams({ min_messages: "abc" });
       expect(f.minMessages).toBe(0);
@@ -222,6 +241,7 @@ describe("SessionsStore", () => {
         project: "myproj",
         machine: "host-a",
         agent: "claude",
+        termination: "unclean",
         date: "2024-06-15",
         dateFrom: "2024-06-01",
         dateTo: "2024-06-30",
@@ -237,6 +257,7 @@ describe("SessionsStore", () => {
         project: "myproj",
         machine: "host-a",
         agent: "claude",
+        termination: "unclean",
         date: "2024-06-15",
         date_from: "2024-06-01",
         date_to: "2024-06-30",
@@ -250,11 +271,23 @@ describe("SessionsStore", () => {
       });
     });
 
+    it("should serialize termination filter into the URL", () => {
+      const defaults = parseFiltersFromParams({});
+      const params = filtersToParams({ ...defaults, termination: "unclean" });
+      expect(params.termination).toBe("unclean");
+    });
+
+    it("should parse termination from URL params", () => {
+      const f = parseFiltersFromParams({ termination: "unclean" });
+      expect(f.termination).toBe("unclean");
+    });
+
     it("should round-trip through parseFiltersFromParams", () => {
       const original: Filters = {
         project: "myproj",
         machine: "host-a",
         agent: "claude",
+        termination: "unclean",
         date: "2024-06-15",
         dateFrom: "2024-06-01",
         dateTo: "2024-06-30",
@@ -408,6 +441,7 @@ describe("SessionsStore", () => {
               peak_context_tokens: 0,
               has_total_output_tokens: false,
               has_peak_context_tokens: false,
+              is_automated: false,
               created_at: "2024-01-01T00:00:00Z",
             },
           ],
@@ -430,6 +464,7 @@ describe("SessionsStore", () => {
               peak_context_tokens: 0,
               has_total_output_tokens: false,
               has_peak_context_tokens: false,
+              is_automated: false,
               created_at: "2024-01-01T00:00:01Z",
             },
           ],
@@ -454,6 +489,67 @@ describe("SessionsStore", () => {
       expect(second?.cursor).toBe("cur1");
 
       expect(sessions.sessions).toHaveLength(2);
+      expect(sessions.total).toBe(2);
+      expect(sessions.nextCursor).toBeNull();
+    });
+
+    it("swaps sessions atomically after all pages load", async () => {
+      // Pre-populate with a list representing a prior load,
+      // then trigger a multi-page reload. The visible count
+      // must not tick up as pages arrive — old data stays,
+      // then the new data replaces it in one step.
+      sessions.sessions = [
+        makeSession({ id: "old-a" }),
+        makeSession({ id: "old-b" }),
+        makeSession({ id: "old-c" }),
+      ];
+      sessions.total = 3;
+
+      let resolvePage2: ((v: {
+        sessions: Session[];
+        total: number;
+        next_cursor?: string;
+      }) => void) | null = null;
+      const page2Promise = new Promise<{
+        sessions: Session[];
+        total: number;
+        next_cursor?: string;
+      }>((resolve) => {
+        resolvePage2 = resolve;
+      });
+
+      vi.mocked(api.listSessions)
+        .mockResolvedValueOnce({
+          sessions: [makeSession({ id: "new-1" })],
+          total: 2,
+          next_cursor: "c1",
+        })
+        .mockReturnValueOnce(page2Promise);
+
+      const loadPromise = sessions.load();
+
+      // Flush the first page fetch without resolving the second.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Old sessions are still visible while pagination is in flight.
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "old-a",
+        "old-b",
+        "old-c",
+      ]);
+      expect(sessions.total).toBe(3);
+
+      resolvePage2!({
+        sessions: [makeSession({ id: "new-2" })],
+        total: 2,
+      });
+      await loadPromise;
+
+      expect(sessions.sessions.map((s) => s.id)).toEqual([
+        "new-1",
+        "new-2",
+      ]);
       expect(sessions.total).toBe(2);
       expect(sessions.nextCursor).toBeNull();
     });
@@ -640,6 +736,15 @@ describe("SessionsStore", () => {
       expect(sessions.filters.hideUnknownProject).toBe(true);
     });
 
+    it("should split hide-unknown from usage project exclusions", () => {
+      expect(
+        splitExcludeProjectParam("alpha,unknown,beta"),
+      ).toEqual({
+        hideUnknownProject: true,
+        usageExcludedProjects: "alpha,beta",
+      });
+    });
+
     it("should be included in hasActiveFilters", () => {
       sessions.filters.hideUnknownProject = true;
       expect(sessions.hasActiveFilters).toBe(true);
@@ -779,6 +884,22 @@ describe("SessionsStore", () => {
       expect(sessions.filters.machine).toBe("");
       expect(sessions.selectedMachines).toEqual([]);
       expectListSessionsCalledWith({ machine: undefined });
+    });
+  });
+
+  describe("agent filter", () => {
+    it("should clear the filter when the last agent is removed", async () => {
+      sessions.filters.agent = "opencode";
+
+      sessions.toggleAgentFilter("opencode");
+      await vi.waitFor(() => {
+        expect(api.listSessions).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.agent).toBe("");
+      expect(sessions.selectedAgents).toEqual([]);
+      expect(sessions.isAgentSelected("opencode")).toBe(false);
+      expectListSessionsCalledWith({ agent: undefined });
     });
   });
 
@@ -1126,6 +1247,7 @@ function makeSession(
     user_message_count: 1,
     total_output_tokens: 0,
     peak_context_tokens: 0,
+    is_automated: false,
     created_at: "2024-01-01T00:00:00Z",
     ...overrides,
   };
@@ -1433,6 +1555,68 @@ describe("buildSessionGroups", () => {
     expect(groups).toHaveLength(2);
     expect(groups[0]!.sessions).toHaveLength(2);
     expect(groups[1]!.sessions).toHaveLength(1);
+  });
+
+  it("aged awaiting_user falls through to quiet", () => {
+    // The waiting bubble is meant for freshly-blocked sessions.
+    // Once an awaiting_user session ages past the 10m active
+    // window it must fall through to quiet, not stay on the
+    // bubble forever.
+    const old = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const fresh = new Date(Date.now() - 30 * 1000).toISOString();
+    expect(
+      getSessionStatus({
+        ended_at: old,
+        termination_status: "awaiting_user",
+      } as Session),
+    ).toBe("quiet");
+    expect(
+      getSessionStatus({
+        ended_at: fresh,
+        termination_status: "awaiting_user",
+      } as Session),
+    ).toBe("waiting");
+  });
+
+  it("status-tier sort puts unclean below quiet", () => {
+    // All four sessions are >1h idle so the time-based tier is
+    // either quiet (clean/null) or unclean (flagged). Within a
+    // tier, freshness wins. Order should be:
+    //   quiet-newer → quiet-older → unclean-newer → unclean-older
+    // i.e. unclean sinks to the very bottom regardless of
+    // recency relative to quiet rows.
+    const sessions = [
+      makeSession({
+        id: "unclean-newer",
+        project: "u-new",
+        ended_at: "2024-01-04T00:00:00Z",
+        termination_status: "tool_call_pending",
+      }),
+      makeSession({
+        id: "quiet-older",
+        project: "q-old",
+        ended_at: "2024-01-01T00:00:00Z",
+      }),
+      makeSession({
+        id: "unclean-older",
+        project: "u-old",
+        ended_at: "2024-01-02T00:00:00Z",
+        termination_status: "truncated",
+      }),
+      makeSession({
+        id: "quiet-newer",
+        project: "q-new",
+        ended_at: "2024-01-03T00:00:00Z",
+      }),
+    ];
+
+    const groups = buildSessionGroups(sessions);
+    expect(groups.map((g) => g.sessions[0]!.id)).toEqual([
+      "quiet-newer",
+      "quiet-older",
+      "unclean-newer",
+      "unclean-older",
+    ]);
   });
 });
 
