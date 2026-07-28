@@ -1,0 +1,863 @@
+{
+  "generated_at": "2026-07-28T04:10:00Z",
+  "base_ref": "origin/merged@6cf2f38f1223ab00121572352920edacfb73680b",
+  "upstream_mirror_branch": "agentsview",
+  "upstream_remote": "kenn-io/agentsview",
+  "total_files": 96,
+  "total_matches": 514,
+  "regenerate": "cd periscope && rg -l 'agentsview|AgentsView|AGENTSVIEW' --glob '!**/node_modules/**' --glob '!**/Cargo.lock'",
+  "categories": {
+    "compat_env": {
+      "file_count": 1,
+      "files": [
+        "internal/config/config.go"
+      ]
+    },
+    "keep_branch_name": {
+      "file_count": 1,
+      "files": [
+        "scripts/sync-upstream.sh"
+      ]
+    },
+    "keep_historical": {
+      "file_count": 2,
+      "files": [
+        "docs/superpowers/plans/2026-05-10-periscope-build-system.md",
+        "docs/superpowers/specs/2026-05-10-periscope-build-design.md"
+      ]
+    },
+    "keep_test_fixtures": {
+      "file_count": 6,
+      "files": [
+        "internal/parser/project_git_test.go",
+        "internal/sync/engine_integration_test.go",
+        "internal/sync/forge_integration_test.go",
+        "internal/parser/forge_test.go",
+        "internal/postgres/integration_test.go",
+        "internal/parser/testdata/codex/blockquotes_session.jsonl"
+      ]
+    },
+    "keep_upstream_reference": {
+      "file_count": 1,
+      "files": [
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    "keep_upstream_sample": {
+      "file_count": 1,
+      "files": [
+        "support/launchd/io.agentsview.pg-serve.plist"
+      ]
+    },
+    "rename_build_release": {
+      "file_count": 8,
+      "files": [
+        "scripts/build_wheels_test.py",
+        "scripts/install.ps1",
+        "Makefile",
+        "scripts/desktop-dev.ps1",
+        "scripts/install_test.sh",
+        "scripts/e2e-server.sh",
+        "scripts/release.sh",
+        "scripts/dev-backend-build.sh"
+      ]
+    },
+    "rename_desktop": {
+      "file_count": 4,
+      "files": [
+        "desktop/src-tauri/src/lib.rs",
+        "desktop/README.md",
+        "desktop/scripts/test-prepare-sidecar.sh",
+        "desktop/scripts/test-desktop-workflows.sh"
+      ]
+    },
+    "rename_docs_operator": {
+      "file_count": 3,
+      "files": [
+        "docs/desktop-release-setup.md",
+        "README.md",
+        "AGENTS.md"
+      ]
+    },
+    "rename_localstorage": {
+      "file_count": 8,
+      "files": [
+        "frontend/src/lib/stores/ui.svelte.ts",
+        "frontend/src/lib/stores/ui.test.ts",
+        "frontend/src/lib/stores/router.test.ts",
+        "frontend/src/lib/components/sidebar/session-list-utils.ts",
+        "frontend/src/lib/stores/starred.test.ts",
+        "frontend/src/lib/stores/starred.svelte.ts",
+        "frontend/src/lib/components/sidebar/session-list-utils.test.ts",
+        "frontend/src/lib/components/layout/sidebar-width.ts"
+      ]
+    },
+    "rename_pg_tests": {
+      "file_count": 16,
+      "files": [
+        "internal/postgres/sync_test.go",
+        "internal/postgres/usage_pgtest_test.go",
+        "internal/postgres/token_usage_pgtest_test.go",
+        "internal/postgres/schema_test.go",
+        "internal/postgres/trends_pgtest_test.go",
+        "internal/postgres/push_thinking_pgtest_test.go",
+        "internal/postgres/push_pgtest_test.go",
+        "internal/postgres/pricing_pgtest_test.go",
+        "internal/postgres/messages_pgtest_test.go",
+        "internal/postgres/automated_pgtest_test.go",
+        "internal/postgres/analytics_signals_pgtest_test.go",
+        "internal/postgres/analytics_autonomy_pgtest_test.go",
+        "internal/postgres/store_test.go",
+        "internal/postgres/schema.go",
+        "internal/postgres/pricing.go",
+        "internal/postgres/connect_test.go"
+      ]
+    },
+    "rename_product_strings": {
+      "file_count": 2,
+      "files": [
+        "internal/server/export.go",
+        "internal/server/export_test.go"
+      ]
+    },
+    "rename_residual": {
+      "file_count": 43,
+      "files": [
+        "internal/update/update_test.go",
+        "docs/periscope-spec.md",
+        "frontend/src/lib/api/client.test.ts",
+        "docker-compose.test.yml",
+        "PROGRESS.md",
+        "internal/parser/vscode_copilot_test.go",
+        "internal/parser/parser_test.go",
+        "frontend/src/lib/utils/projectColor.test.ts",
+        "frontend/src/lib/api/client.ts",
+        "cmd/periscope/stats_test.go",
+        "cmd/periscope/classifier_wiring_test.go",
+        "internal/web/fallback/index.html",
+        "internal/service/http.go",
+        "internal/server/server.go",
+        "internal/parser/project_foreign_test.go",
+        "internal/parser/openclaw.go",
+        "internal/db/session_stats.go",
+        "frontend/src/lib/components/content/ToolBlock.test.ts",
+        "cmd/periscope/stats.go",
+        "cmd/periscope/pg_test.go",
+        "scripts/changelog.sh",
+        "internal/web/embed_test.go",
+        "internal/sync/engine.go",
+        "internal/ssh/transfer.go",
+        "internal/server/statefile.go",
+        "internal/parser/warp.go",
+        "internal/parser/opencode_test.go",
+        "internal/parser/opencode.go",
+        "internal/db/usage_test.go",
+        "internal/db/session_stats_types.go",
+        "internal/db/session_stats_test.go",
+        "internal/db/schema.sql",
+        "internal/db/automated_test.go",
+        "internal/config/config_test.go",
+        "frontend/src/lib/components/layout/sidebar-width.test.ts",
+        "frontend/e2e/session-timing.spec.ts",
+        "frontend/dev-proxy.ts",
+        "frontend/dev-proxy.test.ts",
+        "cmd/periscope/usage.go",
+        "cmd/periscope/transport.go",
+        "cmd/periscope/terminal_sanitize.go",
+        "cmd/periscope/classifier_test.go",
+        "cmd/periscope/classifier.go"
+      ]
+    }
+  },
+  "files": [
+    {
+      "path": "scripts/build_wheels_test.py",
+      "match_count": 66,
+      "category": "rename_build_release",
+      "action": "rename",
+      "note": "Binary/cmd paths and installer branding"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-10-periscope-build-system.md",
+      "match_count": 46,
+      "category": "keep_historical",
+      "action": "keep",
+      "note": "Historical rename plan/spec; do not rewrite during upstream merge"
+    },
+    {
+      "path": "docs/desktop-release-setup.md",
+      "match_count": 37,
+      "category": "rename_docs_operator",
+      "action": "rename",
+      "note": "Operator-facing docs still say agentsview"
+    },
+    {
+      "path": "desktop/src-tauri/src/lib.rs",
+      "match_count": 31,
+      "category": "rename_desktop",
+      "action": "rename",
+      "note": "Sidecar binary, Tauri spawn name, smoke tests, artifact names"
+    },
+    {
+      "path": "README.md",
+      "match_count": 30,
+      "category": "rename_docs_operator",
+      "action": "rename",
+      "note": "Operator-facing docs still say agentsview"
+    },
+    {
+      "path": "internal/postgres/sync_test.go",
+      "match_count": 30,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/parser/project_git_test.go",
+      "match_count": 19,
+      "category": "keep_test_fixtures",
+      "action": "keep",
+      "note": "Fixture paths/project names simulate real session data"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "match_count": 18,
+      "category": "rename_build_release",
+      "action": "rename",
+      "note": "Binary/cmd paths and installer branding"
+    },
+    {
+      "path": "internal/sync/engine_integration_test.go",
+      "match_count": 14,
+      "category": "keep_test_fixtures",
+      "action": "keep",
+      "note": "Fixture paths/project names simulate real session data"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-10-periscope-build-design.md",
+      "match_count": 11,
+      "category": "keep_historical",
+      "action": "keep",
+      "note": "Historical rename plan/spec; do not rewrite during upstream merge"
+    },
+    {
+      "path": "internal/update/update_test.go",
+      "match_count": 9,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "desktop/README.md",
+      "match_count": 9,
+      "category": "rename_desktop",
+      "action": "rename",
+      "note": "Sidecar binary, Tauri spawn name, smoke tests, artifact names"
+    },
+    {
+      "path": "internal/postgres/usage_pgtest_test.go",
+      "match_count": 8,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "match_count": 8,
+      "category": "keep_upstream_reference",
+      "action": "keep",
+      "note": "Layer 1/branch naming; documents upstream pedigree"
+    },
+    {
+      "path": "docs/periscope-spec.md",
+      "match_count": 7,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Inspect during merge"
+    },
+    {
+      "path": "internal/sync/forge_integration_test.go",
+      "match_count": 6,
+      "category": "keep_test_fixtures",
+      "action": "keep",
+      "note": "Fixture paths/project names simulate real session data"
+    },
+    {
+      "path": "internal/postgres/token_usage_pgtest_test.go",
+      "match_count": 6,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "frontend/src/lib/stores/ui.svelte.ts",
+      "match_count": 6,
+      "category": "rename_localstorage",
+      "action": "migrate",
+      "note": "localStorage keys; add periscope keys + read legacy on load"
+    },
+    {
+      "path": "AGENTS.md",
+      "match_count": 6,
+      "category": "rename_docs_operator",
+      "action": "rename",
+      "note": "Operator-facing docs still say agentsview"
+    },
+    {
+      "path": "Makefile",
+      "match_count": 5,
+      "category": "rename_build_release",
+      "action": "rename",
+      "note": "Binary/cmd paths and installer branding"
+    },
+    {
+      "path": "internal/postgres/schema_test.go",
+      "match_count": 5,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "support/launchd/io.agentsview.pg-serve.plist",
+      "match_count": 4,
+      "category": "keep_upstream_sample",
+      "action": "review",
+      "note": "Upstream launchd sample; rename only if shipping fork copy"
+    },
+    {
+      "path": "scripts/desktop-dev.ps1",
+      "match_count": 4,
+      "category": "rename_build_release",
+      "action": "rename",
+      "note": "Binary/cmd paths and installer branding"
+    },
+    {
+      "path": "frontend/src/lib/api/client.test.ts",
+      "match_count": 4,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "UI copy, tests, dev proxy base paths"
+    },
+    {
+      "path": "docker-compose.test.yml",
+      "match_count": 4,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Inspect during merge"
+    },
+    {
+      "path": "scripts/install_test.sh",
+      "match_count": 3,
+      "category": "rename_build_release",
+      "action": "rename",
+      "note": "Binary/cmd paths and installer branding"
+    },
+    {
+      "path": "scripts/e2e-server.sh",
+      "match_count": 3,
+      "category": "rename_build_release",
+      "action": "rename",
+      "note": "Binary/cmd paths and installer branding"
+    },
+    {
+      "path": "PROGRESS.md",
+      "match_count": 3,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Inspect during merge"
+    },
+    {
+      "path": "internal/server/export.go",
+      "match_count": 3,
+      "category": "rename_product_strings",
+      "action": "rename",
+      "note": "User-Agent and export footer branding"
+    },
+    {
+      "path": "internal/parser/vscode_copilot_test.go",
+      "match_count": 3,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/parser/parser_test.go",
+      "match_count": 3,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/parser/forge_test.go",
+      "match_count": 3,
+      "category": "keep_test_fixtures",
+      "action": "keep",
+      "note": "Fixture paths/project names simulate real session data"
+    },
+    {
+      "path": "internal/config/config.go",
+      "match_count": 3,
+      "category": "compat_env",
+      "action": "compat",
+      "note": "Keep reading AGENTSVIEW_* legacy env vars; document aliases"
+    },
+    {
+      "path": "frontend/src/lib/utils/projectColor.test.ts",
+      "match_count": 3,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "UI copy, tests, dev proxy base paths"
+    },
+    {
+      "path": "frontend/src/lib/api/client.ts",
+      "match_count": 3,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "UI copy, tests, dev proxy base paths"
+    },
+    {
+      "path": "desktop/scripts/test-prepare-sidecar.sh",
+      "match_count": 3,
+      "category": "rename_desktop",
+      "action": "rename",
+      "note": "Sidecar binary, Tauri spawn name, smoke tests, artifact names"
+    },
+    {
+      "path": "desktop/scripts/test-desktop-workflows.sh",
+      "match_count": 3,
+      "category": "rename_desktop",
+      "action": "rename",
+      "note": "Sidecar binary, Tauri spawn name, smoke tests, artifact names"
+    },
+    {
+      "path": "cmd/periscope/stats_test.go",
+      "match_count": 3,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    },
+    {
+      "path": "cmd/periscope/classifier_wiring_test.go",
+      "match_count": 3,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    },
+    {
+      "path": "internal/web/fallback/index.html",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/service/http.go",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/server/server.go",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/server/export_test.go",
+      "match_count": 2,
+      "category": "rename_product_strings",
+      "action": "rename",
+      "note": "User-Agent and export footer branding"
+    },
+    {
+      "path": "internal/postgres/trends_pgtest_test.go",
+      "match_count": 2,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/push_thinking_pgtest_test.go",
+      "match_count": 2,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/push_pgtest_test.go",
+      "match_count": 2,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/pricing_pgtest_test.go",
+      "match_count": 2,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/messages_pgtest_test.go",
+      "match_count": 2,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/integration_test.go",
+      "match_count": 2,
+      "category": "keep_test_fixtures",
+      "action": "keep",
+      "note": "Fixture paths/project names simulate real session data"
+    },
+    {
+      "path": "internal/postgres/automated_pgtest_test.go",
+      "match_count": 2,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/analytics_signals_pgtest_test.go",
+      "match_count": 2,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/analytics_autonomy_pgtest_test.go",
+      "match_count": 2,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/parser/project_foreign_test.go",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/parser/openclaw.go",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/db/session_stats.go",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "frontend/src/lib/stores/ui.test.ts",
+      "match_count": 2,
+      "category": "rename_localstorage",
+      "action": "migrate",
+      "note": "localStorage keys; add periscope keys + read legacy on load"
+    },
+    {
+      "path": "frontend/src/lib/stores/router.test.ts",
+      "match_count": 2,
+      "category": "rename_localstorage",
+      "action": "migrate",
+      "note": "localStorage keys; add periscope keys + read legacy on load"
+    },
+    {
+      "path": "frontend/src/lib/components/sidebar/session-list-utils.ts",
+      "match_count": 2,
+      "category": "rename_localstorage",
+      "action": "migrate",
+      "note": "localStorage keys; add periscope keys + read legacy on load"
+    },
+    {
+      "path": "frontend/src/lib/components/content/ToolBlock.test.ts",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "UI copy, tests, dev proxy base paths"
+    },
+    {
+      "path": "cmd/periscope/stats.go",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    },
+    {
+      "path": "cmd/periscope/pg_test.go",
+      "match_count": 2,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    },
+    {
+      "path": "scripts/sync-upstream.sh",
+      "match_count": 1,
+      "category": "keep_branch_name",
+      "action": "keep",
+      "note": "References agentsview mirror branch by design"
+    },
+    {
+      "path": "scripts/release.sh",
+      "match_count": 1,
+      "category": "rename_build_release",
+      "action": "rename",
+      "note": "Binary/cmd paths and installer branding"
+    },
+    {
+      "path": "scripts/dev-backend-build.sh",
+      "match_count": 1,
+      "category": "rename_build_release",
+      "action": "rename",
+      "note": "Binary/cmd paths and installer branding"
+    },
+    {
+      "path": "scripts/changelog.sh",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Inspect during merge"
+    },
+    {
+      "path": "internal/web/embed_test.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/sync/engine.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/ssh/transfer.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/server/statefile.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/postgres/store_test.go",
+      "match_count": 1,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/schema.go",
+      "match_count": 1,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/pricing.go",
+      "match_count": 1,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/postgres/connect_test.go",
+      "match_count": 1,
+      "category": "rename_pg_tests",
+      "action": "rename",
+      "note": "PG test schema names; align with default periscope schema where product-facing"
+    },
+    {
+      "path": "internal/parser/warp.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/parser/testdata/codex/blockquotes_session.jsonl",
+      "match_count": 1,
+      "category": "keep_test_fixtures",
+      "action": "keep",
+      "note": "Fixture paths/project names simulate real session data"
+    },
+    {
+      "path": "internal/parser/opencode_test.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/parser/opencode.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/db/usage_test.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/db/session_stats_types.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/db/session_stats_test.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/db/schema.sql",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/db/automated_test.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "internal/config/config_test.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Comments/strings; rename product-facing only"
+    },
+    {
+      "path": "frontend/src/lib/stores/starred.test.ts",
+      "match_count": 1,
+      "category": "rename_localstorage",
+      "action": "migrate",
+      "note": "localStorage keys; add periscope keys + read legacy on load"
+    },
+    {
+      "path": "frontend/src/lib/stores/starred.svelte.ts",
+      "match_count": 1,
+      "category": "rename_localstorage",
+      "action": "migrate",
+      "note": "localStorage keys; add periscope keys + read legacy on load"
+    },
+    {
+      "path": "frontend/src/lib/components/sidebar/session-list-utils.test.ts",
+      "match_count": 1,
+      "category": "rename_localstorage",
+      "action": "migrate",
+      "note": "localStorage keys; add periscope keys + read legacy on load"
+    },
+    {
+      "path": "frontend/src/lib/components/layout/sidebar-width.ts",
+      "match_count": 1,
+      "category": "rename_localstorage",
+      "action": "migrate",
+      "note": "localStorage keys; add periscope keys + read legacy on load"
+    },
+    {
+      "path": "frontend/src/lib/components/layout/sidebar-width.test.ts",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "UI copy, tests, dev proxy base paths"
+    },
+    {
+      "path": "frontend/e2e/session-timing.spec.ts",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "UI copy, tests, dev proxy base paths"
+    },
+    {
+      "path": "frontend/dev-proxy.ts",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "UI copy, tests, dev proxy base paths"
+    },
+    {
+      "path": "frontend/dev-proxy.test.ts",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "UI copy, tests, dev proxy base paths"
+    },
+    {
+      "path": "cmd/periscope/usage.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    },
+    {
+      "path": "cmd/periscope/transport.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    },
+    {
+      "path": "cmd/periscope/terminal_sanitize.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    },
+    {
+      "path": "cmd/periscope/classifier_test.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    },
+    {
+      "path": "cmd/periscope/classifier.go",
+      "match_count": 1,
+      "category": "rename_residual",
+      "action": "review",
+      "note": "Check for stale agentsview strings in CLI/help/tests"
+    }
+  ],
+  "session_fixes_2026_07_28": [
+    {
+      "pr": "periscope#11",
+      "file": "desktop/scripts/test-desktop-workflows.sh",
+      "change": "release artifact assert periscope-desktop-linux-arm64"
+    },
+    {
+      "pr": "periscope#11",
+      "file": ".github/workflows/desktop-artifacts.yml",
+      "change": "sidecar smoke path periscope-${target_triple}; version grep periscope dev"
+    },
+    {
+      "pr": "periscope#11",
+      "file": "desktop/src-tauri/.gitignore",
+      "change": "ignore periscope-* sidecar binaries"
+    }
+  ]
+}

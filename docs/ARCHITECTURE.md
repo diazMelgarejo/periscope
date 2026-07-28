@@ -2,7 +2,10 @@
 
 > **Status:** Living document. Update after every upstream sync and every fork enhancement.  
 > **Canonical branch:** `merged`  
-> **Last updated:** 2026-05-10
+> **Last updated:** 2026-07-28
+
+**Upstream merge rename checklist:** [`docs/guides/agentsview-to-periscope-rename-catalogue.md`](guides/agentsview-to-periscope-rename-catalogue.md)
+(machine index: [`agentsview-rename-index.json`](guides/agentsview-rename-index.json))
 
 ---
 
