@@ -1,74 +1,115 @@
-```markdown
 # periscope Development Patterns
 
-> Auto-generated skill from repository analysis
+> Synthesized from two ECC repository-analysis runs and verified against the
+> repository's documented architecture and test layout.
 
 ## Overview
-This skill teaches you the core development patterns and conventions used in the `periscope` TypeScript codebase. You'll learn how to name files, structure imports/exports, write commits, and organize tests. This guide also provides suggested commands for common workflows, ensuring consistency and efficiency in your contributions.
+
+Periscope is a Go service and CLI backed by SQLite/FTS5, with a Svelte 5 and
+TypeScript frontend embedded in the Go binary. It also includes a Tauri desktop
+wrapper and optional PostgreSQL synchronization. Apply conventions within the
+language and subsystem being changed rather than treating the repository as a
+TypeScript-only project.
 
 ## Coding Conventions
 
-### File Naming
-- Use **kebab-case** for all file names.
-  - Example:  
-    ```
-    user-profile.ts
-    data-fetcher.test.ts
-    ```
+### File and Symbol Naming
 
-### Import Style
-- Use **relative imports** for module references.
-  - Example:
-    ```typescript
-    import { fetchData } from './data-fetcher';
-    ```
+- Follow the surrounding subsystem's established naming.
+- Frontend TypeScript files use **kebab-case** where applicable.
+- TypeScript functions use **camelCase**, classes use **PascalCase**, and
+  constants use **SCREAMING_SNAKE_CASE**.
+- Go files, packages, and symbols follow idiomatic Go conventions.
 
-### Export Style
-- Use **named exports** only.
-  - Example:
-    ```typescript
-    // In user-profile.ts
-    export function getUserProfile(id: string) { ... }
-    ```
+### TypeScript Imports and Exports
+
+- Prefer relative imports for project-local frontend modules.
+- Prefer named exports where the surrounding module follows that pattern.
+
+```typescript
+import { fetchData } from "./data-fetcher";
+
+export function getUserProfile(id: string) {
+  return fetchData(id);
+}
+```
 
 ### Commit Messages
-- Follow **conventional commit** format.
-- Use the `chore` prefix for all commits.
-- Keep commit messages concise (average ~59 characters).
-  - Example:
-    ```
-    chore: update dependencies to latest versions
-    ```
+
+- Use Conventional Commits.
+- Choose the prefix that describes the change; observed prefixes include
+  `build`, `chore`, and `fix`.
+- Keep the subject concise and include a scope when it adds useful context.
+
+```text
+build(deps): update frontend dependencies
+fix(desktop): honor PERISCOPE_VERSION override
+chore(git): sync attribution guard scripts
+```
 
 ## Workflows
 
 ### Code Contribution
-**Trigger:** When adding or updating code  
-**Command:** `/contribute`
 
-1. Create or update files using kebab-case naming.
-2. Use relative imports and named exports.
-3. Write clear, conventional commit messages with the `chore` prefix.
-4. If applicable, add or update corresponding test files (`*.test.ts`).
+**Trigger:** When adding or updating code
+
+**Guide:** `/contribute`
+
+1. Read `AGENTS.md` and the conventions nearest to the files being changed.
+2. Follow the naming, import, and export patterns of that subsystem.
+3. Add or update tests for new features and bug fixes.
+4. Run the targeted checks, then the broader affected suite.
+5. Use a Conventional Commit prefix that matches the change.
+
+### Dependency Update
+
+**Trigger:** When updating a package or language ecosystem
+
+**Guide:** `/update-dependencies`
+
+**Instinct pair (keep both):**
+
+- `periscope-workflow-dependency-update` — numbered workflow steps; trigger:
+  "when doing dependency update".
+- `periscope-instinct-dependency-update` — concise action summary; trigger:
+  "When updating dependencies for a package or language ecosystem".
+
+1. Update the relevant manifest, such as `frontend/package.json`,
+   `desktop/package.json`, `desktop/src-tauri/Cargo.toml`, or `go.mod`.
+2. Regenerate the corresponding lockfile or module metadata with the native
+   package manager.
+3. Review both manifest and generated dependency changes for unintended drift.
+4. Run the checks for each affected subsystem.
+5. Commit the manifest and lockfile together with a `build(deps)` subject.
 
 ### Testing
-**Trigger:** When verifying code correctness  
-**Command:** `/test`
 
-1. Locate or create a test file matching `*.test.*` pattern.
-2. Write or update test cases as needed.
-3. Run your test suite using the project's test runner (framework unknown; check project scripts or documentation).
-4. Ensure all tests pass before committing.
+**Trigger:** When verifying correctness
+
+**Guide:** `/test`
+
+1. Add tests in the location used by the affected subsystem.
+2. Run the smallest relevant test target while iterating.
+3. Run the broader affected suite before handoff.
+4. For Go changes, run `go fmt ./...` and `go vet ./...`.
 
 ## Testing Patterns
 
-- Test files follow the `*.test.*` naming convention (e.g., `user-profile.test.ts`).
-- The specific testing framework is not detected; check existing test files for structure or consult project documentation.
-- Place tests close to the code they verify for clarity and maintainability.
+- Go unit tests are colocated with packages as `*_test.go`; table-driven tests
+  are preferred.
+- Frontend unit tests are colocated as `*.test.ts` and run with Vitest.
+- Browser journeys live in `frontend/e2e/` and run with Playwright.
+- PostgreSQL integration tests use the `pgtest` build tag and a dedicated test
+  database.
+- Use `t.TempDir()` for isolated Go test data.
 
-## Commands
-| Command      | Purpose                                    |
-|--------------|--------------------------------------------|
-| /contribute  | Guide for contributing code changes        |
-| /test        | Steps for writing and running tests        |
-```
+## Verified Commands
+
+| Command | Purpose |
+| --- | --- |
+| `make test-short` | Run fast Go tests |
+| `make test` | Run the full Go test suite |
+| `cd frontend && npm test` | Run frontend Vitest tests |
+| `make e2e` | Run Playwright end-to-end tests |
+| `make vet` | Run Go static checks |
+| `make lint` | Run configured Go linters |
