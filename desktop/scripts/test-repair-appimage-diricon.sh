@@ -22,19 +22,21 @@ trap cleanup EXIT
 fake_bin="$tmp_root/bin"
 mkdir -p "$fake_bin"
 
-cat > "$fake_bin/unsquashfs" <<'EOF'
+write_fake_unsquashfs() {
+  local icon_name="$1"
+  cat > "$fake_bin/unsquashfs" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "${1:-}" = "-s" ]; then
+if [ "\${1:-}" = "-s" ]; then
   exit 0
 fi
 
 dest=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
     -d)
-      dest="$2"
+      dest="\$2"
       shift 2
       ;;
     *)
@@ -43,15 +45,16 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$dest" ]; then
+if [ -z "\$dest" ]; then
   echo "missing -d destination" >&2
   exit 1
 fi
 
-mkdir -p "$dest"
-printf 'icon\n' > "$dest/AgentsView.png"
+mkdir -p "\$dest"
+printf 'icon\n' > "\$dest/$icon_name"
 EOF
-chmod +x "$fake_bin/unsquashfs"
+  chmod +x "$fake_bin/unsquashfs"
+}
 
 cat > "$fake_bin/mksquashfs" <<'EOF'
 #!/usr/bin/env bash
@@ -86,7 +89,7 @@ fi
 
 cat <<'SIGNATURE'
 Your file was signed successfully, You can find the signature here:
-/tmp/AgentsView.AppImage.tar.gz.sig
+/tmp/Periscope.AppImage.tar.gz.sig
 
 Public signature:
 YWJjCg==
@@ -96,33 +99,45 @@ SIGNATURE
 EOF
 chmod +x "$fake_bin/npx"
 
-appimage="$tmp_root/AgentsView.AppImage"
-archive="${appimage}.tar.gz"
-signature="${archive}.sig"
-printf 'runtime hsqs old-rootfs\n' > "$appimage"
-chmod 0755 "$appimage"
-printf 'stale archive\n' > "$archive"
+repair_case() {
+  local appimage_name="$1"
+  local icon_name="$2"
 
-TEST_ARCHIVE="$archive" \
-TAURI_SIGNING_PRIVATE_KEY="test-key" \
-PATH="$fake_bin:$PATH" \
-  bash "$SCRIPT_DIR/repair-appimage-diricon.sh" "$appimage" >/dev/null
+  write_fake_unsquashfs "$icon_name"
 
-archive_listing="$(tar -tzf "$archive")"
-assert_eq "$archive_listing" "AgentsView.AppImage" \
-  "updater archive contains the repaired AppImage"
+  local appimage="$tmp_root/$appimage_name"
+  local archive="${appimage}.tar.gz"
+  local signature="${archive}.sig"
+  printf 'runtime hsqs old-rootfs\n' > "$appimage"
+  chmod 0755 "$appimage"
+  printf 'stale archive\n' > "$archive"
 
-extracted_dir="$tmp_root/extracted"
-mkdir -p "$extracted_dir"
-tar -xzf "$archive" -C "$extracted_dir"
-assert_eq "$(cat "$extracted_dir/AgentsView.AppImage")" "$(cat "$appimage")" \
-  "updater archive contains current AppImage bytes"
+  TEST_ARCHIVE="$archive" \
+  TAURI_SIGNING_PRIVATE_KEY="test-key" \
+  PATH="$fake_bin:$PATH" \
+    bash "$SCRIPT_DIR/repair-appimage-diricon.sh" "$appimage" >/dev/null
 
-archived_mode="$(tar -tvzf "$archive" | awk '{print $1}')"
-assert_eq "$archived_mode" "-rwxr-xr-x" \
-  "updater archive preserves executable AppImage mode"
+  local archive_listing
+  archive_listing="$(tar -tzf "$archive")"
+  assert_eq "$archive_listing" "$appimage_name" \
+    "updater archive contains the repaired AppImage ($appimage_name)"
 
-assert_eq "$(cat "$signature")" "YWJjCg==" \
-  "updater signature contains only the base64 public signature"
+  local extracted_dir="$tmp_root/extracted-$appimage_name"
+  mkdir -p "$extracted_dir"
+  tar -xzf "$archive" -C "$extracted_dir"
+  assert_eq "$(cat "$extracted_dir/$appimage_name")" "$(cat "$appimage")" \
+    "updater archive contains current AppImage bytes ($appimage_name)"
+
+  local archived_mode
+  archived_mode="$(tar -tvzf "$archive" | awk '{print $1}')"
+  assert_eq "$archived_mode" "-rwxr-xr-x" \
+    "updater archive preserves executable AppImage mode ($appimage_name)"
+
+  assert_eq "$(cat "$signature")" "YWJjCg==" \
+    "updater signature contains only the base64 public signature ($appimage_name)"
+}
+
+repair_case "Periscope.AppImage" "Periscope.png"
+repair_case "AgentsView.AppImage" "AgentsView.png"
 
 echo "repair-appimage-diricon updater archive checks passed"

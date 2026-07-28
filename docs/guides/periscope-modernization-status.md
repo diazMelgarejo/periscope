@@ -30,6 +30,48 @@ related specs.
 | `scripts/install.sh` | Ported | Periscope product + agentsview compat |
 | `scripts/install_test.sh` | Updated | Periscope URLs + legacy env aliases |
 | Release tag convention | Documented | `v{semver}-{8-char-sha}` from 5bd2e8a |
+| Desktop/API/doctor product identity | Done (this replay) | User-facing name **Periscope**; bundle `io.latentsignal.periscope` |
+| `~/.agentsview/desktop.env` | Preserved | Desktop shell still reads legacy path for compatibility |
+
+---
+
+## Release tag convention (5bd2e8a)
+
+Fork releases **always embed the short commit hash** of the release commit.
+Adopted in commit `5bd2e8a421c326a9a40e73437930ba76f475b9cb` (May 2026).
+
+```
+v{semver}-{8-char-commit}   e.g.  v0.29.2-periscope.2-657a1090
+```
+
+Semver pre-release identity on `merged`:
+
+```
+v0.(upstream_minor + 1).2-periscope.2
+```
+
+Operator tagging (after verification — never automatic from tooling):
+
+```bash
+COMMIT=$(git rev-parse --short=8 HEAD)
+VERSION="v0.29.2-periscope.2"
+git tag -a "${VERSION}-${COMMIT}" -m "Release ${VERSION}-${COMMIT}"
+```
+
+---
+
+## Desktop bundle identifier
+
+**Canonical:** `io.latentsignal.periscope` (matches `latentsignal-org/periscope` Layer 2).
+
+The legacy AgentsView desktop bundle id `io.agentsview.desktop` is **not**
+retained: in-app updater continuity would require shipping under the same
+identifier, but the product rename intentionally starts a new desktop lineage.
+Users on AgentsView-branded desktop builds reinstall or migrate manually; fork
+updater artifacts target `diazMelgarejo/periscope`.
+
+**Compatibility preserved:** `~/.agentsview/desktop.env` is still read for desktop
+shell environment overrides (see `desktop/src-tauri/src/lib.rs`).
 
 ---
 
@@ -37,6 +79,9 @@ related specs.
 
 | Area | State | Tracker |
 | --- | --- | --- |
+| `internal/db/db.go` `DataVersionTooNewError` user text | Pending | serve `--check-data-version` + `cli_test.go` |
+| `internal/server/server_test.go` OpenAPI title | Pending | matches `Periscope API` in `server.go` |
+| `cmd/doctor_test.go` newer-database assertion | Pending | matches `doctor.go` Periscope wording |
 | `cmd/agentsview` → product `periscope` in Makefile/CI | Partial | rename catalogue |
 | Desktop sidecar `periscope-*` artifacts | Partial | desktop workflow PRs |
 | Full AgentsView tree on `merged` | Replay ongoing | upstream blueprint §4 |

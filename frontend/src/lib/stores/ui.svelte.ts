@@ -11,6 +11,7 @@ import {
   SIDEBAR_WIDTH_KEY,
   clampStoredSidebarWidth,
 } from "../components/layout/sidebar-width.js";
+import { readMigratedLocalStorageValue } from "../storage/local-storage-key.js";
 
 type Theme = "light" | "dark";
 export type MessageLayout = "default" | "compact" | "stream" | "skim";
@@ -45,17 +46,17 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
   "code",
 ];
 
-const BLOCK_FILTER_KEY = "agentsview-block-filters";
-const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
-const VITALS_KEY = "agentsview-session-vitals";
+const BLOCK_FILTER_KEY = "periscope-block-filters";
+const TRANSCRIPT_MODE_KEY = "periscope-transcript-mode";
+const VITALS_KEY = "periscope-session-vitals";
 const VITALS_CALLS_EXPANDED_KEY =
-  "agentsview-session-vitals-calls-expanded";
-const SIGNAL_PANEL_KEY = "agentsview-signal-panel";
-const FOLLOW_LATEST_KEY = "agentsview-follow-latest";
+  "periscope-session-vitals-calls-expanded";
+const SIGNAL_PANEL_KEY = "periscope-signal-panel";
+const FOLLOW_LATEST_KEY = "periscope-follow-latest";
 
 function readBlockFilters(): Set<BlockType> {
   try {
-    const raw = localStorage?.getItem(BLOCK_FILTER_KEY);
+    const raw = readMigratedLocalStorageValue(localStorage, BLOCK_FILTER_KEY);
     if (raw) {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) {
@@ -72,8 +73,8 @@ function readBlockFilters(): Set<BlockType> {
   return new Set(ALL_BLOCK_TYPES);
 }
 
-const LAYOUT_KEY = "agentsview-message-layout";
-const ZOOM_KEY = "agentsview-zoom-level";
+const LAYOUT_KEY = "periscope-message-layout";
+const ZOOM_KEY = "periscope-zoom-level";
 const VALID_TRANSCRIPT_MODES: TranscriptMode[] = [
   "normal",
   "focused",
@@ -89,8 +90,8 @@ const ZOOM_STEPS = [
   67, 75, 80, 90, 100, 110, 125, 150, 175, 200,
 ];
 const ZOOM_DEFAULT = 100;
-const FONT_SCALE_KEY = "agentsview-font-scale";
-const HIGH_CONTRAST_KEY = "agentsview-high-contrast";
+const FONT_SCALE_KEY = "periscope-font-scale";
+const HIGH_CONTRAST_KEY = "periscope-high-contrast";
 export const FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
 const FONT_SCALE_DEFAULT = 100;
 
@@ -136,7 +137,7 @@ function composedRootZoom(
 function readStoredZoom(): number {
   if (!IS_DESKTOP) return ZOOM_DEFAULT;
   try {
-    const raw = localStorage?.getItem(ZOOM_KEY);
+    const raw = readMigratedLocalStorageValue(localStorage, ZOOM_KEY);
     if (raw) {
       const val = Number(raw);
       if (ZOOM_STEPS.includes(val)) return val;
@@ -149,7 +150,7 @@ function readStoredZoom(): number {
 
 function readStoredFontScale(): number {
   try {
-    const raw = localStorage?.getItem(FONT_SCALE_KEY);
+    const raw = readMigratedLocalStorageValue(localStorage, FONT_SCALE_KEY);
     if (raw) {
       const val = Number(raw);
       if (FONT_SCALE_STEPS.includes(val)) return val;
@@ -180,7 +181,10 @@ function migrateHighContrastKey(): void {
     ) {
       return;
     }
-    const legacy = localStorage.getItem(HIGH_CONTRAST_KEY);
+    const legacy = readMigratedLocalStorageValue(
+      localStorage,
+      HIGH_CONTRAST_KEY,
+    );
     if (legacy !== null && localStorage.getItem("theme-high-contrast") === null) {
       localStorage.setItem("theme-high-contrast", legacy);
     }
@@ -194,7 +198,7 @@ initTheme({ storageKey: "theme" });
 
 function readStoredLayout(): MessageLayout {
   try {
-    const raw = localStorage?.getItem(LAYOUT_KEY);
+    const raw = readMigratedLocalStorageValue(localStorage, LAYOUT_KEY);
     if (
       raw &&
       VALID_LAYOUTS.includes(raw as MessageLayout)
@@ -209,7 +213,10 @@ function readStoredLayout(): MessageLayout {
 
 function readStoredTranscriptMode(): TranscriptMode {
   try {
-    const raw = localStorage?.getItem(TRANSCRIPT_MODE_KEY);
+    const raw = readMigratedLocalStorageValue(
+      localStorage,
+      TRANSCRIPT_MODE_KEY,
+    );
     if (
       raw &&
       VALID_TRANSCRIPT_MODES.includes(raw as TranscriptMode)
@@ -225,7 +232,7 @@ function readStoredTranscriptMode(): TranscriptMode {
 function readStoredSidebarWidth(): number {
   try {
     return clampStoredSidebarWidth(
-      localStorage?.getItem(SIDEBAR_WIDTH_KEY),
+      readMigratedLocalStorageValue(localStorage, SIDEBAR_WIDTH_KEY),
     );
   } catch {
     return SIDEBAR_WIDTH_DEFAULT;
@@ -234,7 +241,7 @@ function readStoredSidebarWidth(): number {
 
 function readStoredBool(key: string, fallback: boolean): boolean {
   try {
-    const raw = localStorage?.getItem(key);
+    const raw = readMigratedLocalStorageValue(localStorage, key);
     if (raw === "true") return true;
     if (raw === "false") return false;
   } catch {

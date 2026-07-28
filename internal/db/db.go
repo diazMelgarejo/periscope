@@ -360,7 +360,7 @@ var ErrWALCheckpointBusy = errors.New("wal checkpoint busy")
 var ErrWriterClosed = errors.New("writer closed for maintenance pass")
 
 // DataVersionTooNewError reports that an archive was written by a newer
-// agentsview parser than the current binary understands.
+// Periscope parser than the current binary understands.
 type DataVersionTooNewError struct {
 	DatabaseVersion int
 	BinaryVersion   int
@@ -368,7 +368,7 @@ type DataVersionTooNewError struct {
 
 func (e *DataVersionTooNewError) Error() string {
 	return fmt.Sprintf(
-		"database data version %d is newer than this agentsview binary's data version %d, so this binary cannot safely open the archive. Use an AgentsView build with data version %d or newer, or restore an archive backup compatible with data version %d. The archive was not modified",
+		"database data version %d is newer than this periscope binary's data version %d, so this binary cannot safely open the archive. Use a Periscope build with data version %d or newer, or restore an archive backup compatible with data version %d. The archive was not modified",
 		e.DatabaseVersion, e.BinaryVersion,
 		e.DatabaseVersion, e.BinaryVersion,
 	)

@@ -994,7 +994,7 @@ func (f *fakeContentSearchService) SearchContent(
 
 // search_content must pass Mode through to the service untouched, and map
 // service.ErrSemanticUnavailable to a tool error carrying the remediation
-// sentence from db.ErrSemanticUnavailable ("...run 'agentsview embeddings
+// sentence from db.ErrSemanticUnavailable ("...run 'periscope embeddings
 // build'"), not a generic failure.
 func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	fake := &fakeContentSearchService{err: service.ErrSemanticUnavailable}

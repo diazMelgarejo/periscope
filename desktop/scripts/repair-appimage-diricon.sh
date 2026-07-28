@@ -116,13 +116,18 @@ repair_one() {
 
   unsquashfs -q -d "$appdir" -o "$offset" "$appimage" >/dev/null
 
-  if [ ! -f "$appdir/AgentsView.png" ]; then
-    echo "error: root AgentsView.png missing in $appimage" >&2
+  icon_source=""
+  if [ -f "$appdir/Periscope.png" ]; then
+    icon_source="$appdir/Periscope.png"
+  elif [ -f "$appdir/AgentsView.png" ]; then
+    icon_source="$appdir/AgentsView.png"
+  else
+    echo "error: root Periscope.png (or legacy AgentsView.png) missing in $appimage" >&2
     exit 1
   fi
 
   rm -f "$appdir/.DirIcon"
-  cp "$appdir/AgentsView.png" "$appdir/.DirIcon"
+  cp "$icon_source" "$appdir/.DirIcon"
   chmod 0644 "$appdir/.DirIcon"
 
   head -c "$offset" "$appimage" > "$runtime"

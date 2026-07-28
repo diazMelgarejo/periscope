@@ -16,13 +16,14 @@ import (
 )
 
 const (
-	EnabledEnv               = "AGENTSVIEW_TELEMETRY_ENABLED"
+	EnabledEnv               = "PERISCOPE_TELEMETRY_ENABLED"
+	legacyEnabledEnv         = "AGENTSVIEW_TELEMETRY_ENABLED"
 	GenericEnabledEnv        = kittelemetry.GenericTelemetryEnabledEnv
 	installIDFilename        = "telemetry-install-id"
 	postHogAPIKey            = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
 	EventDaemonActive        = "daemon_active"
-	application              = "agentsview"
-	envPrefix                = "AGENTSVIEW"
+	application              = "periscope"
+	envPrefix                = "PERISCOPE"
 	defaultInstallIDFilePerm = 0o600
 )
 
@@ -39,7 +40,31 @@ type Options struct {
 }
 
 func EnabledFromEnv() bool {
-	return kittelemetry.PostHogTelemetryEnabledFromEnv(envPrefix)
+	if kittelemetry.PostHogTelemetryDisabled() {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv(GenericEnabledEnv)) == "0" {
+		return false
+	}
+	if enabled, ok := telemetryEnabledFromEnv(EnabledEnv); ok {
+		return enabled
+	}
+	if enabled, ok := telemetryEnabledFromEnv(legacyEnabledEnv); ok {
+		return enabled
+	}
+	return true
+}
+
+func telemetryEnabledFromEnv(name string) (enabled bool, set bool) {
+	raw, ok := os.LookupEnv(name)
+	if !ok {
+		return false, false
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false, false
+	}
+	return trimmed != "0", true
 }
 
 func NewReporter(opts Options) (*Reporter, error) {

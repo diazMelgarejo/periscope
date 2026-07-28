@@ -93,10 +93,14 @@ describe("i18n locale selection", () => {
   });
 
   it("points auth recovery at pre-auth token sources", () => {
+    expect(en.app_auth_description).toContain("~/.periscope/config.toml");
+    expect(en.app_auth_description).toContain("PERISCOPE_AUTH_TOKEN");
     expect(en.app_auth_description).toContain("~/.agentsview/config.toml");
     expect(en.app_auth_description).toContain("AGENTSVIEW_AUTH_TOKEN");
     expect(en.app_auth_description).not.toContain("server's console");
     expect(en.app_auth_description).not.toContain("settings page");
+    expect(zhCN.app_auth_description).toContain("~/.periscope/config.toml");
+    expect(zhCN.app_auth_description).toContain("PERISCOPE_AUTH_TOKEN");
     expect(zhCN.app_auth_description).toContain("~/.agentsview/config.toml");
     expect(zhCN.app_auth_description).toContain("AGENTSVIEW_AUTH_TOKEN");
     expect(zhCN.app_auth_description).not.toContain("服务器控制台");

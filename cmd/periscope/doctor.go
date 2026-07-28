@@ -518,7 +518,7 @@ func doctorLikelyCause(
 	}
 	if *report.UserVersion > currentVersion {
 		return fmt.Sprintf(
-			"SQLite user_version is newer than this binary. Use an AgentsView build with data version %d or newer, or restore an archive backup compatible with data version %d",
+			"SQLite user_version is newer than this binary. Use a Periscope build with data version %d or newer, or restore an archive backup compatible with data version %d",
 			*report.UserVersion, currentVersion,
 		)
 	}

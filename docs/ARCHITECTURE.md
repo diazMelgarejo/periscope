@@ -158,7 +158,9 @@ top of Layers 1+2.
 | Git branch / remote `agentsview` | Keep — mirror name is intentional |
 | Historical fixtures and docs | Keep when simulating user data |
 | Binary, CI artifact, desktop sidecar | Prefer `periscope` |
+| Desktop bundle identifier | `io.latentsignal.periscope` (not `io.agentsview.desktop`) |
 | `AGENTSVIEW_*` env vars | Read for compatibility; prefer `PERISCOPE_*` |
+| `~/.agentsview/desktop.env` | Keep — desktop shell compatibility path |
 
 During modernization the Go module remains `go.kenn.io/agentsview` and the build
 tree may still use `cmd/agentsview/` while release/install paths transition to
@@ -174,7 +176,8 @@ Semver pre-release identity:
 v0.(upstream_minor + 1).2-periscope.2
 ```
 
-Tags **always embed the short commit hash** of the release commit:
+Tags **always embed the short commit hash** of the release commit. Convention
+adopted in `5bd2e8a` (May 2026):
 
 ```
 v{semver}-{8-char-commit}   e.g.  v0.29.2-periscope.2-657a1090
@@ -186,6 +189,18 @@ VERSION="v0.29.2-periscope.2"
 git tag -a "${VERSION}-${COMMIT}" -m "Release ${VERSION}-${COMMIT}"
 # Push only after operator review — never automatic from tooling here.
 ```
+
+---
+
+## Desktop app identity
+
+| Signal | Value |
+| --- | --- |
+| Product name (UI, API title, doctor) | **Periscope** |
+| Tauri bundle identifier | `io.latentsignal.periscope` |
+| Legacy bundle id | `io.agentsview.desktop` — not retained (updater continuity would require it; product rename starts new desktop lineage) |
+| Desktop env file | `~/.agentsview/desktop.env` — compatibility path preserved |
+| Updater endpoint | `diazMelgarejo/periscope` releases |
 
 ---
 

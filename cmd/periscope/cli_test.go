@@ -135,11 +135,15 @@ func TestOpenAPICommandEmitsSpec(t *testing.T) {
 	require.NoError(t, err, "Execute")
 
 	var spec struct {
-		OpenAPI string                    `json:"openapi"`
-		Paths   map[string]map[string]any `json:"paths"`
+		OpenAPI string `json:"openapi"`
+		Info    struct {
+			Title string `json:"title"`
+		} `json:"info"`
+		Paths map[string]map[string]any `json:"paths"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &spec))
 	assert.Equal(t, "3.1.0", spec.OpenAPI)
+	assert.Equal(t, "Periscope API", spec.Info.Title)
 	require.Contains(t, spec.Paths, "/api/v1/sessions")
 	assert.Contains(t, spec.Paths["/api/v1/sessions"], "get")
 	require.Contains(t, spec.Paths, "/api/v1/sessions/{id}/rename")
@@ -166,9 +170,9 @@ func TestServeCheckDataVersionRejectsNewerDatabase(t *testing.T) {
 	assert.Equal(t, dataVersionTooNewExitCode, exitCodeFromError(err))
 	assert.Empty(t, out)
 	assert.Contains(t, err.Error(), "database data version")
-	assert.Contains(t, err.Error(), "is newer than this agentsview binary")
+	assert.Contains(t, err.Error(), "is newer than this periscope binary")
 	assert.Contains(t, err.Error(),
-		fmt.Sprintf("Use an AgentsView build with data version %d or newer", futureVersion))
+		fmt.Sprintf("Use a Periscope build with data version %d or newer", futureVersion))
 	assert.Contains(t, err.Error(),
 		fmt.Sprintf("restore an archive backup compatible with data version %d",
 			db.CurrentDataVersion()))

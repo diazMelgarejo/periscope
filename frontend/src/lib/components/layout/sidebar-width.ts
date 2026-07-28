@@ -1,6 +1,6 @@
 import { BREAKPOINTS } from "@kenn-io/kit-ui";
 
-export const SIDEBAR_WIDTH_KEY = "agentsview-sidebar-width";
+export const SIDEBAR_WIDTH_KEY = "periscope-sidebar-width";
 export const SIDEBAR_WIDTH_DEFAULT = 260;
 export const SIDEBAR_WIDTH_MIN = 220;
 export const SIDEBAR_WIDTH_STORAGE_MAX = 520;

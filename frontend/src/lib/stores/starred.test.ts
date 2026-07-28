@@ -30,17 +30,34 @@ const starredService = StarredService as unknown as {
   postApiV1StarredBulk: ReturnType<typeof vi.fn>;
 };
 
-const STORAGE_KEY = "agentsview-starred-sessions";
+const STORAGE_KEY = "periscope-starred-sessions";
+const LEGACY_STORAGE_KEY = "agentsview-starred-sessions";
 
 describe("StarredStore", () => {
   let starred: ReturnType<typeof createStarredStore>;
 
   beforeEach(() => {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
     starredService.getApiV1Starred.mockResolvedValue({
       session_ids: [],
     });
     starred = createStarredStore();
+  });
+
+  it("migrates legacy starred sessions from localStorage on load", () => {
+    localStorage.setItem(
+      LEGACY_STORAGE_KEY,
+      JSON.stringify(["legacy-session"]),
+    );
+
+    const store = createStarredStore();
+
+    expect(store.isStarred("legacy-session")).toBe(true);
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(
+      JSON.stringify(["legacy-session"]),
+    );
+    expect(localStorage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
   });
 
   it("starts empty when no localStorage data", () => {

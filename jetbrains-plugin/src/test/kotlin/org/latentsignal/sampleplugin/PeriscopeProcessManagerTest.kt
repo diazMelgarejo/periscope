@@ -9,4 +9,11 @@ class PeriscopeProcessManagerTest {
     fun serverUrlUsesDefaultPortBeforeStart() {
         assertEquals("http://localhost:8080/", PeriscopeProcessManager.serverUrl())
     }
+
+    @Test
+    fun binaryNamesPreferPeriscopeOverAgentsview() {
+        val names = PeriscopeProcessManager.binaryNames()
+        assertEquals("periscope", names.first())
+        assertEquals("agentsview", names.last())
+    }
 }

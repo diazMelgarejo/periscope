@@ -17,8 +17,8 @@ work="$tmpdir/work"
 fakebin="$tmpdir/bin"
 install_dir="$home/.local/bin"
 mkdir -p "$install_dir" "$work" "$fakebin"
-printf 'old binary\n' > "$install_dir/agentsview"
-printf 'new binary\n' > "$work/agentsview"
+printf 'old binary\n' > "$install_dir/periscope"
+printf 'new binary\n' > "$work/periscope"
 cat > "$fakebin/go" <<'EOF'
 #!/bin/sh
 if [ "$1" = "env" ] && [ "$2" = "GOPATH" ]; then
@@ -56,11 +56,11 @@ set -e
 
 [ "$status" -ne 0 ] || fail "install recipe succeeded after cp failed"
 
-installed="$(cat "$install_dir/agentsview")"
+installed="$(cat "$install_dir/periscope")"
 [ "$installed" = "old binary" ] ||
     fail "failed copy replaced installed binary with: $installed"
 
-leftovers="$(find "$install_dir" -maxdepth 1 -type f -name 'agentsview.*' -print)"
+leftovers="$(find "$install_dir" -maxdepth 1 -type f -name 'periscope.*' -print)"
 [ -z "$leftovers" ] || fail "temporary install files were not cleaned up: $leftovers"
 
 echo "PASS: install recipe keeps existing binary when copy fails"
@@ -69,9 +69,9 @@ success_home="$tmpdir/success-home"
 success_work="$tmpdir/success-work"
 success_install_dir="$success_home/.local/bin"
 mkdir -p "$success_install_dir" "$success_work"
-printf 'old binary\n' > "$success_install_dir/agentsview"
-printf 'new binary\n' > "$success_work/agentsview"
-chmod 755 "$success_work/agentsview"
+printf 'old binary\n' > "$success_install_dir/periscope"
+printf 'new binary\n' > "$success_work/periscope"
+chmod 755 "$success_work/periscope"
 
 success_recipe="$(render_install_recipe "$success_home")"
 [ -n "$success_recipe" ] || fail "could not extract success install recipe"
@@ -81,14 +81,14 @@ success_recipe="$(render_install_recipe "$success_home")"
     eval "$success_recipe"
 )
 
-success_installed="$(cat "$success_install_dir/agentsview")"
+success_installed="$(cat "$success_install_dir/periscope")"
 [ "$success_installed" = "new binary" ] ||
     fail "successful install wrote unexpected content: $success_installed"
 
-[ -x "$success_install_dir/agentsview" ] ||
-    fail "successful install did not leave agentsview executable"
+[ -x "$success_install_dir/periscope" ] ||
+    fail "successful install did not leave periscope executable"
 
-success_leftovers="$(find "$success_install_dir" -maxdepth 1 -type f -name 'agentsview.*' -print)"
+success_leftovers="$(find "$success_install_dir" -maxdepth 1 -type f -name 'periscope.*' -print)"
 [ -z "$success_leftovers" ] ||
     fail "successful install left temporary files: $success_leftovers"
 
