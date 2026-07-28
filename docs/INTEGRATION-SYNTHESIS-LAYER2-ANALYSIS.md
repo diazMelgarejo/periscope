@@ -1,13 +1,15 @@
-# Layer-2 integrative synthesis analysis (local only — not pushed)
+# Layer-2 integrative synthesis analysis
 
 > **Date:** 2026-07-28  
-> **Branch:** `merged-local-on-origin` (worktree `periscope-recovery-layer2`)  
+> **Branch:** `merged-local-rebased-on-origin` (worktree `periscope-recovery-layer2`)  
+> **Tip:** see `git rev-parse HEAD` after pull — published to `origin/merged-local-rebased-on-origin`  
 > **Base:** `origin/merged` @ `44593b77`  
-> **Compared:** `origin/merged-local-reanchored` @ `bec3eeb9`
+> **Compared:** `origin/merged-local-reanchored` @ `bec3eeb9`  
+> **Doctrine:** [integrative-merge.md](https://github.com/diazMelgarejo/orama-system/blob/main/bin/orama-system/skills/oramasys-method/references/integrative-merge.md) (orama-system sibling repo)
 
 ## Method
 
-Integrative harmonizing synthesis per `integrative-merge.md` — not literal rebase,
+Integrative harmonizing synthesis per integrative-merge — not literal rebase,
 not `ours`/`theirs`, not cherry-pick replay of 20 commits.
 
 | Mode | Paths | Resolution |
@@ -18,6 +20,8 @@ not `ours`/`theirs`, not cherry-pick replay of 20 commits.
 | **synthesize** | `frontend/package.json` | `marked` runtime dep @ `18.0.3` (local intent) + `svelte` `^5.55.9` (origin newer) |
 | **union** | `docs/ARCHITECTURE.md` | Keep origin body + rename catalogue links + add L4 integration cross-link |
 | **additive** | `docs/INTEGRATION-ORAMASYS-STACK-PLAN.md` | Add from working tree |
+| **architecturally-correct** | `frontend/src/App.svelte` | Remove dead `ActivityMinimap` block (component deleted upstream; SessionVitals replaced it) |
+| **architecturally-correct** | Context viz TS strictness | Fix `ContextWindowBlocks` / `ContextTimeline` types so `svelte-check` passes |
 
 ## Why cherry-pick / blind rebase failed
 
@@ -37,24 +41,23 @@ missing semantic work.
 
 ## Layer-2 delta vs `origin/merged`
 
-Five paths in commit `2cddec88`:
-
-- `docs/INTEGRATION-ORAMASYS-STACK-PLAN.md` (new)
-- `docs/INTEGRATION-SYNTHESIS-LAYER2-ANALYSIS.md` (new)
-- `docs/ARCHITECTURE.md` (L4 integration cross-link)
-- `frontend/package.json` (harmonized `marked` / `svelte`)
-- `frontend/package-lock.json` (lock refresh)
-
-**Not pushed.**
+Docs + package harmonization + frontend strictness fixes (see `git diff origin/merged..HEAD --stat`).
 
 ## Verification gates (2026-07-28)
 
 | Gate | Result |
 |------|--------|
-| `npm install --package-lock-only` + lock committed | ✅ |
-| `go test -tags fts5 ./...` | ✅ all packages `ok` (~65s; `internal/server` slowest at ~24s) |
-| `git diff origin/merged..HEAD --stat` | ✅ 5 files, +262 / −8 lines |
+| `npm install` / lock committed | ✅ |
+| `go test -tags fts5 ./...` | ✅ all packages `ok` (~65s) |
+| `npm run check` (`svelte-check`) | ✅ 0 errors, 4 warnings (pre-existing CSS/a11y) |
+| `npm test` (`vitest run`) | ✅ 64 files, 1127 tests passed (~15s) |
+| `git diff origin/merged..HEAD --stat` | ✅ reviewed before push |
 
-**Ready for push review** — no remaining local smoke blockers on Go side.
-Frontend `npm test` / `npm run check` not run (docs-only delta except package.json).
+## Branch lineage
 
+```text
+origin/merged (44593b77)
+  └── merged-local-rebased-on-origin   ← integrative synthesis + L4 docs + frontend fixes
+
+origin/merged-local-reanchored (bec3eeb9)   ← layer-1 tree twin salvage (alternate history)
+```

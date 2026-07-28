@@ -33,7 +33,7 @@
       grouped.push({
         type: "tool_group",
         entries: toolBuffer,
-        key: `tools-${toolBuffer[0].ordinal}-${toolBuffer.length}`,
+        key: `tools-${toolBuffer[0]?.ordinal ?? 0}-${toolBuffer.length}`,
       });
       toolBuffer = [];
     };
