@@ -25,7 +25,8 @@ override the current three-branch model.
 | 8 | `orama-system/bin/orama-system/skills/periscope-ecc/SKILL.md` | ECC mirror verification and overlapping-PR replay. |
 | 9 | `Perpetua-Tools/.agent/memory/working/PERISCOPE_DUAL_PEDIGREE_REANCHOR_2026-07-28.md` | Executed dual-pedigree recovery evidence and repeatable procedure. |
 | 10 | `Perpetua-Tools/.agent/memory/working/WORKSPACE_PR_BASE_BRANCHES_2026-07-28.md` | PR-base policy: Periscope agent work targets `merged`. |
-| 11 | `periscope/docs/ARCHITECTURE.md` | Fork invariants, owned paths, and conflict examples. Its branch table is stale. |
+| 11 | `periscope/docs/ARCHITECTURE.md` | Fork invariants, owned paths, and conflict examples. Branch roles live in this blueprint. |
+| 11b | `periscope/docs/guides/periscope-modernization-status.md` | Current modernization snapshot (replaces stale `PROGRESS.md` ledger). |
 | 12 | `periscope/scripts/sync-upstream.sh` | Operational latentsignal upstream merge helper. |
 
 ## Canonical branch roles
@@ -155,7 +156,7 @@ Do not use whole-file `ours` or `theirs` without reading both sides.
 Always preserve these Periscope capabilities:
 
 - Context page and context/transcript navigation.
-- Activity minimap.
+- SessionVitals and ActivityLane (supersedes legacy ActivityMinimap).
 - Context timeline, token accounting, and model-context capacity.
 - Context-guidance signals.
 - Summarizer worker and LLM client.
@@ -174,7 +175,7 @@ Conflict guidance:
 | Fork-owned feature directories | Preserve fork feature; adapt it to current upstream APIs. |
 | Upstream parsers, sync, and storage improvements | Prefer current upstream, then reapply required Periscope extensions. |
 | Shared structs and API exports | Union fields/exports; do not replace one feature set with another. |
-| Frontend shared composition | Synthesize upstream UI additions with ContextPage, ActivityMinimap, and guidance blocks. |
+| Frontend shared composition | Synthesize upstream UI additions with ContextPage, SessionVitals, ActivityLane, and guidance blocks. |
 | Database data version | Use the higher valid upstream version and add Periscope migrations additively. |
 | Module/binary identity | Preserve the Periscope product contract where functional. |
 | Tests | Build a unified suite exercising both upstream and fork behavior. |

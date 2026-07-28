@@ -1,13 +1,9 @@
 #!/bin/bash
-# Tests for install.sh version parsing logic.
-# Sources install.sh directly so the test exercises the real
-# get_latest_version function (with curl mocked out).
+# Tests for install.sh version parsing and archive candidate logic.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source install.sh to get access to get_latest_version.
-# The main() call is guarded so nothing runs on source.
 # shellcheck source=install.sh
 source "$SCRIPT_DIR/install.sh"
 
@@ -27,9 +23,6 @@ assert_eq() {
     fi
 }
 
-# Mock curl to simulate the redirect-follow behavior of the real install
-# script. get_latest_version uses `curl ... -w '%{url_effective}'` so we
-# intercept that and emit $MOCK_FINAL_URL (the URL after following 302s).
 MOCK_FINAL_URL=""
 MOCK_CURL_EXIT=0
 curl() {
@@ -42,31 +35,43 @@ export -f curl
 
 echo "=== get_latest_version parsing ==="
 
-# Normal release tag
-MOCK_FINAL_URL="https://github.com/kenn-io/agentsview/releases/tag/v0.8.0"
-assert_eq "release tag" "v0.8.0" "$(get_latest_version)"
+MOCK_FINAL_URL="https://github.com/diazMelgarejo/periscope/releases/tag/v0.29.2-periscope.2-657a1090"
+assert_eq "periscope release tag" "v0.29.2-periscope.2-657a1090" "$(get_latest_version)"
 
-# Newer release tag
-MOCK_FINAL_URL="https://github.com/kenn-io/agentsview/releases/tag/v0.30.1"
+MOCK_FINAL_URL="https://github.com/diazMelgarejo/periscope/releases/tag/v0.30.1"
 assert_eq "two-digit minor" "v0.30.1" "$(get_latest_version)"
 
-# Pre-release version
-MOCK_FINAL_URL="https://github.com/kenn-io/agentsview/releases/tag/v0.9.0-rc1"
-assert_eq "pre-release version" "v0.9.0-rc1" "$(get_latest_version)"
-
-# No releases: GitHub returns the /releases page itself instead of a 302.
-MOCK_FINAL_URL="https://github.com/kenn-io/agentsview/releases"
+MOCK_FINAL_URL="https://github.com/diazMelgarejo/periscope/releases"
 assert_eq "no releases returns empty" "" "$(get_latest_version || true)"
 
-# Redirect to latest sentinel (no follow / no tag in URL).
-MOCK_FINAL_URL="https://github.com/kenn-io/agentsview/releases/latest"
+MOCK_FINAL_URL="https://github.com/diazMelgarejo/periscope/releases/latest"
 assert_eq "unresolved latest returns empty" "" "$(get_latest_version || true)"
 
-# Network failure: curl exits non-zero, function should fail.
 MOCK_FINAL_URL=""
 MOCK_CURL_EXIT=22
 assert_eq "curl failure returns empty" "" "$(get_latest_version || true)"
 MOCK_CURL_EXIT=0
+
+echo
+echo "=== release_archive_candidates ==="
+
+candidates="$(release_archive_candidates "v0.29.2-periscope.2" "darwin" "arm64")"
+assert_eq "prefers periscope archive" "periscope_0.29.2-periscope.2_darwin_arm64.tar.gz" "$(echo "$candidates" | head -1)"
+assert_eq "includes legacy agentsview archive" "agentsview_v0.29.2-periscope.2_darwin_arm64.tar.gz" "$(echo "$candidates" | tail -1)"
+
+echo
+echo "=== skip_checksum_enabled ==="
+
+PERISCOPE_SKIP_CHECKSUM=0 AGENTSVIEW_SKIP_CHECKSUM=0
+assert_eq "default off" "1" "$([ "$(skip_checksum_enabled && echo 1 || echo 0)" = "0" ] && echo 1 || echo 0)"
+
+PERISCOPE_SKIP_CHECKSUM=1 AGENTSVIEW_SKIP_CHECKSUM=0
+assert_eq "periscope env" "1" "$(skip_checksum_enabled && echo 1 || echo 0)"
+
+PERISCOPE_SKIP_CHECKSUM=0 AGENTSVIEW_SKIP_CHECKSUM=1
+assert_eq "legacy agentsview env" "1" "$(skip_checksum_enabled && echo 1 || echo 0)"
+
+unset PERISCOPE_SKIP_CHECKSUM AGENTSVIEW_SKIP_CHECKSUM
 
 echo
 echo "Results: $PASS passed, $FAIL failed"
