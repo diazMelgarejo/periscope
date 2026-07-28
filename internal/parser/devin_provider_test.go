@@ -2,9 +2,11 @@ package parser
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -332,7 +334,11 @@ func TestDevinProviderFingerprintChangesWhenLastActivityChanges(t *testing.T) {
 	before, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
 
-	execDevinTestSQL(t, dbPath, `UPDATE sessions SET last_activity_at = 1704103215000 WHERE id = 'session-last-activity'`)
+	futureActivity := time.Now().Add(time.Hour).UnixMilli()
+	execDevinTestSQL(t, dbPath, fmt.Sprintf(
+		`UPDATE sessions SET last_activity_at = %d WHERE id = 'session-last-activity'`,
+		futureActivity,
+	))
 
 	after, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
