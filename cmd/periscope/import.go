@@ -11,6 +11,7 @@ import (
 	"github.com/latentsignal-org/periscope/internal/config"
 	"github.com/latentsignal-org/periscope/internal/db"
 	"github.com/latentsignal-org/periscope/internal/importer"
+	"github.com/latentsignal-org/periscope/internal/pathutil"
 )
 
 type ImportConfig struct {
@@ -19,6 +20,12 @@ type ImportConfig struct {
 }
 
 func runImport(cfg ImportConfig) {
+	expandedPath, err := pathutil.ExpandHome(cfg.Path)
+	if err != nil {
+		log.Fatalf("expanding import path: %v", err)
+	}
+	cfg.Path = expandedPath
+
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)

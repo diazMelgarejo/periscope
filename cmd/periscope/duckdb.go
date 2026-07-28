@@ -17,6 +17,7 @@ import (
 
 	"github.com/latentsignal-org/periscope/internal/config"
 	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
+	"github.com/latentsignal-org/periscope/internal/pathutil"
 	"github.com/latentsignal-org/periscope/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -515,7 +516,10 @@ func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 		fatal("duckdb quack serve: %v", err)
 	}
 	if cfg.Path != "" {
-		duckCfg.Path = cfg.Path
+		duckCfg.Path, err = pathutil.ExpandHome(cfg.Path)
+		if err != nil {
+			fatal("duckdb quack serve: expanding --path: %v", err)
+		}
 	}
 	if cfg.AllowInsecure {
 		duckCfg.AllowInsecure = true
