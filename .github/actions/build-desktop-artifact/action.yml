@@ -113,7 +113,7 @@ runs:
         if [[ "$target_triple" == *"windows"* ]]; then
           ext=".exe"
         fi
-        sidecar="desktop/src-tauri/binaries/agentsview-${target_triple}${ext}"
+        sidecar="desktop/src-tauri/binaries/periscope-${target_triple}${ext}"
         if [ ! -f "$sidecar" ]; then
           echo "missing sidecar binary: $sidecar" >&2
           exit 1

@@ -33,7 +33,7 @@
     "longDescription": "Periscope is a local web viewer for AI agent coding sessions.",
     "createUpdaterArtifacts": "v1Compatible",
     "externalBin": [
-      "binaries/agentsview"
+      "binaries/periscope"
     ],
     "icon": [
       "icons/32x32.png",

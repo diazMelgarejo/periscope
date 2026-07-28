@@ -16,13 +16,13 @@ if [ "$#" -gt 0 ]; then
         -*)
             ;;
         *)
-            exec /usr/local/bin/agentsview "$@"
+            exec /usr/local/bin/periscope "$@"
             ;;
     esac
 fi
 
 if is_truthy "${PG_SERVE:-}"; then
-    exec /usr/local/bin/agentsview pg serve "$@"
+    exec /usr/local/bin/periscope pg serve "$@"
 fi
 
-exec /usr/local/bin/agentsview serve "$@"
+exec /usr/local/bin/periscope serve "$@"
