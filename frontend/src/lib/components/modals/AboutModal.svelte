@@ -21,7 +21,7 @@
 </script>
 
 <Modal
-  ariaLabel="AgentsView"
+  ariaLabel="Periscope"
   width="320px"
   onclose={() => (ui.activeModal = null)}
 >
@@ -33,7 +33,7 @@
       <circle cx="18" cy="8.5" r="2" fill="var(--accent-blue, #3b82f6)"/>
       <circle cx="18" cy="8.5" r="1" fill="#1d4ed8"/>
     </svg>
-    <div class="about-name">AgentsView</div>
+    <div class="about-name">Periscope</div>
   </div>
 
   <div class="about-body">

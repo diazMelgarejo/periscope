@@ -1,5 +1,6 @@
 export type Route =
   | "sessions"
+  | "context"
   | "usage"
   | "activity"
   | "trends"
@@ -11,6 +12,7 @@ export type Route =
 
 const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
   "sessions",
+  "context",
   "usage",
   "activity",
   "trends",
@@ -52,7 +54,7 @@ export function parsePath(): {
     : DEFAULT_ROUTE;
 
   let sessionId: string | null = null;
-  if (route === "sessions" && segments.length >= 2) {
+  if ((route === "sessions" || route === "context") && segments.length >= 2) {
     try {
       sessionId = decodeURIComponent(segments[1]!);
     } catch {
@@ -191,6 +193,16 @@ export class RouterStore {
     );
   }
 
+  buildContextHref(
+    id: string,
+    params?: Record<string, string>,
+  ): string {
+    return this.#buildUrl(
+      `/context/${encodeURIComponent(id)}`,
+      this.#sessionEntryParams(params),
+    );
+  }
+
   navigate(
     route: Route,
     params: Record<string, string> = {},
@@ -237,6 +249,22 @@ export class RouterStore {
     window.history.pushState(null, "", url);
   }
 
+  navigateToContext(
+    id: string,
+    params: Record<string, string> = {},
+  ) {
+    const nextParams = this.#sessionEntryParams(params);
+    const url = this.#buildUrl(
+      `/context/${encodeURIComponent(id)}`,
+      nextParams,
+    );
+    this.#updateSticky(nextParams);
+    this.route = "context";
+    this.params = { ...this.#stickyParams, ...nextParams };
+    this.sessionId = id;
+    window.history.pushState(null, "", url);
+  }
+
   navigateFromSession(
     params: Record<string, string> = {},
   ) {
@@ -251,7 +279,7 @@ export class RouterStore {
   /** Update query params without creating a history entry. */
   replaceParams(params: Record<string, string>) {
     const path = this.sessionId
-      ? `/sessions/${encodeURIComponent(this.sessionId)}`
+      ? `/${this.route === "context" ? "context" : "sessions"}/${encodeURIComponent(this.sessionId)}`
       : `/${this.route}`;
     const url = this.#buildUrl(path, params);
     this.#updateSticky(params);

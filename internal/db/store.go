@@ -96,7 +96,13 @@ type Store interface {
 	StarSession(sessionID string) (bool, error)
 	UnstarSession(sessionID string) error
 	ListStarredSessionIDs(ctx context.Context) ([]string, error)
+	IsSessionStarred(ctx context.Context, sessionID string) (bool, error)
 	BulkStarSessions(sessionIDs []string) error
+
+	// Turn summaries (local-only; PG returns ErrReadOnly / empty).
+	UpsertTurnSummary(s TurnSummary) error
+	ListTurnSummaries(ctx context.Context, sessionID string) ([]TurnSummary, error)
+	HasTurnSummary(ctx context.Context, sessionID string, turnIndex int, contentHash string) (bool, error)
 
 	// Pins.
 	PinMessage(sessionID string, messageID int64, note *string) (int64, error)

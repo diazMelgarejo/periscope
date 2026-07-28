@@ -121,6 +121,7 @@ type ContextPressureResult struct {
 // contextWindowSizes maps model name prefixes to their context
 // window sizes in tokens.
 var contextWindowSizes = map[string]int{
+	"claude-opus-4-7":   1_000_000,
 	"claude-opus-4-6":   1_000_000,
 	"claude-sonnet-4-6": 200_000,
 	"claude-sonnet-4-5": 200_000,
@@ -195,7 +196,7 @@ func computePressure(
 	if peakContextTokens <= 0 || model == "" {
 		return nil
 	}
-	windowSize := lookupWindowSize(model)
+	windowSize := LookupContextWindowSize(model)
 	if windowSize == 0 {
 		return nil
 	}
@@ -203,9 +204,9 @@ func computePressure(
 	return &ratio
 }
 
-// lookupWindowSize finds context window size for a model. Tries
-// exact match first, then prefix match (longest prefix wins).
-func lookupWindowSize(model string) int {
+// LookupContextWindowSize finds the configured context window size
+// for a model. It tries exact match first, then longest-prefix match.
+func LookupContextWindowSize(model string) int {
 	if size, ok := contextWindowSizes[model]; ok {
 		return size
 	}

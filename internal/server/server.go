@@ -22,10 +22,12 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/llm"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/summarize"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/web"
 	"go.kenn.io/kit/daemon"
@@ -82,6 +84,20 @@ type Server struct {
 
 	insightLogDrainTimeout    time.Duration
 	insightLogStopWaitTimeout time.Duration
+
+	// summarizer produces per-turn LLM summaries for starred
+	// sessions. Optional: when nil (no ANTHROPIC_API_KEY), the
+	// star handler skips enqueue and the /context response reports
+	// summary_coverage.status = "disabled".
+	summarizer *summarize.Worker
+
+	// guidanceClient generates Phase B banner text from per-turn
+	// summaries. Optional: when nil, guidance falls back to the
+	// existing heuristic-only banner copy.
+	guidanceClient llm.Client
+	guidanceModel  string
+	guidanceMu     gosync.RWMutex
+	guidanceCache  map[string]guidanceCacheEntry
 
 	// handlerDelay is injected before each timeout-wrapped
 	// handler, used only by tests to guarantee handlers
@@ -192,8 +208,10 @@ func New(
 				},
 			)
 		},
-		spaFS:      dist,
-		spaHandler: http.FileServerFS(dist),
+		spaFS:         dist,
+		spaHandler:    http.FileServerFS(dist),
+		guidanceModel: llm.DefaultGenerateModel,
+		guidanceCache: map[string]guidanceCacheEntry{},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -257,6 +275,20 @@ func WithHTTPRemoteCleanupRegistry(registry *remotesync.CleanupRegistry) Option 
 			s.httpRemoteCleanupRegistry = registry
 		}
 	}
+}
+
+// WithSummarizer wires a turn-summary worker into the server. When
+// set, starring a session enqueues it for summarisation and the
+// /context response includes summary_coverage metadata.
+func WithSummarizer(w *summarize.Worker) Option {
+	return func(s *Server) { s.summarizer = w }
+}
+
+// WithGuidanceClient wires an LLM client into the Phase B banner
+// guidance generator. When nil, the server exposes heuristic-only
+// signals with no generated text.
+func WithGuidanceClient(c llm.Client) Option {
+	return func(s *Server) { s.guidanceClient = c }
 }
 
 // WithBroadcaster wires an event broadcaster into the server so the
@@ -415,6 +447,28 @@ func (s *Server) routes() {
 	configureHumaErrors()
 	s.api = humago.New(s.mux, s.humaConfig())
 	s.registerTypedAPIRoutes()
+
+	s.mux.Handle(
+		"GET /api/v1/sessions/{id}/context",
+		s.withTimeout(
+			"GET /api/v1/sessions/{id}/context",
+			s.handleGetSessionContext,
+		),
+	)
+	s.mux.Handle(
+		"GET /api/v1/sessions/{id}/context/timeline",
+		s.withTimeout(
+			"GET /api/v1/sessions/{id}/context/timeline",
+			s.handleGetSessionContextTimeline,
+		),
+	)
+	s.mux.Handle(
+		"POST /api/v1/sessions/{id}/summarize",
+		s.withTimeout(
+			"POST /api/v1/sessions/{id}/summarize",
+			s.handleEnqueueSummarize,
+		),
+	)
 
 	if s.pprofEnabled {
 		s.mux.HandleFunc("/debug/pprof/", httppprof.Index)
