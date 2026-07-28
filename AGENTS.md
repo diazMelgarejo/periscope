@@ -353,3 +353,22 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
   commands, or describe how the change was verified.
 - Describe what the code does now, why it changed, tradeoffs, limitations, and
   where reviewers should look.
+
+## Cursor Cloud: git commits
+
+Run on cloud VM boot:
+
+```bash
+bash scripts/git/apply-attribution-guard-all-repos.sh
+```
+
+Hook-free commit when needed:
+
+```bash
+bash scripts/git/commit-clean.sh -m "type(scope): summary"
+```
+
+See orama-system `docs/wiki/09-cursor-cloud-commit-attribution.md` (canonical).
+
+**Fork policy:** integration branch is `merged`. Open agent PRs from
+`cursor/*` branches → `merged` (never → `main`).
