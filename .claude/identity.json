@@ -7,8 +7,9 @@
     "explanations": true
   },
   "domains": [
+    "go",
     "typescript"
   ],
   "suggestedBy": "ecc-tools-repo-analysis",
-  "createdAt": "2026-07-28T00:55:34.446Z"
+  "createdAt": "2026-07-28T14:39:08.509Z"
 }
