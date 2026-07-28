@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/pricing/catalog"
+	"github.com/latentsignal-org/periscope/internal/money"
+	"github.com/latentsignal-org/periscope/internal/pricing/catalog"
 )
 
 var defaultOutputPath = filepath.FromSlash(

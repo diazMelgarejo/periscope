@@ -19,17 +19,17 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/insight"
-	"go.kenn.io/agentsview/internal/llm"
-	"go.kenn.io/agentsview/internal/postgres"
-	"go.kenn.io/agentsview/internal/pricingrefresh"
-	"go.kenn.io/agentsview/internal/remotesync"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/summarize"
-	"go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/agentsview/internal/web"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/insight"
+	"github.com/latentsignal-org/periscope/internal/llm"
+	"github.com/latentsignal-org/periscope/internal/postgres"
+	"github.com/latentsignal-org/periscope/internal/pricingrefresh"
+	"github.com/latentsignal-org/periscope/internal/remotesync"
+	"github.com/latentsignal-org/periscope/internal/service"
+	"github.com/latentsignal-org/periscope/internal/summarize"
+	"github.com/latentsignal-org/periscope/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/web"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -49,7 +49,7 @@ type VersionInfo struct {
 // CLI or daemon.
 const APIVersion = 4
 
-const daemonService = "agentsview"
+const daemonService = "periscope"
 
 const (
 	defaultInsightLogDrainTimeout    = 2 * time.Second

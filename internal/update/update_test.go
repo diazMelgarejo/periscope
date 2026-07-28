@@ -59,14 +59,14 @@ func TestIsNewer(t *testing.T) {
 
 func TestExtractChecksum(t *testing.T) {
 	body := `abc123  some_other_file.tar.gz
-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  agentsview_0.1.0_linux_amd64.tar.gz
+deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  periscope_0.1.0_linux_amd64.tar.gz
 fff000  yet_another.zip`
 
 	tests := []struct {
 		filename string
 		want     string
 	}{
-		{"agentsview_0.1.0_linux_amd64.tar.gz", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
+		{"periscope_0.1.0_linux_amd64.tar.gz", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 		{"nonexistent.tar.gz", ""},
 	}
 
@@ -88,13 +88,13 @@ func TestResolveLatestTag(t *testing.T) {
 		{
 			name:     "valid 302 redirect",
 			status:   http.StatusFound,
-			location: "https://github.com/kenn-io/agentsview/releases/tag/v0.30.1",
+			location: "https://github.com/diazMelgarejo/periscope/releases/tag/v0.30.1",
 			wantTag:  "v0.30.1",
 		},
 		{
 			name:     "pre-release tag",
 			status:   http.StatusFound,
-			location: "https://github.com/kenn-io/agentsview/releases/tag/v0.9.0-rc1",
+			location: "https://github.com/diazMelgarejo/periscope/releases/tag/v0.9.0-rc1",
 			wantTag:  "v0.9.0-rc1",
 		},
 		{
@@ -105,13 +105,13 @@ func TestResolveLatestTag(t *testing.T) {
 		{
 			name:       "redirect target without /tag/",
 			status:     http.StatusFound,
-			location:   "https://github.com/kenn-io/agentsview/releases",
+			location:   "https://github.com/diazMelgarejo/periscope/releases",
 			wantErrSub: "unexpected redirect target",
 		},
 		{
 			name:       "empty tag after /tag/",
 			status:     http.StatusFound,
-			location:   "https://github.com/kenn-io/agentsview/releases/tag/",
+			location:   "https://github.com/diazMelgarejo/periscope/releases/tag/",
 			wantErrSub: "empty tag",
 		},
 	}
@@ -195,8 +195,8 @@ func TestSanitizePath(t *testing.T) {
 		wantPath string
 		wantErr  bool
 	}{
-		{"normal", "agentsview", filepath.Join(destDir, "agentsview"), false},
-		{"subdir", "dir/agentsview", filepath.Join(destDir, "dir/agentsview"), false},
+		{"normal", "periscope", filepath.Join(destDir, "periscope"), false},
+		{"subdir", "dir/periscope", filepath.Join(destDir, "dir/periscope"), false},
 		{"absolute", "/etc/passwd", "", true},
 		{"traversal", "../../../etc/passwd", "", true},
 		{"hidden_traversal", "foo/../../etc/passwd", "", true},
@@ -220,12 +220,12 @@ func TestExtractTarGz(t *testing.T) {
 
 	// Create a test tar.gz with a dummy binary
 	archivePath := filepath.Join(srcDir, "test.tar.gz")
-	createTestTarGz(t, archivePath, "agentsview", "binary-content")
+	createTestTarGz(t, archivePath, "periscope", "binary-content")
 
 	require.NoError(t, extractTarGz(archivePath, destDir))
 
 	content, err := os.ReadFile(
-		filepath.Join(destDir, "agentsview"),
+		filepath.Join(destDir, "periscope"),
 	)
 	require.NoError(t, err, "read extracted file")
 	assert.Equal(t, "binary-content", string(content))
@@ -238,8 +238,8 @@ func TestInstallBinaryToSetsExecutableMode(t *testing.T) {
 
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
-	srcPath := filepath.Join(srcDir, "agentsview")
-	dstPath := filepath.Join(dstDir, "agentsview")
+	srcPath := filepath.Join(srcDir, "periscope")
+	dstPath := filepath.Join(dstDir, "periscope")
 
 	require.NoError(t, os.WriteFile(srcPath, []byte("binary"), 0o644))
 
@@ -252,7 +252,7 @@ func TestInstallBinaryToSetsExecutableMode(t *testing.T) {
 
 func TestInstallBinaryToPreservesOnSourceMissing(t *testing.T) {
 	dstDir := t.TempDir()
-	dstPath := filepath.Join(dstDir, "agentsview")
+	dstPath := filepath.Join(dstDir, "periscope")
 
 	require.NoError(t, os.WriteFile(dstPath, []byte("original"), 0o755))
 
@@ -280,8 +280,8 @@ func TestInstallBinaryToNeverMissingDuringUpdate(t *testing.T) {
 
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
-	srcPath := filepath.Join(srcDir, "agentsview")
-	dstPath := filepath.Join(dstDir, "agentsview")
+	srcPath := filepath.Join(srcDir, "periscope")
+	dstPath := filepath.Join(dstDir, "periscope")
 
 	require.NoError(t, os.WriteFile(srcPath, []byte("new"), 0o755))
 	require.NoError(t, os.WriteFile(dstPath, []byte("old"), 0o755))
@@ -336,8 +336,8 @@ func TestInstallBinaryToNeverMissingDuringUpdate(t *testing.T) {
 func TestInstallBinaryToRemovesStaleStagingFile(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
-	srcPath := filepath.Join(srcDir, "agentsview")
-	dstPath := filepath.Join(dstDir, "agentsview")
+	srcPath := filepath.Join(srcDir, "periscope")
+	dstPath := filepath.Join(dstDir, "periscope")
 
 	require.NoError(t, os.WriteFile(srcPath, []byte("new-binary"), 0o755))
 	require.NoError(t, os.WriteFile(dstPath, []byte("old-binary"), 0o755))
@@ -376,8 +376,8 @@ func TestInstallBinaryTo(t *testing.T) {
 			srcDir := t.TempDir()
 			dstDir := t.TempDir()
 
-			srcPath := filepath.Join(srcDir, "agentsview")
-			dstPath := filepath.Join(dstDir, "agentsview")
+			srcPath := filepath.Join(srcDir, "periscope")
+			dstPath := filepath.Join(dstDir, "periscope")
 
 			if tt.existingDest != "" {
 				require.NoError(t, os.WriteFile(dstPath, []byte(tt.existingDest), 0o755))

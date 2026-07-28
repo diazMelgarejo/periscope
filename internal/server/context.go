@@ -12,9 +12,9 @@ import (
 	"slices"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/guidance"
-	"go.kenn.io/agentsview/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/guidance"
+	"github.com/latentsignal-org/periscope/internal/signals"
 )
 
 // toolBlockRE strips inline tool-call markup like

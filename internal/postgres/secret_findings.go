@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // ListSecretFindings returns findings joined to their sessions, filtered.

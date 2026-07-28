@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latentsignal-org/periscope/internal/parser"
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func missingS3ObjectError() error {

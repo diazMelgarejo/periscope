@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	syncpkg "github.com/latentsignal-org/periscope/internal/sync"
 )
 
 // downloadedArchive owns an isolated directory containing a raw HTTP

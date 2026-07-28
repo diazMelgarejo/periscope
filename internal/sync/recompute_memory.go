@@ -3,7 +3,7 @@ package sync
 import (
 	"runtime/debug"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 const recomputeHeapReleaseDefaultThreshold = 256 << 20

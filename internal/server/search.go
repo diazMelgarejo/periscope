@@ -1,7 +1,7 @@
 package server
 
 import (
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 type searchResponse struct {

@@ -12,7 +12,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 type grokSummaryFields struct {

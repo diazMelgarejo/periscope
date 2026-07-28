@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/llm"
-	"go.kenn.io/agentsview/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/llm"
+	"github.com/latentsignal-org/periscope/internal/signals"
 )
 
 type stubGuidanceClient struct {

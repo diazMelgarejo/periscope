@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 const sessionExportOrder = "last_activity_at DESC, id ASC"

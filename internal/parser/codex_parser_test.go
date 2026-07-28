@@ -10,9 +10,9 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func runCodexParserTest(t *testing.T, fileName, content string, includeExec bool) (*ParsedSession, []ParsedMessage) {

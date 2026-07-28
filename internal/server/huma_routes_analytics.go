@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/timeutil"
 )
 
 func (s *Server) registerAnalyticsRoutes() {

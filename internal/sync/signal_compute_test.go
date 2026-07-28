@@ -3,10 +3,10 @@ package sync
 import (
 	"testing"
 
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/signals"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/signals"
 )
 
 func TestExtractToolCallRows(t *testing.T) {

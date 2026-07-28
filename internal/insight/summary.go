@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/activity"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 // RangeSummary is the deterministic, prompt-input contract derived from

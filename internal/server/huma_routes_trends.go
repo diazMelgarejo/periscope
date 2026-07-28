@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func (s *Server) registerTrendsRoutes() {

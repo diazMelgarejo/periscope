@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 func WriteArchive(w io.Writer, targets TargetSet) error {

@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func TestComputeSessionContextView_TrimsToLatestCompaction(t *testing.T) {

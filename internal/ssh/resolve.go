@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 // resolveFilePrefix marks lines in the resolve script output that name
