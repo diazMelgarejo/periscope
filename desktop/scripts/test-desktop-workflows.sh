@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ARTIFACTS_WORKFLOW="$REPO_ROOT/.github/workflows/desktop-artifacts.yml"
 RELEASE_WORKFLOW="$REPO_ROOT/.github/workflows/desktop-release.yml"
 DOC_FILE="$REPO_ROOT/docs/desktop-release-setup.md"
+TAURI_LIB="$REPO_ROOT/desktop/src-tauri/src/lib.rs"
 
 assert_contains() {
   local file="$1"
@@ -63,5 +64,12 @@ assert_not_contains "$RELEASE_WORKFLOW" 'linux-aarch64' \
 
 assert_contains "$DOC_FILE" "AgentsView_x.y.z_aarch64.AppImage" \
   "desktop release docs should mention the Linux arm64 AppImage"
+
+assert_contains "$TAURI_LIB" 'sidecar("periscope")' \
+  "Tauri runtime should spawn the configured periscope sidecar binary"
+assert_not_contains "$TAURI_LIB" 'sidecar("agentsview")' \
+  "Tauri runtime should not request the removed agentsview sidecar binary"
+assert_contains "$TAURI_LIB" 'home.join(".agentsview").join("desktop.env")' \
+  "desktop env override should retain the upstream-compatible agentsview path"
 
 echo "desktop workflow checks passed"
