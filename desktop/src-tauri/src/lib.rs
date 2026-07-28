@@ -333,7 +333,7 @@ fn spawn_sidecar_with_args(
     app: &AppHandle,
     args: Vec<String>,
 ) -> Result<(CommandRx, CommandChild), DynError> {
-    let mut command = app.shell().sidecar("agentsview")?;
+    let mut command = app.shell().sidecar("periscope")?;
     for (key, value) in sidecar_env() {
         command = command.env(key, value);
     }
@@ -373,7 +373,7 @@ enum DataVersionPreflightError {
 async fn run_data_version_preflight(app: &AppHandle) -> Result<(), DataVersionPreflightError> {
     let mut command = app
         .shell()
-        .sidecar("agentsview")
+        .sidecar("periscope")
         .map_err(|err| DataVersionPreflightError::Failed(err.to_string()))?;
     for (key, value) in sidecar_env() {
         command = command.env(key, value);
@@ -1714,7 +1714,7 @@ fn status_probe_failures_should_stop(failed_status_probes: u32) -> bool {
 }
 
 async fn probe_backend_status(handle: &AppHandle) -> BackendStatusProbe {
-    let Ok(mut command) = handle.shell().sidecar("agentsview") else {
+    let Ok(mut command) = handle.shell().sidecar("periscope") else {
         return BackendStatusProbe::Unavailable;
     };
     for (key, value) in sidecar_env() {
