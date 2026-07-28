@@ -2,7 +2,7 @@
 
 > **Date:** 2026-07-28  
 > **Branch:** `merged-local-rebased-on-origin` (worktree `periscope-recovery-layer2`)  
-> **Tip:** `a1d47e8f` on `origin/merged-local-rebased-on-origin`  
+> **Tip:** `1a5b9b1d` on `origin/merged-local-rebased-on-origin`  
 > **Base:** `origin/merged` @ `44593b77`  
 > **Compared:** `origin/merged-local-reanchored` @ `bec3eeb9`  
 > **Doctrine:** [integrative-merge.md](https://github.com/diazMelgarejo/orama-system/blob/main/bin/orama-system/skills/oramasys-method/references/integrative-merge.md) (orama-system sibling repo)
