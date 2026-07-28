@@ -387,4 +387,3 @@ committing the dependency state together.
   desktop/src-tauri/Cargo.lock
 - Commit example: 'build(deps): bump marked, svelte, postcss in frontend
   (onto merged)'
-

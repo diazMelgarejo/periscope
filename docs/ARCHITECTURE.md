@@ -5,12 +5,12 @@ description: Matryoshka model, branch roles, and fork invariants for diazMelgare
 
 # Periscope fork — architecture and build reference
 
-> **Status:** Living document. Update after every upstream replay and fork enhancement.  
-> **Canonical integration branch:** `merged`  
+> **Status:** Living document. Update after every upstream replay and fork enhancement.
+> **Canonical integration branch:** `merged`
 > **Last updated:** 2026-07-28
 
-**Operator policy:** [`docs/guides/periscope-upstream-sync-blueprint.md`](guides/periscope-upstream-sync-blueprint.md)  
-**Rename checklist:** [`docs/guides/agentsview-to-periscope-rename-catalogue.md`](guides/agentsview-to-periscope-rename-catalogue.md)  
+**Operator policy:** [`docs/guides/periscope-upstream-sync-blueprint.md`](guides/periscope-upstream-sync-blueprint.md)
+**Rename checklist:** [`docs/guides/agentsview-to-periscope-rename-catalogue.md`](guides/agentsview-to-periscope-rename-catalogue.md)
 **Modernization status:** [`docs/guides/periscope-modernization-status.md`](guides/periscope-modernization-status.md)
 
 ---
@@ -25,7 +25,8 @@ innovations.
 ```
 ╔══════════════════════════════════════════════════════════════════╗
 ║  Layer 3 — diazMelgarejo/periscope (`merged`)                   ║
-║  Product: Periscope · Module: go.kenn.io/agentsview (modern)    ║
+║  Product: Periscope · Module: github.com/latentsignal-org/     ║
+║                               periscope                        ║
 ║                                                                  ║
 ║  + Fork tooling: scripts/sync-upstream.sh, scripts/install.sh    ║
 ║  + Release/install branding toward `periscope` binary/artifacts  ║
@@ -162,9 +163,9 @@ top of Layers 1+2.
 | `AGENTSVIEW_*` env vars | Read for compatibility; prefer `PERISCOPE_*` |
 | `~/.agentsview/desktop.env` | Keep — desktop shell compatibility path |
 
-During modernization the Go module remains `go.kenn.io/agentsview` and the build
-tree may still use `cmd/agentsview/` while release/install paths transition to
-the `periscope` product name.
+The shipping integration line uses
+`github.com/latentsignal-org/periscope` and `cmd/periscope/`. The
+`agentsview` mirror keeps the upstream module and command paths unchanged.
 
 ---
 

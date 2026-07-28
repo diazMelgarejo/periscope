@@ -192,7 +192,7 @@ func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
 	assert.Contains(t, out,
 		"Likely cause: SQLite user_version is newer than this binary")
 	assert.Contains(t, out,
-		fmt.Sprintf("Use an AgentsView build with data version %d or newer",
+		fmt.Sprintf("Use a Periscope build with data version %d or newer",
 			futureVersion))
 	assert.Contains(t, out,
 		fmt.Sprintf("restore an archive backup compatible with data version %d",

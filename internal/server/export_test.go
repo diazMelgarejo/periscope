@@ -46,7 +46,7 @@ func stubServer(
 		http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, expectedMethod, r.Method)
-				assert.Equal(t, "agentsview", r.Header.Get("User-Agent"))
+				assert.Equal(t, "periscope", r.Header.Get("User-Agent"))
 				assert.Equal(t, "token "+expectedToken, r.Header.Get("Authorization"))
 				w.WriteHeader(status)
 				if body != "" {
