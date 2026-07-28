@@ -50,7 +50,7 @@ assert_contains "$RELEASE_WORKFLOW" 'runs-on: ${{ matrix.os }}' \
   "desktop release workflow should select Linux runner per arch"
 assert_contains "$RELEASE_WORKFLOW" "os: ubuntu-22.04-arm" \
   "desktop release workflow should ship Linux arm64 from an arm runner"
-assert_contains "$RELEASE_WORKFLOW" "artifact_name: agentsview-desktop-linux-arm64" \
+assert_contains "$RELEASE_WORKFLOW" "artifact_name: periscope-desktop-linux-arm64" \
   "desktop release workflow should upload a distinct Linux arm64 release artifact"
 assert_contains "$RELEASE_WORKFLOW" 'create_updater_artifacts: "false"' \
   "desktop release workflow should disable updater artifacts for Linux arm64"

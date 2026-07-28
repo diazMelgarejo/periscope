@@ -140,14 +140,14 @@ jobs:
           if [[ "$target_triple" == *"windows"* ]]; then
             ext=".exe"
           fi
-          sidecar="desktop/src-tauri/binaries/agentsview-${target_triple}${ext}"
+          sidecar="desktop/src-tauri/binaries/periscope-${target_triple}${ext}"
           if [ ! -f "$sidecar" ]; then
             echo "missing sidecar binary: $sidecar" >&2
             exit 1
           fi
 
           "$sidecar" version > sidecar-version.txt
-          if grep -q "agentsview dev" sidecar-version.txt; then
+          if grep -q "periscope dev" sidecar-version.txt; then
             echo "sidecar version should not be dev: $(cat sidecar-version.txt)" >&2
             exit 1
           fi
