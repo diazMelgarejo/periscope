@@ -1,0 +1,390 @@
+# Instincts generated from https://github.com/diazMelgarejo/periscope
+# Generated: 2026-07-28T00:55:34.446Z
+# Harmonized with ECC run: 2026-07-28T01:26:19.263Z
+# Version: 2.0
+# Absorbed ID aliases from the second run:
+# - periscope-instinct-commit-format -> periscope-instinct-git-commit-format
+# - periscope-instinct-commit-length -> periscope-instinct-git-commit-length
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: periscope-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Commit Conventional
+
+## Action
+
+Use Conventional Commits with a prefix that matches the change. Observed
+prefixes include: build, chore, fix.
+
+## Evidence
+
+- 4 commits analyzed across the two ECC inputs
+- Detected conventional commit pattern
+- Examples: build(deps): bump marked, svelte, postcss in frontend (onto
+  merged); chore(git): sync attribution guard scripts and cursor rules;
+  fix(desktop): test PERISCOPE_VERSION override
+
+---
+id: periscope-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Commit Length
+
+## Action
+
+Keep commit subjects concise and descriptive. The richer ECC sample averaged
+approximately 68 characters.
+
+## Evidence
+
+- First ECC input: 59 characters across 1 commit
+- Second ECC input: 68 characters across 4 commits
+
+---
+id: periscope-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Naming Files
+
+## Action
+
+Use kebab-case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: kebab-case
+
+---
+id: periscope-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: periscope-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: periscope-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Test Separate
+
+## Action
+
+Keep test logic in dedicated test files rather than mixing it into production
+implementation. Defer test placement to `periscope-instinct-test-location`,
+which captures each subsystem's established layout.
+
+## Evidence
+
+- Go and frontend tests use dedicated `*_test.go` and `*.test.ts` files
+- Location guidance is intentionally centralized in
+  `periscope-instinct-test-location`
+
+---
+id: periscope-workflow-dependency-update
+trigger: "when doing dependency update"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Dependency Update
+
+## Action
+
+Follow the dependency-update workflow:
+1. Update the relevant ecosystem manifest.
+2. Regenerate the corresponding lockfile or module metadata.
+3. Review the generated delta for unrelated drift.
+4. Run checks for every affected subsystem.
+5. Commit the manifest and generated dependency state together.
+
+## Related
+
+- Companion instinct: `periscope-instinct-dependency-update` (concise action for
+  the same workflow; trigger: "When updating dependencies for a package or
+  language ecosystem").
+- Skill guide: `/update-dependencies` in `.agents/skills/periscope/SKILL.md` and
+  `.claude/skills/periscope/SKILL.md`.
+
+## Evidence
+
+- Workflow detected from commit patterns in the richer ECC input
+- Observed files: frontend/package.json, frontend/package-lock.json,
+  desktop/src-tauri/Cargo.lock
+- Repository also contains Go and desktop manifests requiring their native
+  dependency tooling
+
+---
+id: periscope-instinct-file-naming
+trigger: "When creating or renaming a file"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct File Naming
+
+## Action
+
+Follow the naming convention of the affected language and subsystem; use
+kebab-case for frontend TypeScript files where established.
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.files
+- The repository also contains Go and Rust code with language-specific naming
+
+---
+id: periscope-instinct-function-naming
+trigger: "When defining a function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Function Naming
+
+## Action
+
+Use camelCase for TypeScript function names and idiomatic Go or Rust naming in
+those subsystems.
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.functions
+
+---
+id: periscope-instinct-class-naming
+trigger: "When defining a class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Class Naming
+
+## Action
+
+Use PascalCase for TypeScript class names.
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.classes
+
+---
+id: periscope-instinct-constant-naming
+trigger: "When defining a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Constant Naming
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for TypeScript constants where that pattern is already
+established.
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.constants
+
+---
+id: periscope-instinct-import-style
+trigger: "When importing modules"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Import Style
+
+## Action
+
+Prefer relative import paths for project-local frontend modules.
+
+## Evidence
+
+- Pattern in codeStyle.importStyle
+
+---
+id: periscope-instinct-export-style
+trigger: "When exporting from a module"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Export Style
+
+## Action
+
+Prefer named exports where the surrounding frontend module follows that pattern.
+
+## Evidence
+
+- Pattern in codeStyle.exportStyle
+
+---
+id: periscope-instinct-git-commit-format
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Git Commit Format
+
+## Action
+
+Use Conventional Commits with a prefix that matches the change. Observed
+prefixes include `build`, `chore`, and `fix`.
+
+## Evidence
+
+- Pattern in commits.prefixes
+- Examples: 'build(deps): bump marked, svelte, postcss in frontend',
+  'chore(git): sync attribution guard scripts and cursor rules',
+  'fix(desktop): test PERISCOPE_VERSION override'
+
+---
+id: periscope-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Git Commit Length
+
+## Action
+
+Keep the commit subject concise and descriptive; the richer ECC sample averaged
+approximately 68 characters.
+
+## Evidence
+
+- Pattern in commits.averageLength
+- The first input observed 59 characters across 1 commit; the second observed
+  68 characters across 4 commits
+
+---
+id: periscope-instinct-test-location
+trigger: "When adding or updating tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Test Location
+
+## Action
+
+Follow the affected subsystem's established layout: colocate Go and frontend
+unit tests with source, and keep Playwright journeys in `frontend/e2e/`.
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation
+- Verified against repository `*_test.go`, `*.test.ts`, and `frontend/e2e/`
+
+---
+id: periscope-instinct-dependency-update
+trigger: "When updating dependencies for a package or language ecosystem"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Dependency Update
+
+## Action
+
+Update the relevant manifest, regenerate its lockfile or module metadata,
+review the generated delta, and run checks for each affected subsystem before
+committing the dependency state together.
+
+## Related
+
+- Companion workflow instinct: `periscope-workflow-dependency-update` (numbered
+  step-by-step variant; trigger: "when doing dependency update").
+- Skill guide: `/update-dependencies` in `.agents/skills/periscope/SKILL.md` and
+  `.claude/skills/periscope/SKILL.md`.
+
+## Evidence
+
+- Workflow: dependency-update
+- Observed files: frontend/package.json, frontend/package-lock.json,
+  desktop/src-tauri/Cargo.lock
+- Commit example: 'build(deps): bump marked, svelte, postcss in frontend
+  (onto merged)'
+
