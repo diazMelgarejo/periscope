@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/latentsignal-org/periscope/internal/parser"
 	"github.com/mattn/go-sqlite3"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 var ErrWorktreeMappingDuplicate = errors.New("worktree mapping already exists")

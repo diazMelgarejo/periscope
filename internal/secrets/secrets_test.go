@@ -10,13 +10,13 @@ import (
 )
 
 func TestScanFindsAWSAccessKey(t *testing.T) {
-	text := "export AWS_KEY=AKIA7QHWN2DKR4FYPLJM then continue"
+	text := "export AWS_KEY=AKIA3VBMK8XJZ6WPCNQH then continue"
 	got := Scan(text)
 	require.Len(t, got, 1)
 	m := got[0]
 	assert.Equal(t, "aws-access-key", m.Rule)
 	assert.Equal(t, ConfidenceDefinite, m.Confidence)
-	assert.Equal(t, "AKIA7QHWN2DKR4FYPLJM", text[m.Start:m.End])
+	assert.Equal(t, "AKIA3VBMK8XJZ6WPCNQH", text[m.Start:m.End])
 	assert.Equal(t, 0, m.Index)
 }
 
@@ -25,12 +25,12 @@ func TestScanNoMatch(t *testing.T) {
 }
 
 func TestRedactMasksSecretButKeepsContext(t *testing.T) {
-	text := "export AWS_KEY=AKIA7QHWN2DKR4FYPLJM then continue"
+	text := "export AWS_KEY=AKIA3VBMK8XJZ6WPCNQH then continue"
 	got := Redact(text)
-	assert.NotContains(t, got, "AKIA7QHWN2DKR4FYPLJM", "Redact leaked the full secret")
+	assert.NotContains(t, got, "AKIA3VBMK8XJZ6WPCNQH", "Redact leaked the full secret")
 	assert.True(t, strings.HasPrefix(got, "export AWS_KEY="), "Redact dropped surrounding context: %q", got)
 	assert.True(t, strings.HasSuffix(got, " then continue"), "Redact dropped trailing context: %q", got)
-	assert.Contains(t, got, "AKIA…PLJM", "Redact did not use the masked form")
+	assert.Contains(t, got, "AKIA…CNQH", "Redact did not use the masked form")
 }
 
 func TestRedactNoMatchReturnsInput(t *testing.T) {
@@ -107,9 +107,9 @@ func TestRedactWindowMasksStraddlingGroupedSecret(t *testing.T) {
 // secret fully inside the window keeps its rule mask, surrounding context
 // survives, and a window with no secret is returned verbatim.
 func TestRedactWindowKeepsContextAndContainedSecrets(t *testing.T) {
-	full := "the key is AKIA7QHWN2DKR4FYPLJM in config"
+	full := "the key is AKIA3VBMK8XJZ6WPCNQH in config"
 	got := RedactWindow(full, 0, len(full))
-	assert.NotContains(t, got, "AKIA7QHWN2DKR4FYPLJM", "contained secret not masked")
+	assert.NotContains(t, got, "AKIA3VBMK8XJZ6WPCNQH", "contained secret not masked")
 	assert.Contains(t, got, "the key is ", "context not preserved")
 	assert.Contains(t, got, " in config", "context not preserved")
 	clean := "just some ordinary prose with no secrets at all"
@@ -118,7 +118,7 @@ func TestRedactWindowKeepsContextAndContainedSecrets(t *testing.T) {
 
 func TestRedactNeverLeaksKnownSecrets(t *testing.T) {
 	secrets := []string{
-		"AKIA7QHWN2DKR4FYPLJM",
+		"AKIA3VBMK8XJZ6WPCNQH",
 		"ghp_8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg",
 		"xoxb-549271836401-fHk7Bm3Pz9Wt5Vx2Yq8Nc",
 		"xoxs-302846159270-xPk9Bm3Wv8Qt5Lz2Yh7Fc",
@@ -143,7 +143,7 @@ func TestScanRedactedNeverEqualsFullSecret(t *testing.T) {
 	// is exercised. The private-key-block mask is a fixed string and trivially
 	// differs from its (multi-line) match, so it is covered by the others.
 	samples := []string{
-		"k=AKIA7QHWN2DKR4FYPLJM",
+		"k=AKIA3VBMK8XJZ6WPCNQH",
 		"tok ghp_8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg",
 		"xoxb-549271836401-fHk7Bm3Pz9Wt5Vx2Yq8Nc",
 		"sk_live_7Qh3Wn8Dk4Rp9Vx2Mb6Tj0Qc5Lm",

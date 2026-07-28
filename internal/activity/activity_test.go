@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 func mustLoad(t *testing.T, name string) *time.Location {

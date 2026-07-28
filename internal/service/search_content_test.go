@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 // seedServiceSearchSession creates a session with a single user message
@@ -32,7 +32,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceSearchSession(t, d, "x1", "proj",
-		"my key is AKIA7QHWN2DKR4FYPLJM ok")
+		"my key is AKIA3VBMK8XJZ6WPCNQH ok")
 	be := service.NewDirectBackend(d, nil)
 
 	// default: secret should be redacted
@@ -41,7 +41,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
-	assert.False(t, strings.Contains(res.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM"),
+	assert.False(t, strings.Contains(res.Matches[0].Snippet, "AKIA3VBMK8XJZ6WPCNQH"),
 		"default search leaked secret: %q", res.Matches[0].Snippet)
 
 	// reveal: full secret should be present
@@ -50,7 +50,7 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, rev.Matches, 1)
-	assert.True(t, strings.Contains(rev.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM"),
+	assert.True(t, strings.Contains(rev.Matches[0].Snippet, "AKIA3VBMK8XJZ6WPCNQH"),
 		"reveal should show full secret: %q", rev.Matches[0].Snippet)
 }
 
@@ -176,7 +176,7 @@ func TestDirectSearchContentContextRejectsOverMax(t *testing.T) {
 // of the match's own Snippet redaction.
 func contextWindowFixtureWithSecret(sessionID string, anchor int) []db.Message {
 	msgs := contextWindowFixture(sessionID, anchor)
-	msgs[1].Content = "my key is AKIA7QHWN2DKR4FYPLJM ok"
+	msgs[1].Content = "my key is AKIA3VBMK8XJZ6WPCNQH ok"
 	return msgs
 }
 
@@ -208,7 +208,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 	require.Len(t, res.Matches, 1)
 	require.Len(t, res.Matches[0].ContextBefore, 2)
 	assert.False(t,
-		strings.Contains(res.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM"),
+		strings.Contains(res.Matches[0].ContextBefore[1].Content, "AKIA3VBMK8XJZ6WPCNQH"),
 		"default (Reveal=false) must redact a secret in a context message: %q",
 		res.Matches[0].ContextBefore[1].Content)
 
@@ -220,7 +220,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 	require.Len(t, rev.Matches, 1)
 	require.Len(t, rev.Matches[0].ContextBefore, 2)
 	assert.True(t,
-		strings.Contains(rev.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM"),
+		strings.Contains(rev.Matches[0].ContextBefore[1].Content, "AKIA3VBMK8XJZ6WPCNQH"),
 		"Reveal=true must leave a context message's secret intact: %q",
 		rev.Matches[0].ContextBefore[1].Content)
 }
@@ -232,7 +232,7 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 func TestDirectSearchContentContextRedactsToolPayloads(t *testing.T) {
 	t.Parallel()
 	const sess = "s1"
-	secret := "AKIA7QHWN2DKR4FYPLJM"
+	secret := "AKIA3VBMK8XJZ6WPCNQH"
 	store := &fakeContentStore{
 		page: db.ContentSearchPage{
 			Matches: []db.ContentMatch{{SessionID: sess, Ordinal: 5, Snippet: "match one"}},

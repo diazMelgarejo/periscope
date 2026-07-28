@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 // Stats holds database-wide statistics.

@@ -19,9 +19,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1"

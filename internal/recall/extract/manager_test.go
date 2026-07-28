@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/secrets"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/secrets"
 )
 
 func newTestArchive(t *testing.T) *db.DB {
@@ -475,8 +475,8 @@ func TestManagerRefusesSecretSplitMidTokenAcrossMessages(t *testing.T) {
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
 	})
-	keyHi := "AKIA7QHWN2"
-	keyLo := "DKR4FYPLJM"
+	keyHi := "AKIA3VBMK"
+	keyLo := "8XJZ6WPCNQH"
 	seedSession(t, d, "sess-1", []db.Message{
 		{Role: "user", Content: "the deploy key is " + keyHi},
 		{Role: "user", Content: keyLo + " keep it safe"},
@@ -506,8 +506,8 @@ func TestManagerRefusesSecretSplitAcrossSystemMessage(t *testing.T) {
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
 	})
-	keyHi := "AKIA7QHWN2"
-	keyLo := "DKR4FYPLJM"
+	keyHi := "AKIA3VBMK"
+	keyLo := "8XJZ6WPCNQH"
 	seedSession(t, d, "sess-1", []db.Message{
 		{Role: "user", Content: "deploy key " + keyHi},
 		{Role: "system", Content: "context window compacted", IsSystem: true},
@@ -537,8 +537,8 @@ func TestManagerRefusesSecretSplitAcrossBoundaryWhitespace(t *testing.T) {
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
 	})
-	keyHi := "AKIA7QHWN2"
-	keyLo := "DKR4FYPLJM"
+	keyHi := "AKIA3VBMK"
+	keyLo := "8XJZ6WPCNQH"
 	seedSession(t, d, "sess-1", []db.Message{
 		{Role: "user", Content: "key " + keyHi + "   \n\t "},
 		{Role: "user", Content: "  \n" + keyLo},

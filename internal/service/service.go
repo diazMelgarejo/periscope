@@ -9,7 +9,7 @@ import (
 	"errors"
 	"io"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // ErrSearchUnavailable is returned by Search when the backing store has

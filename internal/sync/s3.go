@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 func s3SessionIDPrefix(machine string) string {

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/vector"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/vector"
 )
 
 // QueryEncodeFunc embeds a single query string into the generation's vector

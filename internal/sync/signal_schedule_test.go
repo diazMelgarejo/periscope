@@ -438,7 +438,7 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 	e.SyncAll(context.Background(), nil)
 	sid := fx.sessionIDFor(t, path)
 
-	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.appendClaudeMessage(t, path, "key AKIA3VBMK8XJZ6WPCNQH leaked")
 	e.SyncPaths([]string{path})
 	require.Equal(t, 1, secretLeakCount(t, fx, sid))
 	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
@@ -501,7 +501,7 @@ func TestWriteIncrementalDebouncesSignalRecompute(t *testing.T) {
 	// First incremental append is the session's first mark, so the
 	// leading edge recomputes inline and the new secret is counted
 	// immediately.
-	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.appendClaudeMessage(t, path, "key AKIA3VBMK8XJZ6WPCNQH leaked")
 	fx.engine.SyncPaths([]string{path})
 	require.Equal(t, 1, secretLeakCount(t, fx, sid),
 		"first incremental write should recompute signals inline")
@@ -538,7 +538,7 @@ func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 	fx.engine.SyncAll(context.Background(), nil)
 	sid := fx.sessionIDFor(t, path)
 
-	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.appendClaudeMessage(t, path, "key AKIA3VBMK8XJZ6WPCNQH leaked")
 	fx.engine.SyncPaths([]string{path})
 	require.Equal(t, 1, secretLeakCount(t, fx, sid))
 	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
@@ -566,7 +566,7 @@ func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
 	fx.engine.SyncAll(context.Background(), nil)
 	sid := fx.sessionIDFor(t, path)
 
-	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.appendClaudeMessage(t, path, "key AKIA3VBMK8XJZ6WPCNQH leaked")
 	fx.engine.SyncPaths([]string{path})
 	require.Equal(t, 1, secretLeakCount(t, fx, sid))
 	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")

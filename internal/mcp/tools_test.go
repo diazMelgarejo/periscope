@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 // fixedNow is the deterministic clock used in tests so the 10-minute
@@ -342,7 +342,7 @@ func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
 		s.EndedAt = &ended
 	})
 	require.NoError(t, d.InsertMessages([]db.Message{
-		dbtest.UserMsg("s1", 0, "my key is AKIA7QHWN2DKR4FYPLJM ok"),
+		dbtest.UserMsg("s1", 0, "my key is AKIA3VBMK8XJZ6WPCNQH ok"),
 		dbtest.AsstMsg("s1", 1, "noted"),
 		dbtest.UserMsg("s1", 2, "DEADBEEF marks the match"),
 	}))
@@ -354,7 +354,7 @@ func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
 	require.Len(t, out.Matches, 1)
 	require.Len(t, out.Matches[0].ContextBefore, 2)
 	for _, cm := range out.Matches[0].ContextBefore {
-		assert.NotContains(t, cm.Content, "AKIA7QHWN2DKR4FYPLJM",
+		assert.NotContains(t, cm.Content, "AKIA3VBMK8XJZ6WPCNQH",
 			"MCP has no reveal opt-in, so context must always come back redacted: %q", cm.Content)
 	}
 }
@@ -994,7 +994,7 @@ func (f *fakeContentSearchService) SearchContent(
 
 // search_content must pass Mode through to the service untouched, and map
 // service.ErrSemanticUnavailable to a tool error carrying the remediation
-// sentence from db.ErrSemanticUnavailable ("...run 'agentsview embeddings
+// sentence from db.ErrSemanticUnavailable ("...run 'periscope embeddings
 // build'"), not a generic failure.
 func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	fake := &fakeContentSearchService{err: service.ErrSemanticUnavailable}

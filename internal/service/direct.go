@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/secrets"
-	"go.kenn.io/agentsview/internal/sessionwatch"
-	"go.kenn.io/agentsview/internal/signals"
-	"go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/secrets"
+	"github.com/latentsignal-org/periscope/internal/sessionwatch"
+	"github.com/latentsignal-org/periscope/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/timeutil"
 )
 
 // directBackend implements SessionService by wrapping a db.Store

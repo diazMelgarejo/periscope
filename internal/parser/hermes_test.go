@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 // newHermesTestProvider builds a concrete hermesProvider for the given roots so

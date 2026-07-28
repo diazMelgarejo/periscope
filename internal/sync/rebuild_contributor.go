@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // ErrUnifiedRebuildAborted reports that the atomic local and HTTP rebuild was

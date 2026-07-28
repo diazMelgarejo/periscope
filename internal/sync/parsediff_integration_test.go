@@ -18,11 +18,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 // newParseDiffEngine builds a report-only diff engine over the same
@@ -2192,7 +2192,7 @@ func TestParseDiffEngineRefusesWrites(t *testing.T) {
 
 	path := env.writeClaudeSession(t, "test-proj", "pd-guard.jsonl",
 		parseDiffClaudeContent(
-			"guard prompt with AKIA7QHWN2DKR4FYPLJM",
+			"guard prompt with AKIA3VBMK8XJZ6WPCNQH",
 			"guard reply",
 		))
 

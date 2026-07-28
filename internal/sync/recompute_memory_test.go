@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latentsignal-org/periscope/internal/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 )
 
 func TestRecomputeHeapBytesCountsLoadedText(t *testing.T) {
@@ -38,7 +38,7 @@ func TestRecomputeHeapBytesCountsLoadedText(t *testing.T) {
 		MessageOrdinal: 0,
 		CallIndex:      &callIndex,
 		EventIndex:     &eventIndex,
-		RedactedMatch:  "AKIA************PLJM",
+		RedactedMatch:  "AKIA************CNQH",
 		RulesVersion:   "v1",
 	}}
 
@@ -46,7 +46,7 @@ func TestRecomputeHeapBytesCountsLoadedText(t *testing.T) {
 
 	assert.GreaterOrEqual(t, got, len("message")+len(`{"cmd":"echo"}`)+
 		len("legacy result")+len("event result")+
-		len("AKIA************PLJM"))
+		len("AKIA************CNQH"))
 }
 
 func TestBackfillSignalComputerReleasesAccumulatedHeap(t *testing.T) {

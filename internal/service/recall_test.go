@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	corerecall "go.kenn.io/agentsview/internal/recall"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	corerecall "github.com/latentsignal-org/periscope/internal/recall"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 type failingRecallRecorder struct {

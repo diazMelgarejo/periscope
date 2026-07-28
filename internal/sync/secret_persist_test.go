@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // TestSyncPersistsSecretFindings verifies that SyncAll scans session
@@ -36,10 +36,10 @@ func TestSyncPersistsSecretFindings(t *testing.T) {
 		)).
 		AddRaw(testjsonl.ClaudeToolResultUserJSON(
 			"toolu_aws1",
-			"AWS_ACCESS_KEY_ID=AKIA7QHWN2DKR4FYPLJM found in env",
+			"AWS_ACCESS_KEY_ID=AKIA3VBMK8XJZ6WPCNQH found in env",
 			"2024-01-01T00:00:03Z",
 		)).
-		AddClaudeUser("2024-01-01T00:00:04Z", "that key AKIA7QHWN2DKR4FYPLJM is mine").
+		AddClaudeUser("2024-01-01T00:00:04Z", "that key AKIA3VBMK8XJZ6WPCNQH is mine").
 		String()
 
 	filename := "secret-session.jsonl"

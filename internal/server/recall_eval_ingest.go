@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // maxEvalFieldRunes caps the length of the required identifier-like eval

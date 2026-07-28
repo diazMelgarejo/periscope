@@ -4,17 +4,17 @@ import (
 	"context"
 	"testing"
 
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/secrets"
 )
 
 func TestScanSecretsFromMessages(t *testing.T) {
 	sess := db.Session{ID: "s1"}
 	msgs := []db.Message{
 		{SessionID: "s1", Ordinal: 0, Role: "user",
-			Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
+			Content: "my key AKIA3VBMK8XJZ6WPCNQH here"},
 		{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "running",
 			ToolCalls: []db.ToolCall{{
 				ToolName: "Bash", ToolUseID: "tu1",
@@ -44,10 +44,10 @@ func TestScanSecretsDedupEventsVsResult(t *testing.T) {
 		SessionID: "s1", Ordinal: 0, Role: "assistant",
 		ToolCalls: []db.ToolCall{{
 			ToolName: "Bash", ToolUseID: "tu1",
-			ResultContent: "AKIA7QHWN2DKR4FYPLJM",
+			ResultContent: "AKIA3VBMK8XJZ6WPCNQH",
 			ResultEvents: []db.ToolResultEvent{{
 				ToolUseID: "tu1", Status: "completed",
-				Content: "AKIA7QHWN2DKR4FYPLJM", EventIndex: 0,
+				Content: "AKIA3VBMK8XJZ6WPCNQH", EventIndex: 0,
 			}},
 		}},
 	}}
@@ -76,7 +76,7 @@ func TestScanSecretsResultEventIndexIsSlicePosition(t *testing.T) {
 			ToolName: "Bash", ToolUseID: "tu1",
 			ResultEvents: []db.ToolResultEvent{
 				{Status: "running", Content: "starting up", EventIndex: 5},
-				{Status: "completed", Content: "AKIA7QHWN2DKR4FYPLJM", EventIndex: 9},
+				{Status: "completed", Content: "AKIA3VBMK8XJZ6WPCNQH", EventIndex: 9},
 			},
 		}},
 	}}
@@ -102,7 +102,7 @@ func TestComputeSignalsAndSecretsDefiniteOnly(t *testing.T) {
 	sess := db.Session{ID: "s1"}
 	msgs := []db.Message{{
 		SessionID: "s1", Ordinal: 0, Role: "user",
-		Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6",
+		Content: "aws AKIA3VBMK8XJZ6WPCNQH and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6",
 	}}
 	update, findings := computeSignalsAndSecrets(sess, msgs)
 	require.NotEmpty(t, findings, "expected at least one definite finding")
@@ -129,7 +129,7 @@ func TestInlineScanThenBackfillStoresCandidates(t *testing.T) {
 	}))
 	require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user",
-			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
+			Content: "aws AKIA3VBMK8XJZ6WPCNQH and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
 	}))
 
 	// Inline sync path: definite-only findings, definite version.
@@ -170,7 +170,7 @@ func TestScanSecretsBreakdown(t *testing.T) {
 	// high-entropy assignment.
 	if err := fx.db.ReplaceSessionMessages(id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user",
-			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
+			Content: "aws AKIA3VBMK8XJZ6WPCNQH and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
 	}); err != nil {
 		t.Fatalf("ReplaceSessionMessages: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestEngineScanSecretsBackfillResumable(t *testing.T) {
 		}))
 		require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
 			{SessionID: id, Ordinal: 0, Role: "user",
-				Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
+				Content: "my key AKIA3VBMK8XJZ6WPCNQH here"},
 		}))
 	}
 	ticks := 0
@@ -250,7 +250,7 @@ func TestScanSecretsCanceledContextReturnsError(t *testing.T) {
 	}))
 	require.NoError(t, fx.db.ReplaceSessionMessages("s1", []db.Message{
 		{SessionID: "s1", Ordinal: 0, Role: "user",
-			Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
+			Content: "my key AKIA3VBMK8XJZ6WPCNQH here"},
 	}))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

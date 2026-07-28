@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 func (s *Server) registerSettingsRoutes() {

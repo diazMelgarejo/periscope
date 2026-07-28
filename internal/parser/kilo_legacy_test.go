@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 // writeKiloLegacyFixture creates a minimal Kilo (legacy) task directory

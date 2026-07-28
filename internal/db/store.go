@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/latentsignal-org/periscope/internal/activity"
+	"github.com/latentsignal-org/periscope/internal/export"
 )
 
 // ErrReadOnly is returned by write methods on read-only store

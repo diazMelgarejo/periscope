@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // seedSecretFindingsSession inserts a session, optional messages, and findings.
@@ -335,7 +335,7 @@ func TestPGSecretFindingSource(t *testing.T) {
 		INSERT INTO messages
 			(session_id, ordinal, role, content, content_length)
 		VALUES ($1, 0, 'assistant',
-			'key AKIA7QHWN2DKR4FYPLJM here', 28)`,
+			'key AKIA3VBMK8XJZ6WPCNQH here', 28)`,
 		sid,
 	)
 	require.NoError(t, err, "insert message")
@@ -377,7 +377,7 @@ func TestPGSecretFindingSource(t *testing.T) {
 		{"message",
 			db.SecretFinding{SessionID: sid, LocationKind: "message",
 				MessageOrdinal: 0},
-			"key AKIA7QHWN2DKR4FYPLJM here", true},
+			"key AKIA3VBMK8XJZ6WPCNQH here", true},
 		{"tool_input",
 			db.SecretFinding{SessionID: sid, LocationKind: "tool_input",
 				MessageOrdinal: 0, CallIndex: ptr(0)},

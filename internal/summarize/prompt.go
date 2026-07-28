@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"go.kenn.io/agentsview/internal/llm"
+	"github.com/latentsignal-org/periscope/internal/llm"
 )
 
 // systemPrompt is cached on the API side, so it can be long without

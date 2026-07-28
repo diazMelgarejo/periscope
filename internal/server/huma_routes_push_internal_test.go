@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/money"
+	"github.com/latentsignal-org/periscope/internal/postgres"
+	syncpkg "github.com/latentsignal-org/periscope/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/postgres"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // stubVectorPushSource is a no-op postgres.VectorPushSource: the gating test

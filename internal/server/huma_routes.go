@@ -16,8 +16,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/timeutil"
 )
 
 type emptyInput struct{}
@@ -188,7 +188,7 @@ func agentsViewSchemaNamer(t reflect.Type, hint string) string {
 	name := huma.DefaultSchemaNamer(t, hint)
 	base := schemaNamedType(t)
 	pkgPath := base.PkgPath()
-	const internalPrefix = "go.kenn.io/agentsview/internal/"
+	const internalPrefix = "github.com/latentsignal-org/periscope/internal/"
 	if pkgPath == "" ||
 		!strings.HasPrefix(pkgPath, internalPrefix) ||
 		strings.HasSuffix(pkgPath, "/server") {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 type syncStateStore = SyncStateStore

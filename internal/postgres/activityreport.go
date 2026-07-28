@@ -7,11 +7,11 @@ import (
 	"sort"
 	"time"
 
+	"github.com/latentsignal-org/periscope/internal/activity"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/money"
 	"github.com/tidwall/gjson"
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds

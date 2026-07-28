@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 // newInMemoryPair connects a real MCP client to srv over an in-memory

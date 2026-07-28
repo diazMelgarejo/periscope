@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // PostgreSQL implementation of the conversation-unit seam. Orchestration —

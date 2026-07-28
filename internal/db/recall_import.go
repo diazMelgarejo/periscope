@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	corerecall "go.kenn.io/agentsview/internal/recall"
+	corerecall "github.com/latentsignal-org/periscope/internal/recall"
 )
 
 type RecallImportResult struct {

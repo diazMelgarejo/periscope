@@ -12,7 +12,7 @@ func TestReplaceSessionContentAtomic(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 	msgs := []Message{
-		{SessionID: "s1", Ordinal: 0, Role: "user", Content: "key AKIA7QHWN2DKR4FYPLJM"},
+		{SessionID: "s1", Ordinal: 0, Role: "user", Content: "key AKIA3VBMK8XJZ6WPCNQH"},
 	}
 	signals := SessionSignalUpdate{Outcome: "success", SecretLeakCount: 1,
 		SecretsRulesVersion: "rulesv1"}
