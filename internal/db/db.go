@@ -1750,6 +1750,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN has_peak_context_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
+			"sessions", "model_context_window_tokens",
+			"ALTER TABLE sessions ADD COLUMN model_context_window_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "has_model_context_window_tokens",
+			"ALTER TABLE sessions ADD COLUMN has_model_context_window_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
 			"sessions", "local_modified_at",
 			"ALTER TABLE sessions ADD COLUMN local_modified_at TEXT",
 		},

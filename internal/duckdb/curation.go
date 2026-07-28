@@ -16,6 +16,27 @@ func (s *Store) UnstarSession(sessionID string) error {
 	return db.ErrReadOnly
 }
 
+// IsSessionStarred reports whether a session is starred in the
+// mirrored starred_sessions table.
+func (s *Store) IsSessionStarred(
+	ctx context.Context, sessionID string,
+) (bool, error) {
+	var one int
+	err := s.queryRowContext(ctx, `
+		SELECT 1 FROM starred_sessions WHERE session_id = ? LIMIT 1`,
+		sessionID,
+	).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf(
+			"checking starred for %s: %w", sessionID, err,
+		)
+	}
+	return true, nil
+}
+
 func (s *Store) ListStarredSessionIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.queryContext(ctx, `
 		SELECT session_id FROM starred_sessions

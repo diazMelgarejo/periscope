@@ -52,6 +52,9 @@ func (s *Server) humaStarSession(
 	if !ok {
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
+	if s.summarizer != nil {
+		s.summarizer.Enqueue(in.ID)
+	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
@@ -81,5 +84,29 @@ func (s *Server) humaBulkStar(
 		}
 		return nil, internalError("bulk star", err)
 	}
+	if s.summarizer != nil {
+		for _, id := range in.Body.SessionIDs {
+			if id != "" {
+				s.summarizer.Enqueue(id)
+			}
+		}
+	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
+}
+
+func (s *Server) handleEnqueueSummarize(
+	w http.ResponseWriter, r *http.Request,
+) {
+	if s.summarizer == nil || !s.summarizer.Enabled() {
+		writeError(w, http.StatusServiceUnavailable,
+			"summaries disabled: set ANTHROPIC_API_KEY and restart")
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing session id")
+		return
+	}
+	s.summarizer.Enqueue(id)
+	w.WriteHeader(http.StatusNoContent)
 }

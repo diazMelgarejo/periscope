@@ -65,6 +65,7 @@
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
   import RecentEditsPage from "./lib/components/recentedits/RecentEditsPage.svelte";
   import SettingsPage from "./lib/components/settings/SettingsPage.svelte";
+  import ContextPage from "./lib/components/context/ContextPage.svelte";
   import { sessions, filtersToParams } from "./lib/stores/sessions.svelte.js";
   import { messages } from "./lib/stores/messages.svelte.js";
   import { sync } from "./lib/stores/sync.svelte.js";
@@ -490,6 +491,22 @@
     });
   });
 
+  function sessionTab(): "transcript" | "context" {
+    return router.params["tab"] === "context"
+      ? "context"
+      : "transcript";
+  }
+
+  function setSessionTab(tab: "transcript" | "context") {
+    const next = { ...router.params };
+    if (tab === "context") {
+      next["tab"] = "context";
+    } else {
+      delete next["tab"];
+    }
+    router.replaceParams(next);
+  }
+
   // Resolve msg=last once messages are loaded.
   $effect(() => {
     const pending = ui.pendingScrollOrdinal;
@@ -520,6 +537,9 @@
           filterParams,
           router.params,
         );
+        if (router.params["tab"] === "context") {
+          nextParams["tab"] = "context";
+        }
         if (activeId === currentUrlSessionId) {
           if (
             lastDetailFilterParamsSignature !== null &&
@@ -686,6 +706,10 @@
   <div class="page-scroll settings-page-host">
     <SettingsPage />
   </div>
+{:else if router.route === "context" && router.sessionId}
+  <div class="page-scroll">
+    <ContextPage sessionId={router.sessionId} />
+  </div>
 {:else}
   <ThreeColumnLayout>
     {#snippet sidebar()}
@@ -698,8 +722,19 @@
         <SessionBreadcrumb
           session={session}
           onBack={() => sessions.deselectSession()}
+          tab={sessionTab()}
+          onSelectTab={setSessionTab}
+          onOpenStandalone={() => router.navigateToContext(sessions.activeSessionId!)}
         />
-        <MessageList bind:this={messageListRef} />
+        {#if sessionTab() === "context"}
+          <ContextPage
+            sessionId={sessions.activeSessionId}
+            embedded={true}
+            session={session}
+          />
+        {:else}
+          <MessageList bind:this={messageListRef} />
+        {/if}
       {:else}
         <AnalyticsPage />
       {/if}

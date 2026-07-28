@@ -18,7 +18,7 @@
       {m.update_current({ version: sync.serverVersion?.version ?? m.update_unknown() })}
     </p>
     <p class="update-instructions">
-      {m.update_instructions({ cmd: "agentsview update" })}
+      {m.update_instructions({ cmd: "periscope update" })}
     </p>
   {:else}
     <p class="update-text">

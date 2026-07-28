@@ -3,8 +3,12 @@ import type {
   SyncStats,
   Insight,
   GenerateInsightRequest,
+  Session,
+  SessionContextResponse,
+  SessionContextTimelineResponse,
 } from "./types.js";
 import type { SessionTiming } from "./types/timing.js";
+import { SessionsService } from "./generated/index.js";
 import {
   ApiError,
   authHeaders,
@@ -307,6 +311,52 @@ export function watchEvents(
   };
 
   return es;
+}
+
+/* Periscope context visualizer (not in generated OpenAPI client yet). */
+
+export async function getSessionContext(
+  sessionId: string,
+  init?: RequestInit,
+): Promise<SessionContextResponse> {
+  const res = await fetch(
+    `${getBase()}/sessions/${encodeURIComponent(sessionId)}/context`,
+    authHeaders(init),
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, await responseErrorMessage(res));
+  }
+  return res.json() as Promise<SessionContextResponse>;
+}
+
+export async function getSessionContextTimeline(
+  sessionId: string,
+  init?: RequestInit,
+): Promise<SessionContextTimelineResponse> {
+  const res = await fetch(
+    `${getBase()}/sessions/${encodeURIComponent(sessionId)}/context/timeline`,
+    authHeaders(init),
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, await responseErrorMessage(res));
+  }
+  return res.json() as Promise<SessionContextTimelineResponse>;
+}
+
+/** ContextPage imports this name; delegate to the generated client. */
+export const getSession = (
+  id: string,
+): Promise<Session> =>
+  SessionsService.getApiV1SessionsId({ id }) as unknown as Promise<Session>;
+
+export async function enqueueSummarize(id: string): Promise<void> {
+  const res = await fetch(
+    `${getBase()}/sessions/${encodeURIComponent(id)}/summarize`,
+    authHeaders({ method: "POST" }),
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, await responseErrorMessage(res));
+  }
 }
 
 /** Get the export URL for a session.

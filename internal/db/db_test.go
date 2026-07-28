@@ -105,6 +105,12 @@ func callUpdateSessionIncrementalCompat(
 		update.FieldByName("PeakContextTokens").SetInt(int64(peakContextTokens))
 		update.FieldByName("HasTotalOutputTokens").SetBool(hasTotalOutputTokens)
 		update.FieldByName("HasPeakContextTokens").SetBool(hasPeakContextTokens)
+		if f := update.FieldByName("ModelContextWindowTokens"); f.IsValid() {
+			f.SetInt(0)
+		}
+		if f := update.FieldByName("HasModelContextWindowTokens"); f.IsValid() {
+			f.SetBool(false)
+		}
 		results := updateMethod.Call([]reflect.Value{
 			reflect.ValueOf(id),
 			update,

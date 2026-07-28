@@ -22,11 +22,13 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/llm"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/summarize"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/telemetry"
 )
@@ -458,6 +460,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 	}
 	cfg = preparedCfg
 
+	llmClient := startLLMClient()
+	summarizer := startSummarizer(ctx, database, broadcaster, llmClient)
+
 	srvOpts := []server.Option{
 		server.WithVersion(server.VersionInfo{
 			Version:   version,
@@ -467,6 +472,8 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithDataDir(cfg.DataDir),
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
+		server.WithSummarizer(summarizer),
+		server.WithGuidanceClient(llmClient),
 		server.WithIdleTracker(idleTracker),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
@@ -2938,4 +2945,41 @@ func recomputePendingSessions(
 		// pass will retry any that failed.
 		_ = engine.RecomputeSignals(context.Background(), id)
 	}
+}
+
+// startLLMClient returns an Anthropic client when ANTHROPIC_API_KEY is set.
+// When unset, Periscope turn summaries and LLM guidance stay disabled.
+func startLLMClient() llm.Client {
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key == "" {
+		log.Printf("summarize: ANTHROPIC_API_KEY unset; turn summaries disabled")
+		return nil
+	}
+	log.Printf("summarize: ANTHROPIC_API_KEY found (len=%d)", len(key))
+	client, ok := llm.NewFromEnv()
+	if !ok {
+		log.Printf("summarize: LLM client init failed despite key being set")
+		return nil
+	}
+	log.Printf("summarize: LLM client initialized; turn summaries enabled")
+	return client
+}
+
+// startSummarizer builds the turn-summary worker, starts its run loop, and
+// kicks off a boot-time reconcile over starred sessions.
+func startSummarizer(
+	ctx context.Context,
+	database *db.DB,
+	broadcaster *server.Broadcaster,
+	client llm.Client,
+) *summarize.Worker {
+	if client == nil {
+		return nil
+	}
+	w := summarize.NewWorker(database, client, summarize.WorkerOptions{
+		Notifier: func(string) { broadcaster.Emit("context") },
+	})
+	go w.Run(ctx)
+	go w.ReconcileStarred(ctx)
+	return w
 }
