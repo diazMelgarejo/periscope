@@ -190,3 +190,22 @@ handle data version changes. Schema changes use ALTER TABLE; parser changes
 trigger a full resync (build fresh DB, sync files, copy orphaned sessions from
 old DB, atomic swap). Existing session data must be preserved even when source
 files no longer exist on disk.
+
+## Cursor Cloud: git commits
+
+Run on cloud VM boot:
+
+```bash
+bash scripts/git/apply-attribution-guard-all-repos.sh
+```
+
+Hook-free commit when needed:
+
+```bash
+bash scripts/git/commit-clean.sh -m "type(scope): summary"
+```
+
+See orama-system `docs/wiki/09-cursor-cloud-commit-attribution.md` (canonical).
+
+**Fork policy:** integration branch is `merged`. Open agent PRs from
+`cursor/*` branches → `merged` (never → `main`).
