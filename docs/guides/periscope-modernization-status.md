@@ -1,8 +1,8 @@
 # Periscope modernization status
 
-**Updated:** 2026-07-28  
-**Base commit:** `2b6e5128` (3way modernization replay)  
-**Integration branch:** `merged`  
+**Updated:** 2026-07-28
+**Base commit:** `2b6e5128` (3way modernization replay)
+**Integration branch:** `merged`
 **Replaces:** historical `PROGRESS.md` completion ledger (archive only — not active truth)
 
 ---
@@ -75,17 +75,16 @@ shell environment overrides (see `desktop/src-tauri/src/lib.rs`).
 
 ---
 
-## In progress (outside this scoped replay)
+## Modernization completion
 
 | Area | State | Tracker |
 | --- | --- | --- |
-| `internal/db/db.go` `DataVersionTooNewError` user text | Pending | serve `--check-data-version` + `cli_test.go` |
-| `internal/server/server_test.go` OpenAPI title | Pending | matches `Periscope API` in `server.go` |
-| `cmd/doctor_test.go` newer-database assertion | Pending | matches `doctor.go` Periscope wording |
-| `cmd/agentsview` → product `periscope` in Makefile/CI | Partial | rename catalogue |
-| Desktop sidecar `periscope-*` artifacts | Partial | desktop workflow PRs |
-| Full AgentsView tree on `merged` | Replay ongoing | upstream blueprint §4 |
-| `release.yml` archive names | Upstream-shaped | rename `rename_build_release` |
+| Data-version and doctor user text | Complete | Periscope wording and tests |
+| OpenAPI product identity | Complete | `Periscope API` and tests |
+| `cmd/agentsview` → `cmd/periscope` | Complete | module, Makefile, Docker, and CI |
+| Desktop sidecar `periscope-*` artifacts | Complete | bundle, spawn, and workflow tests |
+| Full current AgentsView foundation | Complete locally | unpushed replay branch |
+| `release.yml` archive names | Complete | Periscope archives and PyPI normalization |
 
 ---
 

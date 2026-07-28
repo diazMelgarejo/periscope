@@ -589,7 +589,7 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 	require.Equal(t, "3.1.0", spec.OpenAPI)
-	assert.Equal(t, "AgentsView API", spec.Info.Title)
+	assert.Equal(t, "Periscope API", spec.Info.Title)
 	assert.NotEmpty(t, spec.Info.Version)
 
 	require.Contains(t, spec.Paths, "/api/v1/sessions")

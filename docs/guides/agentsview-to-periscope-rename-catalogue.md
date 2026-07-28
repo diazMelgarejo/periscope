@@ -1,7 +1,7 @@
 # AgentsView → Periscope rename catalogue
 
-**Status:** living operator guide for upstream merges  
-**Base:** `candidate@2b6e5128` (2026-07-28) — refreshed from prior snapshot `origin/merged@6cf2f38f`  
+**Status:** living operator guide for upstream merges
+**Base:** `candidate@2b6e5128` (2026-07-28) — refreshed from prior snapshot `origin/merged@6cf2f38f`
 **Machine index:** [`agentsview-rename-index.json`](./agentsview-rename-index.json) (844 files, 5165 matches)
 
 > **Historical snapshot:** the milestone index at `origin/merged@6cf2f38f` tracked 96
