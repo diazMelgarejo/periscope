@@ -38,13 +38,16 @@ export function getUserProfile(id: string) {
 
 - Use Conventional Commits.
 - Choose the prefix that describes the change; observed prefixes include
-  `build`, `chore`, and `fix`.
+  `build`, `chore`, `docs`, `fix`, and scoped variants such as
+  `fix(frontend)` and `fix(desktop)`.
 - Keep the subject concise and include a scope when it adds useful context.
 
 ```text
 build(deps): update frontend dependencies
 fix(desktop): honor PERISCOPE_VERSION override
 chore(git): sync attribution guard scripts
+docs: align layer-2 synthesis analysis tip SHA
+fix(frontend): remove stale ActivityMinimap and pass svelte-check
 ```
 
 ## Workflows
@@ -81,6 +84,20 @@ chore(git): sync attribution guard scripts
 3. Review both manifest and generated dependency changes for unintended drift.
 4. Run the checks for each affected subsystem.
 5. Commit the manifest and lockfile together with a `build(deps)` subject.
+
+### Integration Analysis Doc
+
+**Trigger:** When updating layer-2 integrative synthesis verification or tip SHA
+
+**Guide:** `/update-integration-analysis`
+
+**Instinct:** `periscope-workflow-update-integration-analysis-doc` — numbered
+workflow steps; trigger: "when doing update integration analysis doc".
+
+1. Edit `docs/INTEGRATION-SYNTHESIS-LAYER2-ANALYSIS.md` for verification gates,
+   branch references, or tip SHA alignment.
+2. Use a `docs:` Conventional Commit subject that names the alignment work.
+3. Keep the analysis consistent with the current `merged` integration line.
 
 ### Testing
 

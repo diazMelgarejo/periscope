@@ -1,10 +1,14 @@
 # Instincts generated from https://github.com/diazMelgarejo/periscope
 # Generated: 2026-07-28T00:55:34.446Z
 # Harmonized with ECC run: 2026-07-28T01:26:19.263Z
+# Additive replay from ECC run: 2026-07-28T13:55:47.517Z (PR #16 on merged)
 # Version: 2.0
 # Absorbed ID aliases from the second run:
 # - periscope-instinct-commit-format -> periscope-instinct-git-commit-format
 # - periscope-instinct-commit-length -> periscope-instinct-git-commit-length
+# Additive instincts from PR #16 (no amputation of PR #10/#12 synthesis):
+# - periscope-arch-type-based
+# - periscope-workflow-update-integration-analysis-doc
 # NOTE: This file supplements (does not replace) any existing curated instincts.
 # High-confidence manually curated instincts should be preserved alongside these.
 
@@ -291,6 +295,29 @@ Prefer named exports where the surrounding frontend module follows that pattern.
 - Pattern in codeStyle.exportStyle
 
 ---
+id: periscope-arch-type-based
+trigger: "when adding new code"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Arch Type Based
+
+## Action
+
+Place code in the appropriate type folder for the affected subsystem, such as
+`frontend/src/lib/components/`, Go `internal/` packages, `cmd/` entrypoints, or
+`desktop/src-tauri/src/`.
+
+## Evidence
+
+- Type-based module organization detected across Go, frontend, and desktop
+- Observed folders: `frontend/src/lib/components/`, `internal/`, `cmd/`,
+  `desktop/src-tauri/src/`
+
+---
 id: periscope-instinct-git-commit-format
 trigger: "When writing a commit message"
 confidence: 0.9
@@ -304,14 +331,17 @@ source_repo: diazMelgarejo/periscope
 ## Action
 
 Use Conventional Commits with a prefix that matches the change. Observed
-prefixes include `build`, `chore`, and `fix`.
+prefixes include `build`, `chore`, `docs`, `fix`, and scoped variants such as
+`fix(frontend)` and `fix(desktop)`.
 
 ## Evidence
 
-- Pattern in commits.prefixes
+- Pattern in commits.prefixes across ECC runs and layer-2 integration work
 - Examples: 'build(deps): bump marked, svelte, postcss in frontend',
   'chore(git): sync attribution guard scripts and cursor rules',
-  'fix(desktop): test PERISCOPE_VERSION override'
+  'fix(desktop): test PERISCOPE_VERSION override',
+  'docs: integrative synthesis layer-2 on origin/merged',
+  'fix(frontend): remove stale ActivityMinimap and pass svelte-check'
 
 ---
 id: periscope-instinct-git-commit-length
@@ -326,14 +356,16 @@ source_repo: diazMelgarejo/periscope
 
 ## Action
 
-Keep the commit subject concise and descriptive; the richer ECC sample averaged
-approximately 68 characters.
+Keep the commit subject concise and descriptive. Observed averages range from
+approximately 55 characters (layer-2 integration commits) to 68 characters (the
+richer ECC sample).
 
 ## Evidence
 
-- Pattern in commits.averageLength
-- The first input observed 59 characters across 1 commit; the second observed
-  68 characters across 4 commits
+- Pattern in commits.averageLength across ECC runs and layer-2 integration work
+- First ECC input: 59 characters across 1 commit
+- Second ECC input: 68 characters across 4 commits
+- Layer-2 integration line: 55 characters across 6 commits
 
 ---
 id: periscope-instinct-test-location
@@ -387,4 +419,35 @@ committing the dependency state together.
   desktop/src-tauri/Cargo.lock
 - Commit example: 'build(deps): bump marked, svelte, postcss in frontend
   (onto merged)'
+
+---
+id: periscope-workflow-update-integration-analysis-doc
+trigger: "when doing update integration analysis doc"
+confidence: 0.7
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Update Integration Analysis Doc
+
+## Action
+
+Follow the update-integration-analysis-doc workflow:
+1. Edit `docs/INTEGRATION-SYNTHESIS-LAYER2-ANALYSIS.md` to update verification
+   status, tip SHA, or branch reference.
+2. Commit with a descriptive `docs:` subject referencing the alignment work.
+
+## Related
+
+- Layer-2 recovery branch documents the integrative synthesis technique used
+  alongside this workflow.
+- Skill guide: `/update-integration-analysis` in `.agents/skills/periscope/SKILL.md`
+  and `.claude/skills/periscope/SKILL.md`.
+
+## Evidence
+
+- Workflow detected from layer-2 integration commit patterns
+- Observed file: `docs/INTEGRATION-SYNTHESIS-LAYER2-ANALYSIS.md`
+- Frequency: episodic during integrative merge and recovery work
 
