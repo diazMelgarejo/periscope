@@ -702,7 +702,7 @@ describe("UIStore", () => {
 
         expect(mod.ui.vitalsCallsExpanded).toBe(false);
         expect(setItem).toHaveBeenCalledWith(
-          "agentsview-session-vitals-calls-expanded",
+          "periscope-session-vitals-calls-expanded",
           "false",
         );
       } finally {
@@ -938,7 +938,7 @@ describe("UIStore", () => {
         mod.ui.setTranscriptMode("focused");
         await Promise.resolve();
         expect(setItem).toHaveBeenLastCalledWith(
-          "agentsview-transcript-mode",
+          "periscope-transcript-mode",
           "focused",
         );
       } finally {
@@ -1097,7 +1097,7 @@ describe("UIStore", () => {
         mod.ui.setFontScale(120);
         await tick();
         expect(setItem).toHaveBeenCalledWith(
-          "agentsview-font-scale",
+          "periscope-font-scale",
           "120",
         );
       } finally {

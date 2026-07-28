@@ -158,7 +158,7 @@ func TestPrintHealthList(t *testing.T) {
 	sessions := []db.Session{
 		{
 			ID:                 "abc12345-6789-0000",
-			Project: "agentsview",
+			Project:            "agentsview",
 			Agent:              "claude",
 			MessageCount:       42,
 			FinalFailureStreak: 0,
@@ -198,7 +198,7 @@ func TestPrintHealthDetail(t *testing.T) {
 	pressure := 0.45
 	sess := db.Session{
 		ID:                     "abc12345",
-		Project: "agentsview",
+		Project:                "agentsview",
 		Agent:                  "claude",
 		StartedAt:              new("2026-04-15T20:48:24Z"),
 		EndedAt:                new("2026-04-15T21:30:00Z"),

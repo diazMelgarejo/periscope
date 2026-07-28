@@ -1,6 +1,7 @@
 import { debounce } from "@kenn-io/kit-ui";
 import { SearchService } from "../api/generated/index.js";
 import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
+import { readMigratedLocalStorageValue } from "../storage/local-storage-key.js";
 import type { SearchResponse, SearchResult } from "../api/types.js";
 
 export type SearchMode = "fulltext" | "semantic" | "hybrid";
@@ -40,7 +41,7 @@ interface ContentSearchResponse {
 
 type SearchModeStorage = Pick<Storage, "getItem" | "setItem">;
 
-export const SEARCH_MODE_STORAGE_KEY = "agentsview-search-mode";
+export const SEARCH_MODE_STORAGE_KEY = "periscope-search-mode";
 const SEARCH_DEBOUNCE_MS = 300;
 const PALETTE_RESULT_LIMIT = 30;
 const CONTENT_SEARCH_LIMIT = 120;
@@ -56,7 +57,10 @@ function availableStorage(): SearchModeStorage | null {
 
 function loadMode(storage: SearchModeStorage | null): SearchMode {
   try {
-    const value = storage?.getItem(SEARCH_MODE_STORAGE_KEY);
+    const value = readMigratedLocalStorageValue(
+      storage,
+      SEARCH_MODE_STORAGE_KEY,
+    );
     return SEARCH_MODES.includes(value as SearchMode)
       ? value as SearchMode
       : "fulltext";

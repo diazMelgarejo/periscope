@@ -1,7 +1,8 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
+    <!-- Retained for installed-plugin update continuity (see README). -->
     <id>org.latentsignal.periscope</id>
-    <name>AgentsView</name>
+    <name>Periscope</name>
     <vendor>latentsignal</vendor>
 
     <depends>com.intellij.modules.platform</depends>
@@ -9,14 +10,16 @@
     <resource-bundle>messages.MyBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
+        <!-- Legacy tool window id "AgentsView" retained for layout/settings continuity. -->
         <toolWindow factoryClass="org.latentsignal.sampleplugin.toolWindow.MyToolWindowFactory"
                     id="AgentsView"
                     anchor="right"
                     canCloseContents="false"
                     icon="AllIcons.Toolwindows.ToolWindowStructure"/>
         <postStartupActivity implementation="org.latentsignal.sampleplugin.startup.MyProjectActivity" />
+        <!-- Legacy notification group id "AgentsView" retained for settings continuity. -->
         <notificationGroup id="AgentsView"
                            displayType="BALLOON"
-                           key="notification.group.agentsview"/>
+                           key="notification.group.periscope"/>
     </extensions>
 </idea-plugin>

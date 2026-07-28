@@ -8,12 +8,12 @@ import com.intellij.openapi.startup.ProjectActivity
 import org.latentsignal.sampleplugin.PeriscopeProcessManager
 
 /**
- * Starts the agentsview server when a project opens and stops it on project close.
+ * Starts the Periscope server when a project opens and stops it on project close.
  */
 class MyProjectActivity : ProjectActivity {
 
     override suspend fun execute(project: Project) {
-        thisLogger().info("AgentsView: project opened — starting server")
+        thisLogger().info("Periscope: project opened — starting server")
         PeriscopeProcessManager.start(project)
 
         project.messageBus.connect().subscribe(
@@ -21,7 +21,7 @@ class MyProjectActivity : ProjectActivity {
             object : ProjectManagerListener {
                 override fun projectClosing(closingProject: Project) {
                     if (closingProject === project) {
-                        thisLogger().info("AgentsView: project closing — stopping server")
+                        thisLogger().info("Periscope: project closing — stopping server")
                         PeriscopeProcessManager.stop(project)
                     }
                 }

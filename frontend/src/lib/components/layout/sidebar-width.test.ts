@@ -13,7 +13,7 @@ import {
 
 describe("sidebar width helpers", () => {
   it("exports the expected sidebar width constants", () => {
-    expect(SIDEBAR_WIDTH_KEY).toBe("agentsview-sidebar-width");
+    expect(SIDEBAR_WIDTH_KEY).toBe("periscope-sidebar-width");
     expect(SIDEBAR_WIDTH_DEFAULT).toBe(260);
     expect(SIDEBAR_WIDTH_MIN).toBe(220);
     expect(SIDEBAR_WIDTH_STORAGE_MAX).toBe(520);

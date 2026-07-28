@@ -424,7 +424,7 @@ func (s *Server) humaConfig() huma.Config {
 	if version == "" {
 		version = "dev"
 	}
-	cfg := huma.DefaultConfig("AgentsView API", version)
+	cfg := huma.DefaultConfig("Periscope API", version)
 	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions."
 	cfg.OpenAPIPath = "/api/openapi"
 	cfg.DocsPath = ""
@@ -856,7 +856,7 @@ func hostCheckMiddleware(
 				allowed := sortedHosts(allowedHosts)
 				log.Printf(
 					"host check rejected %s %s: Host %q not in allowed "+
-						"set %v; if reaching agentsview through a forwarded "+
+						"set %v; if reaching Periscope through a forwarded "+
 						"port or remote host, restart with --public-url "+
 						"<origin> matching your browser URL",
 					r.Method, r.URL.Path, r.Host, allowed,
@@ -891,7 +891,7 @@ func sortedHosts(hosts map[string]bool) []string {
 func hostRejectionMessage(host string, allowed []string) string {
 	return fmt.Sprintf(
 		"Forbidden: request Host %q is not in the allowed set %v. "+
-			"If you are reaching agentsview through SSH port-forwarding, "+
+			"If you are reaching Periscope through SSH port-forwarding, "+
 			"a reverse proxy, or a remote dev environment, restart the "+
 			"server with --public-url <origin> matching the URL in your "+
 			"browser (for example --public-url http://%s).",

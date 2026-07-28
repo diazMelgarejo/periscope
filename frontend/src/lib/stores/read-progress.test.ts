@@ -26,6 +26,27 @@ describe("read progress", () => {
     ).toBeNull();
   });
 
+  it("migrates legacy read-progress storage on load", () => {
+    localStorage.setItem("agentsview-read-progress", JSON.stringify({
+      version: 2,
+      sessions: {
+        one: {
+          token: "rev-1",
+          ordinal: 2,
+          touched_at: 10,
+        },
+      },
+    }));
+
+    expect(new ReadProgressStore().get("one")).toEqual({
+      token: "rev-1",
+      ordinal: 2,
+      touched_at: 10,
+    });
+    expect(localStorage.getItem("periscope-read-progress")).toContain("rev-1");
+    expect(localStorage.getItem("agentsview-read-progress")).toBeNull();
+  });
+
   it("drops version-one tokens so existing sessions rebaseline after upgrade", () => {
     localStorage.setItem("agentsview-read-progress", JSON.stringify({
       version: 1,

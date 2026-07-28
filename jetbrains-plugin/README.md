@@ -1,18 +1,26 @@
-# AgentsView — JetBrains Plugin
+# Periscope — JetBrains Plugin
 
-Embedded session viewer for the [AgentsView](https://github.com/latentsignal-org/periscope) local AI-agent session database.
+Embedded session viewer for [Periscope](https://github.com/latentsignal-org/periscope), the local AI-agent session database.
 
 <!-- Plugin description -->
-**AgentsView** embeds a full session-history viewer directly inside your IDE.
+**Periscope** embeds a full session-history viewer directly inside your IDE.
 
-- Launches the `agentsview` binary automatically when a project opens and shuts it down when it closes.
-- Displays the AgentsView web UI in a dedicated **AgentsView** tool window (right sidebar) via JCEF.
+- Launches the `periscope` binary automatically when a project opens and shuts it down when it closes.
+- Displays the Periscope web UI in a dedicated **Periscope** tool window (right sidebar) via JCEF.
 - Auto-discovers a free port starting at 8080 — no port conflicts, no manual setup.
-- Shows a balloon notification when the server is ready or if the binary cannot be found.
+- Waits for the server health endpoint before showing a ready notification.
 
-Requires the `agentsview` binary on `PATH` or installed in `~/.local/bin`, `~/bin`, or `/usr/local/bin`.
-Legacy `periscope` binary names are also accepted.
+Requires the `periscope` binary on `PATH` or installed in `~/.local/bin`, `~/bin`, or `/usr/local/bin`.
+Legacy `agentsview` binary names are accepted as a fallback.
 <!-- Plugin description end -->
+
+## Plugin identity
+
+| Field | Value | Notes |
+|-------|-------|-------|
+| Plugin ID | `org.latentsignal.periscope` | Unchanged — preserves Marketplace update continuity |
+| Tool window ID | `AgentsView` | Legacy internal ID; stripe label shows **Periscope** |
+| Notification group ID | `AgentsView` | Legacy internal ID; display name shows **Periscope** |
 
 ## Development
 
@@ -27,7 +35,7 @@ cd jetbrains-plugin
 
 - IntelliJ IDEA 2025.1 or later (Community or Ultimate)
 - JDK 21+
-- `agentsview` binary installed and on `PATH`
+- `periscope` binary installed and on `PATH` (or legacy `agentsview`)
 
 ## Installation
 

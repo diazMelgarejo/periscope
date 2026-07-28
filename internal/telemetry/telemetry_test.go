@@ -12,15 +12,23 @@ import (
 	kittelemetry "go.kenn.io/kit/telemetry"
 )
 
-func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
+func TestEnabledFromEnvHonorsPeriscopeLegacyAgentsViewAndGenericOptOut(t *testing.T) {
 	t.Setenv(EnabledEnv, "0")
+	t.Setenv(legacyEnabledEnv, "1")
 	assert.False(t, EnabledFromEnv())
 
-	t.Setenv(EnabledEnv, "1")
+	t.Setenv(EnabledEnv, "")
+	t.Setenv(legacyEnabledEnv, "0")
+	assert.False(t, EnabledFromEnv())
+
+	t.Setenv(legacyEnabledEnv, "1")
 	if kittelemetry.PostHogTelemetryDisabled() {
 		assert.False(t, EnabledFromEnv())
 		return
 	}
+	assert.True(t, EnabledFromEnv())
+
+	t.Setenv(EnabledEnv, "1")
 	assert.True(t, EnabledFromEnv())
 
 	t.Setenv(GenericEnabledEnv, "0")
@@ -112,7 +120,7 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 
 	assert.False(t, props["$process_person_profile"].(bool))
 	assert.True(t, props["$geoip_disable"].(bool))
-	assert.Equal(t, "agentsview", props["application"])
+	assert.Equal(t, "periscope", props["application"])
 	assert.Equal(t, "v1.2.3", props["version"])
 	assert.Equal(t, "abc123", props["commit"])
 	assert.Equal(t, runtime.GOOS, props["goos"])

@@ -9,9 +9,11 @@ interface StoredReadProgress {
   sessions: Record<string, ReadProgressMarker>;
 }
 
+import { readMigratedLocalStorageValue } from "../storage/local-storage-key.js";
+
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
-const STORAGE_KEY = "agentsview-read-progress";
+const STORAGE_KEY = "periscope-read-progress";
 const STORAGE_VERSION = 2;
 const DEFAULT_MAX_ENTRIES = 500;
 
@@ -71,7 +73,7 @@ function pruneMarkers(
 
 function readStoredMarkers(maxEntries: number): Record<string, ReadProgressMarker> {
   try {
-    const raw = storage()?.getItem(STORAGE_KEY);
+    const raw = readMigratedLocalStorageValue(storage(), STORAGE_KEY);
     if (!raw) return {};
     const stored = JSON.parse(raw) as {
       version?: unknown;

@@ -5,23 +5,31 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
 import java.io.File
+import java.net.HttpURLConnection
 import java.net.ServerSocket
+import java.net.URI
+import java.net.URL
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * PeriscopeProcessManager — ref-counted lifecycle manager for the agentsview server.
+ * PeriscopeProcessManager — ref-counted lifecycle manager for the Periscope server.
  *
- * Starts the agentsview binary on project open and stops it when the last project
- * closes. Multiple IDE projects share one server process.
+ * Starts the periscope binary (falling back to legacy agentsview) on project open and
+ * stops it when the last project closes. Multiple IDE projects share one server process.
  */
 object PeriscopeProcessManager {
 
     private val logger = thisLogger()
 
     private const val DEFAULT_PORT = 8080
+
+    /** Legacy notification group id — retained for installed-plugin update continuity. */
     private const val NOTIFICATION_GROUP = "AgentsView"
+    private const val READINESS_TIMEOUT_MS = 10_000L
+    private const val READINESS_POLL_MS = 100L
+    private const val READINESS_CONNECT_TIMEOUT_MS = 500
 
     private val refCount = AtomicInteger(0)
     private val processRef = AtomicReference<Process?>(null)
@@ -32,7 +40,7 @@ object PeriscopeProcessManager {
     fun start(project: Project) {
         refCount.incrementAndGet()
         if (processRef.get() != null) {
-            logger.info("agentsview: already running on port $resolvedPort")
+            logger.info("periscope: already running on port $resolvedPort")
             return
         }
         synchronized(this) {
@@ -51,12 +59,21 @@ object PeriscopeProcessManager {
 
     fun serverUrl(): String = "http://localhost:$resolvedPort/"
 
+    internal fun binaryNames(): List<String> {
+        val isWindows = System.getProperty("os.name").lowercase().contains("win")
+        return if (isWindows) {
+            listOf("periscope.exe", "agentsview.exe")
+        } else {
+            listOf("periscope", "agentsview")
+        }
+    }
+
     private fun launchProcess(project: Project) {
         val binary = resolveBinary()
         if (binary == null) {
             notify(
                 project,
-                "AgentsView binary not found. Install agentsview and ensure it is on your PATH.",
+                "Periscope binary not found. Install periscope and ensure it is on your PATH.",
                 NotificationType.WARNING,
             )
             return
@@ -64,7 +81,7 @@ object PeriscopeProcessManager {
 
         resolvedPort = findFreePort(DEFAULT_PORT)
         val cmd = listOf(binary.absolutePath, "serve", "--port", resolvedPort.toString())
-        logger.info("agentsview: launching ${cmd.joinToString(" ")}")
+        logger.info("periscope: launching ${cmd.joinToString(" ")}")
 
         try {
             val process = ProcessBuilder(cmd)
@@ -76,49 +93,94 @@ object PeriscopeProcessManager {
             Thread {
                 process.inputStream.bufferedReader().use { reader ->
                     reader.lines().forEach { line ->
-                        logger.debug("agentsview: $line")
+                        logger.debug("periscope: $line")
                     }
                 }
                 processRef.set(null)
-                logger.info("agentsview: process exited (port $resolvedPort)")
+                logger.info("periscope: process exited (port $resolvedPort)")
             }.also {
                 it.isDaemon = true
-                it.name = "agentsview-stdout-drain"
+                it.name = "periscope-stdout-drain"
                 it.start()
             }
 
-            logger.info("agentsview: started on port $resolvedPort (pid ${process.pid()})")
-            notify(project, "AgentsView started on port $resolvedPort", NotificationType.INFORMATION)
+            logger.info("periscope: started on port $resolvedPort (pid ${process.pid()})")
+            notifyWhenReady(project, resolvedPort)
         } catch (e: Exception) {
-            logger.warn("agentsview: failed to start", e)
+            logger.warn("periscope: failed to start", e)
             processRef.set(null)
-            notify(project, "Failed to start AgentsView: ${e.message}", NotificationType.ERROR)
+            notify(project, "Failed to start Periscope: ${e.message}", NotificationType.ERROR)
+        }
+    }
+
+    private fun notifyWhenReady(project: Project, port: Int) {
+        Thread {
+            val ready = waitForServerReady(port)
+            when {
+                ready -> notify(
+                    project,
+                    "Periscope ready on port $port",
+                    NotificationType.INFORMATION,
+                )
+                processRef.get()?.isAlive == true -> notify(
+                    project,
+                    "Periscope started on port $port (still starting…)",
+                    NotificationType.WARNING,
+                )
+            }
+        }.also {
+            it.isDaemon = true
+            it.name = "periscope-readiness-wait"
+            it.start()
+        }
+    }
+
+    private fun waitForServerReady(port: Int): Boolean {
+        val deadline = System.currentTimeMillis() + READINESS_TIMEOUT_MS
+        val healthUrl = URI("http://localhost:$port/api/v1/health").toURL()
+
+        while (System.currentTimeMillis() < deadline) {
+            if (processRef.get()?.isAlive != true) {
+                return false
+            }
+            if (probeHealth(healthUrl)) {
+                return true
+            }
+            Thread.sleep(READINESS_POLL_MS)
+        }
+        return false
+    }
+
+    private fun probeHealth(healthUrl: URL): Boolean {
+        val connection = healthUrl.openConnection() as HttpURLConnection
+        return try {
+            connection.connectTimeout = READINESS_CONNECT_TIMEOUT_MS
+            connection.readTimeout = READINESS_CONNECT_TIMEOUT_MS
+            connection.requestMethod = "GET"
+            connection.responseCode in 200..299
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection.disconnect()
         }
     }
 
     private fun stopProcess() {
         val process = processRef.getAndSet(null) ?: return
-        logger.info("agentsview: stopping process")
+        logger.info("periscope: stopping process")
         process.destroy()
         if (!process.waitFor(3, TimeUnit.SECONDS)) {
             process.destroyForcibly()
         }
-        logger.info("agentsview: stopped")
+        logger.info("periscope: stopped")
     }
 
     /**
-     * Locate the agentsview binary. Tries PATH first, then common install locations.
-     * Legacy `periscope` binary names are accepted as a fallback.
+     * Locate the Periscope binary. Prefers `periscope`, then legacy `agentsview`.
+     * Tries PATH first, then common install locations.
      */
     private fun resolveBinary(): File? {
-        val isWindows = System.getProperty("os.name").lowercase().contains("win")
-        val binaryNames = if (isWindows) {
-            listOf("agentsview.exe", "periscope.exe")
-        } else {
-            listOf("agentsview", "periscope")
-        }
-
-        for (name in binaryNames) {
+        for (name in binaryNames()) {
             findOnPath(name)?.let { return it }
         }
 
@@ -127,7 +189,7 @@ object PeriscopeProcessManager {
             "bin",
             ".local/bin",
         )
-        for (name in binaryNames) {
+        for (name in binaryNames()) {
             for (relative in relativePaths) {
                 val candidate = File(homeDir, "$relative/$name")
                 if (candidate.exists() && candidate.canExecute()) {
@@ -140,7 +202,7 @@ object PeriscopeProcessManager {
             "/usr/local/bin",
             "/opt/homebrew/bin",
         )
-        for (name in binaryNames) {
+        for (name in binaryNames()) {
             for (dir in systemPaths) {
                 val candidate = File(dir, name)
                 if (candidate.exists() && candidate.canExecute()) {
@@ -174,7 +236,7 @@ object PeriscopeProcessManager {
                 .createNotification(message, type)
                 .notify(project)
         } catch (e: Exception) {
-            logger.info("agentsview notification ($type): $message")
+            logger.info("periscope notification ($type): $message")
         }
     }
 }
