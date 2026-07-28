@@ -37,16 +37,24 @@ missing semantic work.
 
 ## Layer-2 delta vs `origin/merged`
 
-Expect **3 paths** + lockfile refresh pending:
+Five paths in commit `2cddec88`:
 
 - `docs/INTEGRATION-ORAMASYS-STACK-PLAN.md` (new)
-- `docs/ARCHITECTURE.md` (one cross-link line)
+- `docs/INTEGRATION-SYNTHESIS-LAYER2-ANALYSIS.md` (new)
+- `docs/ARCHITECTURE.md` (L4 integration cross-link)
 - `frontend/package.json` (harmonized `marked` / `svelte`)
+- `frontend/package-lock.json` (lock refresh)
 
-**Not pushed.** Push only after lockfile + CI smoke.
+**Not pushed.**
 
-## Next gates before publish
+## Verification gates (2026-07-28)
 
-1. `cd frontend && npm install` → commit `package-lock.json`
-2. `go test -tags fts5 ./...` (spot)
-3. Compare: `git diff origin/merged..HEAD --stat`
+| Gate | Result |
+|------|--------|
+| `npm install --package-lock-only` + lock committed | ✅ |
+| `go test -tags fts5 ./...` | ✅ all packages `ok` (~65s; `internal/server` slowest at ~24s) |
+| `git diff origin/merged..HEAD --stat` | ✅ 5 files, +262 / −8 lines |
+
+**Ready for push review** — no remaining local smoke blockers on Go side.
+Frontend `npm test` / `npm run check` not run (docs-only delta except package.json).
+
