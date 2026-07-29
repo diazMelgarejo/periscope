@@ -206,3 +206,104 @@ with correct ancestry.
 ```bash
 python .agent/tools/recall.py "agentsview periscope fresh replay modernization ancestry"
 ```
+
+---
+
+## Addendum (2026-07-29): decision — PR #20 over PR #17; preserve bad example
+
+**Status:** decided  
+**PR #17:** closed, not merged — [`cursor/agentsview-modernization-3way-f559`](https://github.com/diazMelgarejo/periscope/tree/cursor/agentsview-modernization-3way-f559) **preserved** as a permanent **what-not-to-do** reference  
+**PR #20:** chosen integration path — [`cursor/agentsview-purified-onto-kenn-f559`](https://github.com/diazMelgarejo/periscope/pull/20)
+
+### What led to this decision
+
+PR #17 had the **correct product tree** at its tip but **wrong replay ancestry**: it
+re-imported ~769 upstream AgentsView commits as **synthetic SHAs** from ancient
+merge-base `5f9e809f`, instead of inheriting original `kenn-io/agentsview` commits
+and layering only Periscope-unique work on top.
+
+That made GitHub's three-dot diff unreadable and hid the real integration story behind
+replay noise — even though `git cherry` showed only **9 truly Periscope-unique**
+commits above upstream `#1283`.
+
+PR #20 applies the purified model:
+
+1. **Base:** original upstream SHAs (`kenn-io/agentsview` @ `6c3317ad`, #1283)
+2. **Top:** only the **9 Periscope-unique commits** (cherry-picked, not replayed)
+3. **Tree:** byte-identical to PR #17 tip after push-safe test fixture alignment
+
+### Comparison table — why PR #20 wins
+
+| Metric | PR #17 `agentsview-modernization-3way-f559` | PR #20 `agentsview-purified-onto-kenn-f559` |
+|--------|---------------------------------------------|---------------------------------------------|
+| **Decision** | ❌ Close — do not merge | ✅ Integration candidate |
+| **Upstream ancestry** | ~769 replayed commits (synthetic SHAs) | **0** — inherits real `kenn-io` SHAs |
+| **Periscope-only commits** | 9 (buried in replay stack) | **9** (visible on tip) |
+| **Merge-base with `merged`** | `5f9e809f` (ancient) | `6c3317ad` (#1283 — recent shared upstream) |
+| **Three-dot PR diff vs `merged`** | 2,169 files / 769 commits | **816 files / 9 commits** |
+| **Tree vs modernization tip** | reference tip | **byte-identical** |
+| **Branch fate** | **Preserved** — bad-example museum | Active integration line |
+| **Reviewability** | Graph noise drowns Periscope delta | Periscope delta is the PR |
+
+Symmetric tree diff vs `merged` remains large (~2k files) on both — that is honest
+modernization size. PR #20 fixes **ancestry and review shape**, not product scope.
+
+### Policy: never synthesize SHAs (except security expunge)
+
+**Default rule:** do **not** replay upstream history under new commit SHAs when
+original upstream commits already exist on the canonical remote (`kenn-io/agentsview`,
+`origin/agentsview`).
+
+| Allowed | Forbidden |
+|---------|-----------|
+| Cherry-pick **Periscope-unique** commits onto real upstream tip | Re-cherry-pick or replay hundreds of upstream commits with new SHAs |
+| Path-scoped replay onto fresh integration base | Full upstream lineage re-import for "freshness" |
+| `read-tree` / tree graft for integrative harmonization | Synthetic SHA stacks that mimic upstream for convenience |
+| History rewrite **only** for security/safety expunge | Synthetic SHAs to make PR graphs "look simpler" without tree need |
+
+**Permitted SHA synthesis / history rewrite — security and safety only:**
+
+- Leaked identities, workspaces, or doxxing content
+- Access keys, API keys, passwords, tokens in history
+- Workstation paths or other sensitive literals in tracked blobs
+- GitHub push-protection blocks (rotate fixture keys, then expunge or filter-branch)
+
+`47ca74c` is the instructive edge case: on `merged` it survives as the **original
+Wes SHA**; on the bad replay branch it reappears as `22cf1394` with identical `%T`
+but **wrong SHA** — proof that replay duplicates history without adding value.
+
+### Preserved bad-example branch
+
+`cursor/agentsview-modernization-3way-f559` stays on GitHub **undeleted** as the
+canonical **anti-pattern** for:
+
+- upstream replay instead of upstream inheritance
+- synthetic SHA stacks
+- PR diffs that explode because merge-base is ancient
+
+Do not delete or force-update this branch except for security expunge.
+
+### Cross-repo curriculum
+
+| Location | Entry |
+|----------|-------|
+| Perpetua-Tools | `.agent/memory/working/PERISCOPE_MODERNIZATION_PURIFIED_INTEGRATION_2026-07-29.md` |
+| orama AFRP | `bin/orama-system/afrp/failure-modes.md` § Failure Mode 8 |
+| orama CIDF | `bin/orama-system/cidf/references/integrative-editing-examples.md` §10 |
+| orama git skill | `bin/orama-system/skills/git-history-surgery/references/path-scoped-pr-replay-reference-card.md` § worked example PR #17 vs #20 |
+| orama git skill | `bin/orama-system/skills/git-history-surgery/SKILL.md` decision flow §11 |
+
+### Mental model (purified path)
+
+```mermaid
+flowchart TD
+    K["kenn-io/agentsview @ 6c3317ad<br/>original upstream SHAs (#1283)"]
+    P9["+ 9 Periscope-unique commits<br/>(cherry-pick, not replay)"]
+    TIP["PR #20 tip<br/>byte-identical tree to modernization-3way"]
+    BAD["PR #17 modernization-3way<br/>769 synthetic upstream SHAs ❌"]
+    M["origin/merged<br/>integrative line"]
+    K --> P9 --> TIP
+    BAD -.->|"same tree, wrong ancestry"| TIP
+    TIP --> PR["PR #20 vs merged<br/>816 files / 9 commits"]
+    M --> PR
+```
