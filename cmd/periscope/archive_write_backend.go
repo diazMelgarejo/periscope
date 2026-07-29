@@ -829,6 +829,9 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	}
 
 	startupSync := runPGWatchStartupSync
+	// DuckDB watch shares the same SyncAll-based startup path as pg watch;
+	// runPGWatchStartupSync is the shared default when no duckDBStartupSync
+	// hook overrides it (pgStartupSync is only a test harness fallback).
 	if b.watchHooks != nil && b.watchHooks.duckDBStartupSync != nil {
 		startupSync = b.watchHooks.duckDBStartupSync
 	} else if b.watchHooks != nil && b.watchHooks.pgStartupSync != nil {
