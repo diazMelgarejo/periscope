@@ -810,15 +810,21 @@ func (noopPGTarget) PushWithOptions(
 func (noopPGTarget) Close() error { return nil }
 
 // The watcher's full recovery and rename promotion defer unavailable scopes
-// to their polling probes, and pg watch's interval push is a plain SyncAll
-// that never tombstones missed deletions. Local pg watch must therefore own
-// those deferred scopes with a probe-gated authoritative poller: a root the
-// watcher cannot cover (here a symlinked recursive root, the same obligation
-// machinery that owns roots missing at startup on portable backends)
-// registers a polling obligation, and the poller reconciles its scope
-// authoritatively on ticks — with no watcher event and no floor push
-// involved.
-func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
+// to their polling probes, and local push-watch interval pushes are a plain
+// SyncAll that never tombstones missed deletions. Local pg/duckdb watch must
+// therefore own those deferred scopes with a probe-gated authoritative poller.
+type localPushWatchPollingOwnerSpec struct {
+	obligationMsg string
+	exitMsg       string
+	sessionUUID   string
+	wireHooks     func(*archivePushWatchHooks)
+	runWatch      func(context.Context, *localArchiveWriteBackend) error
+}
+
+func testLocalPushWatchGivesDeferredScopesAPollingOwner(
+	t *testing.T, spec localPushWatchPollingOwnerSpec,
+) {
+	t.Helper()
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "sessions.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -856,15 +862,6 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				label:    label,
 			}, func() {}
 		},
-		pgStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
-			return false, nil
-		},
-		newPGPusher: func(*syncpkg.Engine) *pgPusher {
-			return &pgPusher{
-				localSync: func(context.Context) error { return nil },
-				connect:   func() (pgTarget, error) { return noopPGTarget{}, nil },
-			}
-		},
 		newUnwatchedPoller: func(
 			ctx context.Context, engine unwatchedPollSyncer,
 		) unwatchedRootPoller {
@@ -876,41 +873,37 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 			)
 		},
 	}
+	spec.wireHooks(backend.watchHooks)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
-	go func() {
-		done <- backend.PGPushWatch(
-			ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
-			time.Hour, time.Hour,
-		)
-	}()
+	go func() { done <- spec.runWatch(ctx, backend) }()
 
 	select {
 	case roots := <-owned:
-		assert.Contains(t, roots, codexRoot,
-			"the unwatchable root's polling obligation must reach the pg watch poller")
+		assert.Contains(t, roots, codexRoot, spec.obligationMsg)
 	case err := <-done:
-		t.Fatalf("pg watch exited before registering obligations: %v", err)
+		t.Fatalf("watch exited before registering obligations: %v", err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("no polling obligation was registered for the unwatchable root")
 	}
 
 	// A session lands under the unwatched scope; only the poller's
 	// authoritative tick can bring it into the archive.
-	uuid := "d4e5f6a7-4444-4555-8666-777788889999"
 	day := filepath.Join(codexRoot, "2026", "05", "04")
 	require.NoError(t, os.MkdirAll(day, 0o755))
 	content := testjsonl.NewSessionBuilder().
 		AddCodexMeta(
-			"2026-05-04T14:00:00Z", uuid, "/home/user/code/api",
+			"2026-05-04T14:00:00Z", spec.sessionUUID, "/home/user/code/api",
 			"codex_cli_rs",
 		).
 		AddCodexMessage("2026-05-04T14:00:01Z", "user", "hello").
 		String()
 	require.NoError(t, os.WriteFile(
-		filepath.Join(day, "rollout-2026-05-04T14-31-58-"+uuid+".jsonl"),
+		filepath.Join(
+			day, "rollout-2026-05-04T14-31-58-"+spec.sessionUUID+".jsonl",
+		),
 		[]byte(content), 0o644,
 	))
 
@@ -919,7 +912,9 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		case ticks <- time.Now():
 		default:
 		}
-		session, err := database.GetSession(context.Background(), "codex:"+uuid)
+		session, err := database.GetSession(
+			context.Background(), "codex:"+spec.sessionUUID,
+		)
 		return err == nil && session != nil
 	}, 10*time.Second, 20*time.Millisecond,
 		"the returned root must be reconciled by the poller without watcher events or floor pushes")
@@ -929,8 +924,76 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
-		t.Fatal("pg watch did not shut down")
+		t.Fatal(spec.exitMsg)
 	}
+}
+
+func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
+	testLocalPushWatchGivesDeferredScopesAPollingOwner(
+		t, localPushWatchPollingOwnerSpec{
+			obligationMsg: "the unwatchable root's polling obligation must reach the pg watch poller",
+			exitMsg:       "pg watch did not shut down",
+			sessionUUID:   "d4e5f6a7-4444-4555-8666-777788889999",
+			wireHooks: func(hooks *archivePushWatchHooks) {
+				hooks.pgStartupSync = func(
+					context.Context, *syncpkg.Engine, bool,
+				) (bool, error) {
+					return false, nil
+				}
+				hooks.newPGPusher = func(*syncpkg.Engine) *pgPusher {
+					return &pgPusher{
+						localSync: func(context.Context) error { return nil },
+						connect: func() (pgTarget, error) {
+							return noopPGTarget{}, nil
+						},
+					}
+				}
+			},
+			runWatch: func(
+				ctx context.Context, backend *localArchiveWriteBackend,
+			) error {
+				return backend.PGPushWatch(
+					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+					time.Hour, time.Hour,
+				)
+			},
+		},
+	)
+}
+
+func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
+	testLocalPushWatchGivesDeferredScopesAPollingOwner(
+		t, localPushWatchPollingOwnerSpec{
+			obligationMsg: "the unwatchable root's polling obligation must reach the duckdb watch poller",
+			exitMsg:       "duckdb watch did not shut down",
+			sessionUUID:   "e5f6a7b8-5555-4666-8777-888899990000",
+			wireHooks: func(hooks *archivePushWatchHooks) {
+				hooks.duckDBStartupSync = func(
+					context.Context, *syncpkg.Engine, bool,
+				) (bool, error) {
+					return false, nil
+				}
+				hooks.newDuckDBPusher = func(*syncpkg.Engine) *duckDBPusher {
+					return &duckDBPusher{
+						localSync: func(context.Context) error { return nil },
+						pushMirror: func(
+							context.Context, DuckDBPushConfig, bool,
+						) (duckdbsync.PushResult, error) {
+							return duckdbsync.PushResult{}, nil
+						},
+					}
+				}
+			},
+			runWatch: func(
+				ctx context.Context, backend *localArchiveWriteBackend,
+			) error {
+				return backend.DuckDBPushWatch(
+					ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
+					time.Hour, time.Hour,
+				)
+			},
+		},
+	)
 }
 
 func testLocalArchiveWriteBackend(t *testing.T) *localArchiveWriteBackend {
