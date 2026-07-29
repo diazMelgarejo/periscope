@@ -108,7 +108,7 @@ Unify `merged` (Periscope fork Layer 3) with `cursor/agentsview-purified-onto-ke
 | Pass | Status | Commit | Agent | Notes |
 |------|--------|--------|-------|-------|
 | 0 | done | `d42bd53f` | orchestrator | manifest |
-| 1 | done | `PLACEHOLDER` | pass1-agent | Layer 1 aligned to purified ff8cd5b3; periscope db columns preserved; positron.go removed |
+| 1 | done | `2e0a7638cb62a2306ebf438c34dc839bbeebad2d` | pass1-agent | Layer 1 aligned to purified ff8cd5b3; periscope db columns preserved; positron.go removed |
 | 2 | done | `9b353c2f` | pass2-agent | artifact/duckdb/omnigent replayed; config+artifact tests pass with `-tags fts5` |
 | 3 | done | `4321d36b` | pass3-agent | identity invariants verified vs merged; sync-upstream Layer 1 docs; verify-staged copied |
 | 4 | done | `1c268f65fac3ae0cb4b995c1f3d1bc40c730e126` | pass4-agent | kit-ui Card/EmptyState in context; kept merged session prop init |
