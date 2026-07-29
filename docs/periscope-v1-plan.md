@@ -97,7 +97,7 @@ Use the spec-mandated page structure:
 1. `ContextTimeline`
 
 For the timeline, adopt Option C from
-[`v1-ui-spec.md`](/Users/ann/dev/periscope/docs/v1-ui-spec.md):
+[`v1-ui-spec.md`](v1-ui-spec.md):
 explicit turn rows, per-turn stacked category bars, inline annotations, and a
 strong compaction divider.
 
