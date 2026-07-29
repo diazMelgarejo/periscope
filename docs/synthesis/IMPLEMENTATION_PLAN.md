@@ -111,7 +111,7 @@ Unify `merged` (Periscope fork Layer 3) with `cursor/agentsview-purified-onto-ke
 | 1 | in_progress | — | pass1-agent | parser partial; compile errors remain |
 | 2 | done | `9b353c2f` | pass2-agent | artifact/duckdb/omnigent replayed; config+artifact tests pass with `-tags fts5` |
 | 3 | done | `4321d36b` | pass3-agent | identity invariants verified vs merged; sync-upstream Layer 1 docs; verify-staged copied |
-| 4 | done | `COMMIT_SHA` | pass4-agent | kit-ui Card/EmptyState in context; kept merged session prop init |
+| 4 | done | `1c268f65fac3ae0cb4b995c1f3d1bc40c730e126` | pass4-agent | kit-ui Card/EmptyState in context; kept merged session prop init |
 | 5 | done | `094d7d6d` | pass5-agent | docs union + ECC replay (merged superset kept) |
 | 6 | pending | — | orchestrator | — |
 
