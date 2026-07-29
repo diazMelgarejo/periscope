@@ -31,6 +31,8 @@ The generated baseline enables GitHub, Context7, Exa, Memory, Playwright, and Se
 - `.claude/commands/add-new-parser-or-provider.md`
 - `.claude/commands/feature-development-with-tests-and-docs.md`
 
+- `.claude/commands/context-visualizer-ui-feature-workflow.md`
+- `.claude/commands/database-schema-and-storage-migration.md`
 Use these workflow files as reusable task scaffolds when the detected repository workflows recur.
 Pair them with the synthesized instincts in
 `.claude/homunculus/instincts/inherited/periscope-instincts.yaml` and the workflow
