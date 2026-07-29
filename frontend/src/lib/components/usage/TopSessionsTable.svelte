@@ -3,10 +3,8 @@
   import { router } from "../../stores/router.svelte.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { formatAgentName, truncate } from "../../utils/format.js";
-
-  function fmtCost(v: number): string {
-    return `$${v.toFixed(2)}`;
-  }
+  import { m } from "../../i18n/index.js";
+  import { formatMoney } from "../../money.js";
 
   function handleRowClick(sessionId: string) {
     router.navigateToSession(sessionId);
@@ -14,7 +12,7 @@
 </script>
 
 <div class="top-sessions-container">
-  <h3 class="chart-title">Top Sessions by Cost</h3>
+  <h3 class="chart-title">{m.usage_top_sessions_by_cost()}</h3>
 
   {#if usage.errors.topSessions}
     <div class="error">
@@ -23,7 +21,7 @@
         class="retry-btn"
         onclick={() => usage.fetchTopSessions()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if usage.topSessions && usage.topSessions.length > 0}
@@ -51,13 +49,13 @@
             {formatTokenCount(row.totalTokens)}
           </span>
           <span class="session-cost">
-            {fmtCost(row.cost)}
+            {formatMoney(row.cost)}
           </span>
         </div>
       {/each}
     </div>
   {:else}
-    <div class="empty">No sessions in range</div>
+    <div class="empty">{m.shared_no_sessions_in_range()}</div>
   {/if}
 </div>
 

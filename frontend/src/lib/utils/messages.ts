@@ -10,6 +10,13 @@ const SYSTEM_MSG_PREFIXES = [
   "Stop hook feedback:",
 ];
 
+const SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>";
+const SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>";
+
+const LEGACY_GOAL_CONTEXT_PREFIX = "<goal_context>";
+const CODEX_INTERNAL_CONTEXT_TAG_PREFIX = "<codex_internal_context";
+const GOAL_CONTEXT_SOURCE_ATTR_RE = /(?:^|\s)source="goal"(?:\s|\/|$)/;
+
 // Subtypes the Claude parser promotes into visible system messages
 // that the SPA renders via SystemBoundaryCard. These must pass
 // through the MessageList filter even though is_system=true.
@@ -38,8 +45,46 @@ export function isSystemMessage(m: Message): boolean {
   }
   if (m.is_system) return true;
   if (m.role !== "user") return false;
-  const trimmed = m.content.trim();
-  return SYSTEM_MSG_PREFIXES.some((p) => trimmed.startsWith(p));
+  const { remainder, stripped } = stripLeadingReminderBlocks(m.content);
+  if (stripped && remainder.length === 0) return true;
+  const trimmed = stripped ? remainder : m.content.trim();
+  return (
+    isGoalContextMessage(trimmed) ||
+    SYSTEM_MSG_PREFIXES.some((p) => trimmed.startsWith(p))
+  );
+}
+
+function stripLeadingReminderBlocks(content: string): {
+  remainder: string;
+  stripped: boolean;
+} {
+  const original = content.trimStart();
+  let rest = original;
+  let stripped = false;
+  while (rest.startsWith(SYSTEM_REMINDER_OPEN_TAG)) {
+    const closeIdx = rest.indexOf(SYSTEM_REMINDER_CLOSE_TAG);
+    if (closeIdx < 0) return { remainder: original, stripped: false };
+    rest = rest
+      .slice(closeIdx + SYSTEM_REMINDER_CLOSE_TAG.length)
+      .trimStart();
+    stripped = true;
+  }
+  return { remainder: rest, stripped };
+}
+
+function isGoalContextMessage(trimmedContent: string): boolean {
+  if (trimmedContent.startsWith(LEGACY_GOAL_CONTEXT_PREFIX)) {
+    return true;
+  }
+  if (!trimmedContent.startsWith(CODEX_INTERNAL_CONTEXT_TAG_PREFIX)) {
+    return false;
+  }
+  const tagEnd = trimmedContent.indexOf(">");
+  if (tagEnd < 0) {
+    return false;
+  }
+  const openTag = trimmedContent.slice(0, tagEnd);
+  return GOAL_CONTEXT_SOURCE_ATTR_RE.test(openTag);
 }
 
 /**

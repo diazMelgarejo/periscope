@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import {
   isSystemMessage,
   normalizeMessagePreview,
@@ -58,6 +58,19 @@ describe("isSystemMessage", () => {
     ["command-name", "<command-name>/commit</command-name>"],
     ["local-command", "<local-command-output>ok</local-command-output>"],
     ["stop hook", "Stop hook feedback: blocked"],
+    ["legacy goal context", "\n\t<goal_context>state</goal_context>"],
+    [
+      "codex internal goal context",
+      '  <codex_internal_context source="goal">state',
+    ],
+    [
+      "codex internal goal context with attr before source",
+      '<codex_internal_context foo="bar" source="goal">state',
+    ],
+    [
+      "codex internal goal context with attr after source",
+      '<codex_internal_context source="goal" foo="bar">state',
+    ],
   ])("detects prefix-based system message: %s", (_label, content) => {
     expect(isSystemMessage(msg({ content }))).toBe(true);
   });
@@ -66,6 +79,71 @@ describe("isSystemMessage", () => {
     expect(
       isSystemMessage(msg({ content: "This session is great" })),
     ).toBe(false);
+  });
+
+  it("does not match a prefix-adjacent task notification", () => {
+    expect(
+      isSystemMessage(msg({ content: "<task-notification-status>ready" })),
+    ).toBe(false);
+  });
+
+  it("hides reminder-only fallback content", () => {
+    expect(
+      isSystemMessage(
+        msg({ content: "<system-reminder>remember this</system-reminder>" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps reminder-prefixed real prompts visible", () => {
+    expect(
+      isSystemMessage(
+        msg({
+          content:
+            "<system-reminder>remember this</system-reminder>\n\nreal prompt",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    "<system-reminder>a</system-reminder><task-notification>done</task-notification>",
+    "<system-reminder>a</system-reminder><system-reminder>b</system-reminder>",
+    '<system-reminder>a</system-reminder><goal_context>state</goal_context>',
+  ])("classifies the terminal remainder: %s", (content) => {
+    expect(isSystemMessage(msg({ content }))).toBe(true);
+  });
+
+  it.each([
+    "<system-reminder>a</system-reminder>real prompt",
+    "<system-reminder>a",
+  ])("keeps non-classified reminder content visible: %s", (content) => {
+    expect(isSystemMessage(msg({ content }))).toBe(false);
+  });
+
+  it("hides system reminders without making them visible cards", () => {
+    expect(
+      isSystemMessage(
+        msg({ is_system: true, source_subtype: "system_reminder" }),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "non-goal internal context",
+      '<codex_internal_context source="other">state',
+    ],
+    [
+      "data-source attribute",
+      '<codex_internal_context data-source="goal">state',
+    ],
+    [
+      "missing closing tag delimiter",
+      '<codex_internal_context source="goal" state',
+    ],
+  ])("does not detect non-goal codex context: %s", (_label, content) => {
+    expect(isSystemMessage(msg({ content }))).toBe(false);
   });
 
   it.each([

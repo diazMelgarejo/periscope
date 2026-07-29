@@ -39,6 +39,8 @@ fi
 # PERISCOPE_VERSION env var overrides git describe
 assert_eq "$(PERISCOPE_VERSION=v0.5.0-staging.1 resolve_version)" \
   "v0.5.0-staging.1" "PERISCOPE_VERSION override"
+assert_eq "$(AGENTSVIEW_VERSION=v0.5.0-staging.1 resolve_version)" \
+  "v0.5.0-staging.1" "AGENTSVIEW_VERSION legacy override"
 
 target="$(
   TAURI_ENV_TARGET_TRIPLE="tauri-priority-target" CARGO_BUILD_TARGET="cargo-target" \

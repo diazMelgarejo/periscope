@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/latentsignal-org/periscope/internal/db"
+	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 type sessionSpec struct {
@@ -49,6 +52,7 @@ var specs = []sessionSpec{
 
 func main() {
 	out := flag.String("out", "", "output database path")
+	duckDBOut := flag.String("duckdb-out", "", "optional output DuckDB mirror path")
 	flag.Parse()
 	if *out == "" {
 		fmt.Fprintln(os.Stderr, "usage: testfixture -out <path>")
@@ -70,17 +74,17 @@ func main() {
 	if err := database.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:         "claude-sonnet-4-20250514",
-			InputPerMTok:         3.0,
-			OutputPerMTok:        15.0,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.30,
+			InputPerMTok:         money.Money{Microdollars: 3_000_000},
+			OutputPerMTok:        money.Money{Microdollars: 15_000_000},
+			CacheCreationPerMTok: money.Money{Microdollars: 3_750_000},
+			CacheReadPerMTok:     money.Money{Microdollars: 300_000},
 		},
 		{
 			ModelPattern:         "claude-opus-4-20250514",
-			InputPerMTok:         15.0,
-			OutputPerMTok:        75.0,
-			CacheCreationPerMTok: 18.75,
-			CacheReadPerMTok:     1.50,
+			InputPerMTok:         money.Money{Microdollars: 15_000_000},
+			OutputPerMTok:        money.Money{Microdollars: 75_000_000},
+			CacheCreationPerMTok: money.Money{Microdollars: 18_750_000},
+			CacheReadPerMTok:     money.Money{Microdollars: 1_500_000},
 		},
 	}); err != nil {
 		log.Fatalf("seeding model pricing: %v", err)
@@ -109,7 +113,37 @@ func main() {
 		log.Fatalf("creating duration showcase: %v", err)
 	}
 
+	if err := createRecentEditsFixture(
+		database, base.Add(96*time.Hour),
+	); err != nil {
+		log.Fatalf("creating recent-edits fixture: %v", err)
+	}
+
 	fmt.Printf("Fixture DB written to %s\n", *out)
+	if *duckDBOut != "" {
+		if err := writeDuckDBMirror(database, *duckDBOut); err != nil {
+			log.Fatalf("writing DuckDB mirror: %v", err)
+		}
+		fmt.Printf("Fixture DuckDB mirror written to %s\n", *duckDBOut)
+	}
+}
+
+func writeDuckDBMirror(database *db.DB, path string) error {
+	if err := os.Remove(path); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing existing DuckDB mirror: %w", err)
+	}
+	ctx := context.Background()
+	result, err := duckdbsync.Push(
+		ctx, path, database, "test-machine", duckdbsync.SyncOptions{}, true, nil,
+	)
+	if err != nil {
+		return err
+	}
+	if result.Errors > 0 {
+		return fmt.Errorf("DuckDB push had %d session error(s)", result.Errors)
+	}
+	return nil
 }
 
 func createSessionFixture(
@@ -737,4 +771,99 @@ func buildDurationSubagentMessages(
 			TokenUsage:    tokenUsage(3),
 		},
 	}
+}
+
+// createRecentEditsFixture seeds one session that carries a real
+// Edit tool call with FilePath set. The feed at GET /api/v1/recent-edits
+// filters on category IN ('Edit','Write') AND file_path IS NOT NULL, so
+// FilePath must be set directly on the ToolCall — InputJSON alone does
+// not propagate to the file_path column.
+func createRecentEditsFixture(
+	database *db.DB, start time.Time,
+) error {
+	const (
+		sessionID = "test-session-recent-edits"
+		project   = "project-edits"
+		model     = "claude-sonnet-4-20250514"
+		editPath  = "/src/server/handler.go"
+	)
+
+	endedAt := start.Add(5 * time.Minute)
+	firstMsg := "Add request logging to the HTTP handler."
+
+	sess := db.Session{
+		ID:               sessionID,
+		Project:          project,
+		Machine:          "test-machine",
+		Agent:            "claude",
+		StartedAt:        new(start.Format(time.RFC3339Nano)),
+		EndedAt:          new(endedAt.Format(time.RFC3339Nano)),
+		MessageCount:     3,
+		UserMessageCount: 1,
+		FirstMessage:     new(firstMsg),
+	}
+	if err := database.UpsertSession(sess); err != nil {
+		return fmt.Errorf("upserting recent-edits session: %w", err)
+	}
+
+	msgs := []db.Message{
+		{
+			SessionID:     sessionID,
+			Ordinal:       0,
+			Role:          "user",
+			Content:       firstMsg,
+			Timestamp:     start.Format(time.RFC3339Nano),
+			ContentLength: len(firstMsg),
+		},
+		{
+			SessionID:  sessionID,
+			Ordinal:    1,
+			Role:       "assistant",
+			HasToolUse: true,
+			Content:    "[Edit /src/server/handler.go]",
+			Timestamp: start.Add(1 * time.Minute).
+				Format(time.RFC3339Nano),
+			ContentLength: 29,
+			Model:         model,
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":800,` +
+					`"output_tokens":320,` +
+					`"cache_creation_input_tokens":80,` +
+					`"cache_read_input_tokens":1500}`,
+			),
+			ToolCalls: []db.ToolCall{
+				{
+					ToolName:  "Edit",
+					Category:  "Edit",
+					ToolUseID: "tu_edit_handler",
+					// FilePath must be set directly; InputJSON
+					// alone is not propagated to the DB column.
+					FilePath: editPath,
+					InputJSON: `{"file_path":"` + editPath + `",` +
+						`"old_string":"func handler(",` +
+						`"new_string":"func handler(// + logging\n"}`,
+					ResultContentLength: 0,
+				},
+			},
+		},
+		{
+			SessionID: sessionID,
+			Ordinal:   2,
+			Role:      "user",
+			Content:   "[tool_result]",
+			Timestamp: start.Add(2 * time.Minute).
+				Format(time.RFC3339Nano),
+			ContentLength: 13,
+		},
+	}
+	if err := database.InsertMessages(msgs); err != nil {
+		return fmt.Errorf(
+			"inserting recent-edits messages: %w", err,
+		)
+	}
+	fmt.Printf(
+		"  %s: %d messages (recent-edits fixture)\n",
+		sessionID, len(msgs),
+	)
+	return nil
 }

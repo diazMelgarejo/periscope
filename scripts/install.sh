@@ -1,11 +1,16 @@
 #!/bin/bash
 # periscope installer — diazMelgarejo/periscope fork
 # Usage: curl -fsSL https://raw.githubusercontent.com/diazMelgarejo/periscope/merged/scripts/install.sh | bash
+#
+# Installs the Periscope product binary. Accepts legacy agentsview release
+# archive names and environment variables for compatibility during transition.
 
 set -euo pipefail
 
 REPO="diazMelgarejo/periscope"
 BINARY_NAME="periscope"
+LEGACY_BINARY_NAME="agentsview"
+INSTALL_LEGACY_SYMLINK="${PERISCOPE_LEGACY_SYMLINK:-1}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -15,6 +20,10 @@ NC='\033[0m'
 info() { echo -e "${GREEN}$1${NC}"; }
 warn() { echo -e "${YELLOW}$1${NC}"; }
 error() { echo -e "${RED}$1${NC}" >&2; exit 1; }
+
+skip_checksum_enabled() {
+    [ "${PERISCOPE_SKIP_CHECKSUM:-0}" = "1" ] || [ "${AGENTSVIEW_SKIP_CHECKSUM:-0}" = "1" ]
+}
 
 detect_os() {
     case "$(uname -s)" in
@@ -54,19 +63,35 @@ download() {
 }
 
 get_latest_version() {
-    local url="https://api.github.com/repos/${REPO}/releases/latest"
-    local json
+    local url="https://github.com/${REPO}/releases/latest"
+    local final_url=""
     if command -v curl &>/dev/null; then
-        json=$(curl -fsSL "$url")
+        final_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$url") || return 1
     elif command -v wget &>/dev/null; then
-        json=$(wget -qO- "$url")
+        final_url=$(wget --spider -S "$url" 2>&1 \
+            | awk 'tolower($1)=="location:" {print $2}' \
+            | tail -1 \
+            | tr -d '\r\n') || return 1
     else
         return 1
     fi
-    echo "$json" \
-        | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
-        | head -1 \
-        | cut -d'"' -f4
+    case "$final_url" in
+        */releases/tag/*) echo "${final_url##*/releases/tag/}" ;;
+        *) return 1 ;;
+    esac
+}
+
+release_archive_candidates() {
+    local version="$1"
+    local os="$2"
+    local arch="$3"
+    local platform="${os}_${arch}"
+    local version_no_v="${version#v}"
+    printf '%s\n' \
+        "${BINARY_NAME}_${version_no_v}_${platform}.tar.gz" \
+        "${BINARY_NAME}_${version}_${platform}.tar.gz" \
+        "${LEGACY_BINARY_NAME}_${version_no_v}_${platform}.tar.gz" \
+        "${LEGACY_BINARY_NAME}_${version}_${platform}.tar.gz"
 }
 
 verify_checksum() {
@@ -74,8 +99,8 @@ verify_checksum() {
     local checksums_file="$2"
     local filename="$3"
 
-    if [ "${PERISCOPE_SKIP_CHECKSUM:-0}" = "1" ]; then
-        warn "Checksum verification skipped (PERISCOPE_SKIP_CHECKSUM=1)"
+    if skip_checksum_enabled; then
+        warn "Checksum verification skipped (PERISCOPE_SKIP_CHECKSUM or AGENTSVIEW_SKIP_CHECKSUM=1)"
         return 0
     fi
 
@@ -105,6 +130,39 @@ verify_checksum() {
     info "Checksum verified"
 }
 
+extract_binary_name() {
+    local dir="$1"
+    if [ -f "$dir/${BINARY_NAME}" ]; then
+        echo "$BINARY_NAME"
+    elif [ -f "$dir/${LEGACY_BINARY_NAME}" ]; then
+        echo "$LEGACY_BINARY_NAME"
+    else
+        return 1
+    fi
+}
+
+install_binary() {
+    local extracted_name="$1"
+    local install_dir="$2"
+    local dest="$install_dir/${BINARY_NAME}"
+
+    if [ -w "$install_dir" ]; then
+        mv "$extracted_name" "$dest"
+    else
+        sudo mv "$extracted_name" "$dest"
+    fi
+    chmod +x "$dest"
+
+    if [ "$INSTALL_LEGACY_SYMLINK" = "1" ] && [ "$BINARY_NAME" != "$LEGACY_BINARY_NAME" ]; then
+        local legacy_path="$install_dir/${LEGACY_BINARY_NAME}"
+        if [ -w "$install_dir" ]; then
+            ln -sf "$BINARY_NAME" "$legacy_path"
+        else
+            sudo ln -sf "$BINARY_NAME" "$legacy_path"
+        fi
+    fi
+}
+
 install_from_release() {
     local os="$1"
     local arch="$2"
@@ -120,41 +178,40 @@ install_from_release() {
 
     info "Found version: $version"
 
-    local platform="${os}_${arch}"
-    local filename="${BINARY_NAME}_${version#v}_${platform}.tar.gz"
     local base_url="https://github.com/${REPO}/releases/download/${version}"
-
     local tmpdir
     tmpdir=$(mktemp -d)
     trap "rm -rf $tmpdir" EXIT
 
-    info "Downloading ${filename}..."
-    if ! download "${base_url}/${filename}" "$tmpdir/release.tar.gz"; then
+    local filename=""
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        info "Trying ${candidate}..."
+        if download "${base_url}/${candidate}" "$tmpdir/release.tar.gz"; then
+            filename="$candidate"
+            break
+        fi
+    done < <(release_archive_candidates "$version" "$os" "$arch")
+
+    if [ -z "$filename" ]; then
         return 1
     fi
 
-    if [ "${PERISCOPE_SKIP_CHECKSUM:-0}" != "1" ]; then
+    if ! skip_checksum_enabled; then
         if ! download "${base_url}/SHA256SUMS" "$tmpdir/SHA256SUMS"; then
             error "Failed to download SHA256SUMS. Cannot verify binary integrity."
         fi
         verify_checksum "$tmpdir/release.tar.gz" "$tmpdir/SHA256SUMS" "$filename"
     else
-        warn "Checksum verification skipped (PERISCOPE_SKIP_CHECKSUM=1)"
+        warn "Checksum verification skipped"
     fi
 
     info "Extracting..."
     tar -xzf "$tmpdir/release.tar.gz" -C "$tmpdir"
 
-    if [ -f "$tmpdir/${BINARY_NAME}" ]; then
-        if [ -w "$install_dir" ]; then
-            mv "$tmpdir/${BINARY_NAME}" "$install_dir/"
-        else
-            sudo mv "$tmpdir/${BINARY_NAME}" "$install_dir/"
-        fi
-        chmod +x "$install_dir/${BINARY_NAME}"
-    else
-        error "Binary not found in archive"
-    fi
+    local extracted_name
+    extracted_name=$(extract_binary_name "$tmpdir") || error "Binary not found in archive"
+    install_binary "$tmpdir/$extracted_name" "$install_dir"
 
     if [ "$os" = "darwin" ] && [ -f "$install_dir/${BINARY_NAME}" ]; then
         codesign -s - "$install_dir/${BINARY_NAME}" 2>/dev/null || true
@@ -167,11 +224,9 @@ main() {
     info "Installing periscope..."
     echo
 
-    local os
+    local os arch install_dir
     os=$(detect_os)
-    local arch
     arch=$(detect_arch)
-    local install_dir
     install_dir=$(find_install_dir)
 
     info "Platform: ${os}/${arch}"
@@ -197,11 +252,11 @@ main() {
     echo "Get started:"
     echo "  periscope serve    # Start the server and open browser"
     echo "  periscope update   # Check for and install updates"
+    if [ "$INSTALL_LEGACY_SYMLINK" = "1" ]; then
+        echo "  agentsview serve   # Legacy compatibility symlink"
+    fi
 }
 
-# Guard: only run main when executed directly, not when sourced.
-# ${BASH_SOURCE[0]-} defaults to empty when piped via stdin
-# (curl ... | bash), which we treat as direct execution.
 if [[ "${BASH_SOURCE[0]-}" == "${0}" || -z "${BASH_SOURCE[0]-}" ]]; then
     main "$@"
 fi

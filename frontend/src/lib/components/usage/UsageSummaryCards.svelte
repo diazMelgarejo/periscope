@@ -1,9 +1,8 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
-
-  function fmtCost(v: number): string {
-    return `$${v.toFixed(2)}`;
-  }
+  import { m } from "../../i18n/index.js";
+  import { ZERO_MONEY, compareMoney, divideMoney, formatMoney } from "../../money.js";
 
   function fmtTokens(v: number): string {
     if (v >= 1_000_000_000) {
@@ -45,25 +44,25 @@
 
   const dailyBurn = $derived.by(() => {
     const s = usage.summary;
-    if (!s || !s.daily || s.daily.length === 0) return 0;
-    return s.totals.totalCost / s.daily.length;
+    if (!s || !s.daily || s.daily.length === 0) return ZERO_MONEY;
+    return divideMoney(s.totals.totalCost, s.daily.length);
   });
 
   const peak = $derived.by(() => {
     const s = usage.summary;
     if (!s || !s.daily || s.daily.length === 0) {
-      return { date: "", cost: 0 };
+      return { date: "", cost: ZERO_MONEY };
     }
     let best = s.daily[0]!;
     for (const d of s.daily) {
-      if (d.totalCost > best.totalCost) best = d;
+      if (compareMoney(d.totalCost, best.totalCost) > 0) best = d;
     }
     return { date: best.date, cost: best.totalCost };
   });
 
   const activeDays = $derived(
     usage.summary?.daily?.filter(
-      (d) => d.totalCost > 0,
+      (d) => d.totalCost.microdollars > 0,
     ).length ?? 0,
   );
 
@@ -71,81 +70,103 @@
     const c = usage.summary?.comparison;
     if (!c) return null;
     const sign = c.deltaPct >= 0 ? "+" : "";
-    return `${sign}${(c.deltaPct * 100).toFixed(0)}% vs prior`;
+    return m.usage_summary_vs_prior({
+      value: `${sign}${(c.deltaPct * 100).toFixed(0)}%`,
+    });
   });
 
+  function fmtCredits(v: number): string {
+    return String(v.toFixed(0));
+  }
+
   interface Card {
-    label: string;
+    label: () => string;
     value: () => string;
     sub?: () => string;
     featured?: boolean;
   }
 
-  const cards: Card[] = [
-    {
-      label: "Total Cost",
-      value: () => fmtCost(usage.summary?.totals.totalCost ?? 0),
-      sub: () => vsPrior ?? "",
-      featured: true,
-    },
-    {
-      label: "Input Tokens",
-      value: () => fmtTokens(inputTokens),
-      sub: () =>
-        cachedTokens > 0 ? `+${fmtTokens(cachedTokens)} cached` : "",
-    },
-    {
-      label: "Output Tokens",
-      value: () => fmtTokens(outputTokens),
-    },
-    {
-      label: "Daily Burn",
-      value: () => fmtCost(dailyBurn),
-      sub: () => "avg/day",
-    },
-    {
-      label: "Peak Day",
-      value: () => fmtCost(peak.cost),
-      sub: () => peak.date,
-    },
-    {
-      label: "Cache Hit",
-      value: () =>
-        fmtPct(usage.summary?.cacheStats.hitRate ?? 0),
-    },
-    {
-      label: "Projects",
-      value: () =>
-        String(
-          Object.keys(
-            usage.summary?.sessionCounts.byProject ?? {},
-          ).length,
-        ),
-    },
-    {
-      label: "Models",
-      value: () =>
-        String(usage.summary?.modelTotals.length ?? 0),
-    },
-    {
-      label: "Active Days",
-      value: () => String(activeDays),
-    },
-  ];
+  const cards = $derived.by(() => {
+    const baseCards: Card[] = [
+      {
+        label: () => m.usage_summary_total_cost(),
+        value: () => formatMoney(usage.summary?.totals.totalCost ?? ZERO_MONEY),
+        sub: () => vsPrior ?? "",
+        featured: true,
+      },
+      ...(usage.summary?.totals.copilotAICredits
+        ? [
+            {
+              label: () => m.usage_summary_copilot_ai_credits(),
+              value: () => fmtCredits(usage.summary?.totals.copilotAICredits ?? 0),
+            },
+          ]
+        : []),
+      {
+        label: () => m.usage_summary_input_tokens(),
+        value: () => fmtTokens(inputTokens),
+        sub: () =>
+          cachedTokens > 0
+            ? m.usage_summary_cached_tokens({
+                value: `+${fmtTokens(cachedTokens)}`,
+              })
+            : "",
+      },
+      {
+        label: () => m.analytics_metric_output_tokens(),
+        value: () => fmtTokens(outputTokens),
+      },
+      {
+        label: () => m.usage_summary_daily_burn(),
+        value: () => formatMoney(dailyBurn),
+        sub: () => m.usage_summary_avg_day(),
+      },
+      {
+        label: () => m.usage_summary_peak_day(),
+        value: () => formatMoney(peak.cost),
+        sub: () => peak.date,
+      },
+      {
+        label: () => m.usage_summary_cache_hit(),
+        value: () =>
+          fmtPct(usage.summary?.cacheStats.hitRate ?? 0),
+      },
+      {
+        label: () => m.analytics_summary_projects(),
+        value: () =>
+          String(
+            Object.keys(
+              usage.summary?.sessionCounts.byProject ?? {},
+            ).length,
+          ),
+      },
+      {
+        label: () => m.usage_models(),
+        value: () =>
+          String(usage.summary?.modelTotals.length ?? 0),
+      },
+      {
+        label: () => m.analytics_summary_active_days(),
+        value: () => String(activeDays),
+      },
+    ];
+    return baseCards;
+  });
 </script>
 
 <div class="summary-cards">
   {#each cards as card}
-    <div
-      class="card"
-      class:featured={card.featured}
+    <Card
+      level="default"
+      padding="none"
+      class={card.featured ? "card featured" : "card"}
     >
       {#if usage.errors.summary}
         <span class="card-value error">--</span>
-        <span class="card-label">{card.label}</span>
+        <span class="card-label">{card.label()}</span>
       {:else}
         <span class="card-value">{card.value()}</span>
-        <span class="card-label">{card.label}</span>
+        <span class="card-label">{card.label()}</span>
         {#if card.sub}
           {@const subtext = card.sub()}
           {#if subtext}
@@ -153,7 +174,7 @@
           {/if}
         {/if}
       {/if}
-    </div>
+    </Card>
   {/each}
 </div>
 
@@ -164,7 +185,7 @@
       class="retry-btn"
       onclick={() => usage.fetchSummary()}
     >
-      Retry
+      {m.shared_retry()}
     </button>
   </div>
 {/if}
@@ -176,19 +197,20 @@
     flex-wrap: wrap;
   }
 
-  .card {
+  .summary-cards :global(.card) {
     flex: 1;
     min-width: 120px;
     padding: 12px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
 
-  .card.featured {
+  .summary-cards :global(.card > .kit-card__body) {
+    display: contents;
+  }
+
+  .summary-cards :global(.card.featured) {
     border-width: 2px;
     border-color: var(--accent-blue);
   }
@@ -239,6 +261,6 @@
 
   .retry-btn:hover {
     background: var(--accent-red);
-    color: #fff;
+    color: var(--accent-red-foreground);
   }
 </style>

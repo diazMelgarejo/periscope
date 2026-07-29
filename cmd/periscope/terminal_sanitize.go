@@ -18,7 +18,7 @@ import (
 // without any ANSI involved. CRLF input still renders correctly
 // because terminals treat lone \n as a newline.
 //
-// Rationale: even though agentsview is a single-user tool and
+// Rationale: even though periscope is a single-user tool and
 // session files are generally trusted, content flows in from
 // imported transcripts and remote machines via PG sync. Without
 // this filter a malicious session could emit OSC 8 hyperlinks

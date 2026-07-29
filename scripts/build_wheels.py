@@ -69,6 +69,10 @@ PLATFORM_MAP: dict[str, dict[str, str]] = {
         "wheel_tag": "win_amd64",
         "binary_name": "periscope.exe",
     },
+    "windows_arm64": {
+        "wheel_tag": "win_arm64",
+        "binary_name": "periscope.exe",
+    },
 }
 
 _ARCHIVE_RE = re.compile(

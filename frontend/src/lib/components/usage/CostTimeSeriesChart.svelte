@@ -1,17 +1,23 @@
 <script lang="ts">
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
-  import { projectColor } from "../../utils/projectColor.js";
+  import { m } from "../../i18n/index.js";
+  import { formatMoney, moneyFromMicrodollars } from "../../money.js";
+
+  interface Props {
+    colorMap: ReadonlyMap<string, string>;
+  }
+
+  let { colorMap }: Props = $props();
 
   const CHART_H = 180;
   const X_LABEL_H = 20;
   const Y_LABEL_W = 40;
+  const X_LABEL_RIGHT_PAD = 24;
   // Reserved headroom at the top of the plot area so the
   // maximum bar, its grid line, and the top y-axis label's
   // ascenders do not clip against the SVG viewBox edge.
   const TOP_PAD = 10;
   const MAX_SERIES = 5;
-
-  const OTHER_COLOR = "var(--text-muted)";
 
   let containerEl: HTMLDivElement | undefined = $state();
   let containerWidth = $state(600);
@@ -39,29 +45,34 @@
     points: Point[];
     keys: string[];
     maxY: number;
+	labels: Record<string, string>;
   } => {
     const daily = usage.summary?.daily;
     if (!daily || daily.length === 0) {
-      return { points: [], keys: [], maxY: 0 };
+      return { points: [], keys: [], maxY: 0, labels: {} };
     }
 
     // Sum cost per key across the whole range to find top N.
     const totals = new Map<string, number>();
+	const labels: Record<string, string> = {};
     for (const day of daily) {
       if (groupBy === "project" && day.projectBreakdowns) {
         for (const b of day.projectBreakdowns) {
-          totals.set(b.project,
-            (totals.get(b.project) ?? 0) + b.cost);
+		  labels[b.project_key] = b.project;
+          totals.set(b.project_key,
+            (totals.get(b.project_key) ?? 0) + b.cost.microdollars);
         }
       } else if (groupBy === "model" && day.modelBreakdowns) {
         for (const b of day.modelBreakdowns) {
           totals.set(b.modelName,
-            (totals.get(b.modelName) ?? 0) + b.cost);
+            (totals.get(b.modelName) ?? 0) + b.cost.microdollars);
+		  labels[b.modelName] = b.modelName;
         }
       } else if (groupBy === "agent" && day.agentBreakdowns) {
         for (const b of day.agentBreakdowns) {
           totals.set(b.agent,
-            (totals.get(b.agent) ?? 0) + b.cost);
+            (totals.get(b.agent) ?? 0) + b.cost.microdollars);
+		  labels[b.agent] = b.agent;
         }
       }
     }
@@ -70,13 +81,13 @@
     if (totals.size === 0) {
       const points = daily.map((d) => ({
         date: d.date,
-        values: { total: d.totalCost },
+        values: { total: d.totalCost.microdollars },
       }));
       let maxY = 0;
       for (const pt of points) {
         if (pt.values.total > maxY) maxY = pt.values.total;
       }
-      return { points, keys: ["total"], maxY: maxY || 1 };
+      return { points, keys: ["total"], maxY: maxY || 1, labels };
     }
 
     // Pick top N by total cost, group the rest as "Other".
@@ -94,15 +105,15 @@
 
       if (groupBy === "project" && day.projectBreakdowns) {
         items = day.projectBreakdowns.map((b) => ({
-          key: b.project, cost: b.cost,
+		  key: b.project_key, cost: b.cost.microdollars,
         }));
       } else if (groupBy === "model" && day.modelBreakdowns) {
         items = day.modelBreakdowns.map((b) => ({
-          key: b.modelName, cost: b.cost,
+          key: b.modelName, cost: b.cost.microdollars,
         }));
       } else if (groupBy === "agent" && day.agentBreakdowns) {
         items = day.agentBreakdowns.map((b) => ({
-          key: b.agent, cost: b.cost,
+          key: b.agent, cost: b.cost.microdollars,
         }));
       }
 
@@ -133,11 +144,11 @@
       if (stack > maxY) maxY = stack;
     }
 
-    return { points, keys, maxY: maxY || 1 };
+    return { points, keys, maxY: maxY || 1, labels };
   });
 
   const chartWidth = $derived(
-    Math.max(containerWidth - Y_LABEL_W - 8, 100),
+    Math.max(containerWidth - Y_LABEL_W - X_LABEL_RIGHT_PAD, 100),
   );
 
   const BAR_WIDTH = 40;
@@ -187,6 +198,7 @@
     maxY: number,
     w: number,
     h: number,
+    colors: ReadonlyMap<string, string>,
   ): Array<{ key: string; d: string; color: string }> {
     if (points.length === 0) return [];
 
@@ -212,7 +224,7 @@
           `L${x0 + BAR_WIDTH},${bot}Z`;
         const color = key === "__other__"
           ? "var(--text-muted)"
-          : projectColor(key);
+          : colors.get(key) ?? "var(--text-muted)";
         result.push({ key, d, color });
         baseline += val;
       }
@@ -248,7 +260,7 @@
 
       const color = key === "__other__"
         ? "var(--text-muted)"
-        : projectColor(key);
+        : colors.get(key) ?? "var(--text-muted)";
       result.push({ key, d, color });
 
       for (let i = 0; i < points.length; i++) {
@@ -266,6 +278,7 @@
       scale.max,
       chartWidth,
       CHART_H,
+      colorMap,
     ),
   );
 
@@ -304,9 +317,7 @@
   });
 
   function fmtYLabel(v: number): string {
-    if (v >= 100) return `$${v.toFixed(0)}`;
-    if (v >= 1) return `$${v.toFixed(1)}`;
-    return `$${v.toFixed(2)}`;
+    return formatMoney(moneyFromMicrodollars(v));
   }
 
   const yTicks = $derived.by(() => {
@@ -334,40 +345,40 @@
 
 <div class="chart-container">
   <div class="chart-header">
-    <h3 class="chart-title">Cost Over Time</h3>
+    <h3 class="chart-title">{m.usage_cost_over_time_title()}</h3>
     <div class="segment-toggle">
       <button
         class="toggle-btn"
         class:active={groupBy === "project"}
         onclick={() => handleGroupByChange("project")}
       >
-        Project
+        {m.analytics_col_project()}
       </button>
       <button
         class="toggle-btn"
         class:active={groupBy === "model"}
         onclick={() => handleGroupByChange("model")}
       >
-        Model
+        {m.usage_model()}
       </button>
       <button
         class="toggle-btn"
         class:active={groupBy === "agent"}
         onclick={() => handleGroupByChange("agent")}
       >
-        Agent
+        {m.analytics_col_agent()}
       </button>
     </div>
   </div>
 
   {#if seriesData.points.length === 0}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
     <div class="chart-scroll" bind:this={containerEl}>
       <svg
         width="100%"
         height={CHART_H + X_LABEL_H}
-        viewBox="0 0 {chartWidth + Y_LABEL_W + 8} {CHART_H + X_LABEL_H}"
+        viewBox="0 0 {chartWidth + Y_LABEL_W + X_LABEL_RIGHT_PAD} {CHART_H + X_LABEL_H}"
         preserveAspectRatio="xMidYMid meet"
         class="chart-svg"
       >
@@ -412,9 +423,9 @@
           <span class="legend-item">
             <span
               class="legend-dot"
-              style="background: {key === '__other__' ? 'var(--text-muted)' : projectColor(key)}"
+              style="background: {colorMap.get(key) ?? 'var(--text-muted)'}"
             ></span>
-            {key === "__other__" ? "Other" : key}
+			{key === "__other__" ? m.shared_other() : (seriesData.labels[key] ?? key)}
           </span>
         {/each}
       </div>

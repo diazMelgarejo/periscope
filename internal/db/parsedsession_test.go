@@ -1,0 +1,26 @@
+package db_test
+
+import (
+	"testing"
+
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestParsedSessionName(t *testing.T) {
+	t.Run("no name extracted returns nil", func(t *testing.T) {
+		name := db.ParsedSessionName(parser.ParsedSession{})
+		require.Nil(t, name)
+	})
+	t.Run("empty SessionName returns nil", func(t *testing.T) {
+		name := db.ParsedSessionName(parser.ParsedSession{SessionName: ""})
+		require.Nil(t, name)
+	})
+	t.Run("non-empty SessionName returns pointer", func(t *testing.T) {
+		name := db.ParsedSessionName(parser.ParsedSession{SessionName: "My Session"})
+		require.NotNil(t, name)
+		assert.Equal(t, "My Session", *name)
+	})
+}

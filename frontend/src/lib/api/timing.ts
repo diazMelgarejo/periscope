@@ -1,11 +1,12 @@
 import type { SessionTiming } from "./types/timing.js";
-import { ApiError, getAuthToken, getBase } from "./client.js";
+import { ApiError, getAuthToken, getBase } from "./runtime.js";
 
 /** Fetch the per-session timing summary computed by the backend.
  *  Mirrors the Go GetSessionTiming handler at
  *  GET /api/v1/sessions/{id}/timing. */
 export async function fetchSessionTiming(
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<SessionTiming> {
   const headers = new Headers();
   const token = getAuthToken();
@@ -14,7 +15,7 @@ export async function fetchSessionTiming(
   }
   const res = await fetch(
     `${getBase()}/sessions/${encodeURIComponent(sessionId)}/timing`,
-    { headers },
+    { headers, signal },
   );
   if (!res.ok) {
     const body = await res.text();

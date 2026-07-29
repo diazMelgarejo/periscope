@@ -15,9 +15,10 @@ import (
 
 // geminiTokens holds token usage counts from a Gemini message.
 type geminiTokens struct {
-	Input  int
-	Output int
-	Cached int
+	Input    int
+	Output   int
+	Cached   int
+	Thoughts int
 }
 
 // extractGeminiTokens reads the tokens object from a Gemini
@@ -28,16 +29,36 @@ func extractGeminiTokens(msg gjson.Result) geminiTokens {
 		return geminiTokens{}
 	}
 	return geminiTokens{
-		Input:  int(tok.Get("input").Int()),
-		Output: int(tok.Get("output").Int()),
-		Cached: int(tok.Get("cached").Int()),
+		Input:    int(tok.Get("input").Int()),
+		Output:   int(tok.Get("output").Int()),
+		Cached:   int(tok.Get("cached").Int()),
+		Thoughts: int(tok.Get("thoughts").Int()),
 	}
 }
 
-// ParseGeminiSession parses a Gemini CLI session JSON file.
-// Unlike Claude/Codex JSONL, each Gemini file is a single JSON
-// document containing all messages.
-func ParseGeminiSession(
+// normalizedGeminiTokenUsage maps Gemini's token counts onto the
+// Anthropic-style shape used by usage and cost queries. Thoughts
+// tokens are billed at the output rate, so they fold into
+// output_tokens here.
+func normalizedGeminiTokenUsage(tok geminiTokens) json.RawMessage {
+	payload := map[string]int{
+		"input_tokens":            tok.Input,
+		"output_tokens":           tok.Output + tok.Thoughts,
+		"cache_read_input_tokens": tok.Cached,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// parseSession parses a Gemini CLI session JSON file into the session and
+// messages the provider consumes. Unlike Claude/Codex JSONL, each Gemini file
+// is a single JSON document containing all messages. This is the provider-owned
+// parse entrypoint; the package-level free function was folded onto the
+// provider.
+func (p *geminiProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
@@ -233,7 +254,7 @@ func parseGeminiMessage(
 	var tokenUsage json.RawMessage
 	tokResult := msg.Get("tokens")
 	if tokResult.Exists() {
-		tokenUsage = json.RawMessage(tokResult.Raw)
+		tokenUsage = normalizedGeminiTokenUsage(tok)
 	}
 	return ParsedMessage{
 		Ordinal:       ordinal,
@@ -248,12 +269,56 @@ func parseGeminiMessage(
 		Model:         msg.Get("model").String(),
 		TokenUsage:    tokenUsage,
 		ContextTokens: tok.Input + tok.Cached,
-		OutputTokens:  tok.Output,
+		OutputTokens:  tok.Output + tok.Thoughts,
 		HasContextTokens: tokResult.Get("input").Exists() ||
 			tokResult.Get("cached").Exists(),
-		HasOutputTokens:    tokResult.Get("output").Exists(),
+		HasOutputTokens: tokResult.Get("output").Exists() ||
+			tokResult.Get("thoughts").Exists(),
 		tokenPresenceKnown: true,
 	}, true
+}
+
+func applyGeminiCumulativeDeltas(messages []ParsedMessage) {
+	var prevInput, prevCached int
+	for i := range messages {
+		if !messages[i].HasContextTokens {
+			continue
+		}
+
+		var usage struct {
+			Input  int `json:"input_tokens"`
+			Output int `json:"output_tokens"`
+			Cached int `json:"cache_read_input_tokens"`
+		}
+		if messages[i].TokenUsage != nil {
+			_ = json.Unmarshal(messages[i].TokenUsage, &usage)
+		}
+
+		inputDelta := usage.Input - prevInput
+		cachedDelta := usage.Cached - prevCached
+		if inputDelta < 0 {
+			inputDelta = usage.Input
+		}
+		if cachedDelta < 0 {
+			cachedDelta = usage.Cached
+		}
+
+		messages[i].ContextTokens = inputDelta + cachedDelta
+
+		if messages[i].TokenUsage != nil {
+			payload := map[string]int{
+				"input_tokens":            inputDelta,
+				"output_tokens":           usage.Output,
+				"cache_read_input_tokens": cachedDelta,
+			}
+			if raw, err := json.Marshal(payload); err == nil {
+				messages[i].TokenUsage = raw
+			}
+		}
+
+		prevInput = usage.Input
+		prevCached = usage.Cached
+	}
 }
 
 func buildGeminiSession(
@@ -264,6 +329,7 @@ func buildGeminiSession(
 	firstMessage string,
 	messages []ParsedMessage,
 ) *ParsedSession {
+	applyGeminiCumulativeDeltas(messages)
 	var userCount int
 	for _, m := range messages {
 		if m.Role == RoleUser && m.Content != "" {
