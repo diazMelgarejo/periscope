@@ -2,6 +2,7 @@
 # Generated: 2026-07-28T14:38:14.771Z
 # Harmonized with ECC run: 2026-07-28T01:26:19.263Z (PR #16 on merged)
 # Additive replay from ECC run: 2026-07-28T14:39:08.509Z (PR #18)
+# Workflow-pack additive replay: 2026-07-29T00:00:00.000Z (PR #21 — commands only; instincts unchanged)
 # Version: 2.0
 # Absorbed ID aliases from the second run:
 # - periscope-instinct-commit-format -> periscope-instinct-git-commit-format

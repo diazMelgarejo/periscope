@@ -232,3 +232,6 @@ and handoff notes before expanding scope.
 | `/database-migration` | `.claude/commands/database-migration.md` |
 | `/feature-development` | `.claude/commands/feature-development.md` |
 | `/refactoring` | `.claude/commands/refactoring.md` |
+| `/add-or-update-backend-feature-with-tests` | `.claude/commands/add-or-update-backend-feature-with-tests.md` |
+| `/frontend-component-update-with-i18n-and-tests` | `.claude/commands/frontend-component-update-with-i18n-and-tests.md` |
+| `/documentation-and-blueprint-update` | `.claude/commands/documentation-and-blueprint-update.md` |
