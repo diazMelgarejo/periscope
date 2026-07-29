@@ -28,7 +28,7 @@ func TestDevBackendBuildRestoresPricingSnapshotBeforeBuild(t *testing.T) {
 		"go run ./internal/pricing/cmd/litellm-snapshot -restore",
 		"go build -tags fts5",
 	)
-	require.FileExists(t, filepath.Join(root, "tmp", "agentsview"))
+	require.FileExists(t, filepath.Join(root, "tmp", "periscope"))
 }
 
 func TestDevBackendBuildStopsWhenPricingSnapshotRestoreFails(t *testing.T) {

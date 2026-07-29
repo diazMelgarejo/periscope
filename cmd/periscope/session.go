@@ -12,6 +12,7 @@ import (
 	"github.com/latentsignal-org/periscope/internal/config"
 	"github.com/latentsignal-org/periscope/internal/service"
 	"github.com/latentsignal-org/periscope/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/pathutil"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -219,6 +220,10 @@ func explicitServerToken(cmd *cobra.Command) (string, error) {
 	}
 	path, err := cmd.Flags().GetString("server-token-file")
 	if err == nil && strings.TrimSpace(path) != "" {
+		path, err = pathutil.ExpandHome(path)
+		if err != nil {
+			return "", fmt.Errorf("expanding --server-token-file: %w", err)
+		}
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("reading --server-token-file: %w", err)

@@ -25,6 +25,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gofrs/flock"
 	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/pathutil"
 	"github.com/spf13/pflag"
 )
 
@@ -873,6 +874,9 @@ func loadPGServeBase() (Config, error) {
 		return cfg, err
 	}
 	cfg.loadEnv()
+	if err := expandDataDir(&cfg); err != nil {
+		return cfg, err
+	}
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
 	}
@@ -905,6 +909,9 @@ func LoadMinimal() (Config, error) {
 		return cfg, err
 	}
 	cfg.loadEnv()
+	if err := expandDataDir(&cfg); err != nil {
+		return cfg, err
+	}
 
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
@@ -928,6 +935,9 @@ func LoadReadOnly() (Config, error) {
 		return cfg, err
 	}
 	cfg.loadEnv()
+	if err := expandDataDir(&cfg); err != nil {
+		return cfg, err
+	}
 
 	if err := cfg.loadFileReadOnly(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
@@ -1758,6 +1768,9 @@ func splitFlagList(value string) []string {
 
 func finalize(cfg *Config) error {
 	var err error
+	if err := expandLocalPaths(cfg); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.LocalMachineName) == "" {
 		return fmt.Errorf("identify local sync machine: hostname is empty")
 	}
@@ -2140,6 +2153,9 @@ func ResolveDataDir() (string, error) {
 	if v := dataDirFromEnv(); v != "" {
 		cfg.DataDir = v
 	}
+	if err := expandDataDir(&cfg); err != nil {
+		return "", err
+	}
 	return cfg.DataDir, nil
 }
 
@@ -2411,6 +2427,10 @@ func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 		if err != nil {
 			return duck, fmt.Errorf("expanding path: %w", err)
 		}
+		expanded, err = pathutil.ExpandHome(expanded)
+		if err != nil {
+			return duck, fmt.Errorf("expanding path: %w", err)
+		}
 		duck.Path = expanded
 	}
 	if duck.URL != "" {
@@ -2513,6 +2533,13 @@ func expandBracedEnv(s string) (string, error) {
 
 // SaveTerminalConfig persists terminal settings to the config file.
 func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
+	live := tc
+	expanded, err := pathutil.ExpandHome(live.CustomBin)
+	if err != nil {
+		return fmt.Errorf("expanding terminal custom binary: %w", err)
+	}
+	live.CustomBin = expanded
+
 	return c.withConfigLock(func() error {
 		existing, err := c.readConfigMap()
 		if err != nil {
@@ -2523,7 +2550,7 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 		if err := c.writeConfigMap(existing); err != nil {
 			return err
 		}
-		c.Terminal = tc
+		c.Terminal = live
 		return nil
 	})
 }
