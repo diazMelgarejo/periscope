@@ -44,7 +44,7 @@ Overlay from `merged` only where purified lacks fork-specific value:
 
 ```bash
 git read-tree --reset -u origin/cursor/agentsview-purified-onto-kenn-f559^{tree}
-git checkout 32d3c281 -- internal/summarize internal/llm jetbrains-plugin .claude .agents .codex scripts/sync-upstream.sh
+git checkout 32d3c281 -- jetbrains-plugin .claude .agents .codex scripts/sync-upstream.sh
 ```
 
 Purified already contains PR #26 upstream stack, periscope script paths, and kit-ui context.
