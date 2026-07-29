@@ -19,6 +19,27 @@ the passing `ff8cd5b3` (purified+PR26) tree:
 | Rebase | **Reject** — rewrites merge parents; violates SHA-preservation policy |
 | **Tree replay** | **Adopt** — `read-tree purified^{tree}` + minimal merged overlay |
 
+## Minimal merged overlay (canonical)
+
+Purified+PR26 (`ff8cd5b3`) is the **passing base**. Cherry-picking synthetic-pass
+commits is **unnecessary** — those replay a `merged`-base tree and duplicate purified
+content.
+
+Overlay from `merged` only where purified lacks fork-specific value:
+
+| Overlay path | Why |
+|--------------|-----|
+| `scripts/sync-upstream.sh` | Periscope fork sync logic (Layer 3) |
+| `jetbrains-plugin/` | Fork JetBrains lifecycle (Layer 3) |
+| `.claude/`, `.agents/`, `.codex/` | ECC bundle superset (PR #25 precedent) |
+
+**Do not overlay** from `merged`:
+
+- `scripts/dev-backend-build.sh`, `e2e-server.sh`, `desktop-dev.ps1` — purified has periscope paths + litellm restore
+- `README.md`, `docs/` — purified has strict-link fixes from PR #26
+- `frontend/src/lib/components/context/` — purified has kit-ui migration; merged context regresses kit-ui-check
+- `internal/summarize/`, `internal/llm/` — purified already has Layer 2; `ff8cd5b3` passes without merged copies
+
 ## Fix
 
 ```bash
