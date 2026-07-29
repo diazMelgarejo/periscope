@@ -49,7 +49,7 @@ export default defineConfig({
     exclude: ["e2e/**", "node_modules/**"],
     server: {
       deps: {
-        inline: ["svelte"],
+        inline: ["svelte", "@kenn-io/kit-ui", "@lucide/svelte"],
       },
     },
   },
