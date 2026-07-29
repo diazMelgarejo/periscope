@@ -189,7 +189,10 @@
     ".claude/commands/refactoring.md",
     ".claude/commands/add-or-update-backend-feature-with-tests.md",
     ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
-    ".claude/commands/documentation-and-blueprint-update.md"
+    ".claude/commands/documentation-and-blueprint-update.md",
+    ".claude/commands/add-or-update-database-feature.md",
+    ".claude/commands/add-new-parser-or-provider.md",
+    ".claude/commands/feature-development-with-tests-and-docs.md"
   ],
   "packageFiles": {
     "runtime-core": [
@@ -210,7 +213,10 @@
       ".claude/commands/refactoring.md",
       ".claude/commands/add-or-update-backend-feature-with-tests.md",
       ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
-      ".claude/commands/documentation-and-blueprint-update.md"
+      ".claude/commands/documentation-and-blueprint-update.md",
+      ".claude/commands/add-or-update-database-feature.md",
+      ".claude/commands/add-new-parser-or-provider.md",
+      ".claude/commands/feature-development-with-tests-and-docs.md"
     ]
   },
   "moduleFiles": {
@@ -232,7 +238,10 @@
       ".claude/commands/refactoring.md",
       ".claude/commands/add-or-update-backend-feature-with-tests.md",
       ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
-      ".claude/commands/documentation-and-blueprint-update.md"
+      ".claude/commands/documentation-and-blueprint-update.md",
+      ".claude/commands/add-or-update-database-feature.md",
+      ".claude/commands/add-new-parser-or-provider.md",
+      ".claude/commands/feature-development-with-tests-and-docs.md"
     ]
   },
   "files": [
@@ -315,6 +324,21 @@
       "moduleId": "workflow-pack",
       "path": ".claude/commands/documentation-and-blueprint-update.md",
       "description": "Workflow command scaffold for documentation-and-blueprint-update."
+    },
+    {
+      "moduleId": "workflow-pack",
+      "path": ".claude/commands/add-or-update-database-feature.md",
+      "description": "Workflow command scaffold for add-or-update-database-feature."
+    },
+    {
+      "moduleId": "workflow-pack",
+      "path": ".claude/commands/add-new-parser-or-provider.md",
+      "description": "Workflow command scaffold for add-new-parser-or-provider."
+    },
+    {
+      "moduleId": "workflow-pack",
+      "path": ".claude/commands/feature-development-with-tests-and-docs.md",
+      "description": "Workflow command scaffold for feature-development-with-tests-and-docs."
     }
   ],
   "workflows": [
@@ -329,6 +353,18 @@
     {
       "command": "documentation-and-blueprint-update",
       "path": ".claude/commands/documentation-and-blueprint-update.md"
+    },
+    {
+      "command": "add-or-update-database-feature",
+      "path": ".claude/commands/add-or-update-database-feature.md"
+    },
+    {
+      "command": "add-new-parser-or-provider",
+      "path": ".claude/commands/add-new-parser-or-provider.md"
+    },
+    {
+      "command": "feature-development-with-tests-and-docs",
+      "path": ".claude/commands/feature-development-with-tests-and-docs.md"
     }
   ],
   "adapters": {
@@ -341,7 +377,10 @@
         ".claude/commands/refactoring.md",
         ".claude/commands/add-or-update-backend-feature-with-tests.md",
         ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
-        ".claude/commands/documentation-and-blueprint-update.md"
+        ".claude/commands/documentation-and-blueprint-update.md",
+        ".claude/commands/add-or-update-database-feature.md",
+        ".claude/commands/add-new-parser-or-provider.md",
+        ".claude/commands/feature-development-with-tests-and-docs.md"
       ]
     },
     "codex": {
