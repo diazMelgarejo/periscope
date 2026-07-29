@@ -9,8 +9,8 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"github.com/spf13/cobra"
 	"github.com/latentsignal-org/periscope/internal/service"
+	"github.com/spf13/cobra"
 )
 
 func newSessionToolCallsCommand() *cobra.Command {

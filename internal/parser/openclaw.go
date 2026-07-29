@@ -13,10 +13,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// ParseOpenClawSession parses an OpenClaw JSONL session file.
+// parseSession parses an OpenClaw JSONL session file.
 // OpenClaw stores messages in a JSONL format with a session header
 // line, message entries, compaction summaries, and metadata events.
-func ParseOpenClawSession(
+func (p *openClawProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
@@ -31,6 +31,7 @@ func ParseOpenClawSession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	var (
 		messages      []ParsedMessage
 		startedAt     time.Time
@@ -181,6 +182,7 @@ func ParseOpenClawSession(
 				ToolResults: []ParsedToolResult{{
 					ToolUseID:     toolCallID,
 					ContentLength: contentLen,
+					ContentRaw:    content.Raw,
 				}},
 			})
 			ordinal++
@@ -324,7 +326,12 @@ func extractToolResultText(content gjson.Result) string {
 
 	var parts []string
 	content.ForEach(func(_, block gjson.Result) bool {
-		if block.Get("type").Str == "text" {
+		// OpenClaw tool-result content blocks (type "toolResult") carry
+		// the rendered text inline under "text", the same field plain
+		// "text" blocks use. This matches what DecodeContent reads, so
+		// the measured length and the stored/decoded content agree.
+		switch block.Get("type").Str {
+		case "text", "toolResult":
 			if t := block.Get("text").Str; t != "" {
 				parts = append(parts, t)
 			}

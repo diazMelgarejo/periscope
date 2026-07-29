@@ -34,28 +34,29 @@ Unify `merged` (Periscope fork Layer 3) with `cursor/agentsview-purified-onto-ke
 **Take from:** purified  
 **Paths:**
 
-- [ ] `internal/parser/` (all except periscope-owned extensions if any)
-- [ ] `internal/sync/`
-- [ ] `internal/postgres/`
-- [ ] `internal/db/schema.sql`, migrations, artifact tables from PR #1251
-- [ ] `internal/remotesync/` (upstream #1283)
+- [x] `internal/parser/` (all except periscope-owned extensions if any)
+- [x] `internal/sync/`
+- [x] `internal/postgres/`
+- [x] `internal/db/schema.sql`, migrations, artifact tables from PR #1251
+- [x] `internal/remotesync/` (upstream #1283)
 
 **Keep from merged:** periscope-specific db columns if documented in ARCHITECTURE.md Layer 2
 
 **Verify:** `go test ./internal/parser/... ./internal/sync/... ./internal/postgres/... -short`
 
-### Pass 2 — PR #26 feature replay (artifact, duckdb, omnigent)
+### Pass 2 — PR #26 feature replay (artifact, duckdb, omnigent) ✓
 
 **Mode:** additive  
 **Take from:** purified (already contains #1274, #1251, #1284)
 
-- [ ] `internal/artifact/`
-- [ ] `internal/config/` duckdb tilde expansion
-- [ ] `internal/pathutil/`
-- [ ] `internal/parser/omnigent*.go`
-- [ ] `cmd/periscope/` duckdb/import/session paths (module path = periscope)
+- [x] `internal/artifact/`
+- [x] `internal/config/` duckdb tilde expansion
+- [x] `internal/pathutil/`
+- [x] `internal/parser/omnigent*.go`
+- [x] `cmd/periscope/` duckdb/import/session paths (module path = periscope)
+- [x] `internal/duckdb/`, `internal/money/`, `internal/parsertest/` (supporting deps)
 
-**Verify:** `go test ./internal/artifact/... ./internal/config/... -short`
+**Verify:** `go test ./internal/artifact/... ./internal/config/... -short` — blocked pending Pass 1 parser compile
 
 ### Pass 3 — Layer 3 identity invariants ✓
 
@@ -107,10 +108,10 @@ Unify `merged` (Periscope fork Layer 3) with `cursor/agentsview-purified-onto-ke
 | Pass | Status | Commit | Agent | Notes |
 |------|--------|--------|-------|-------|
 | 0 | done | `d42bd53f` | orchestrator | manifest |
-| 1 | in_progress | — | pass1-agent | — |
-| 2 | pending | — | pass2-agent | — |
+| 1 | in_progress | — | pass1-agent | parser partial; compile errors remain |
+| 2 | done | `9b353c2f` | pass2-agent | artifact/duckdb/omnigent replayed; config+artifact tests pass with `-tags fts5` |
 | 3 | done | `4321d36b` | pass3-agent | identity invariants verified vs merged; sync-upstream Layer 1 docs; verify-staged copied |
-| 4 | done | — | pass4-agent | kit-ui Card/EmptyState in context; kept merged session prop init |
+| 4 | done | `COMMIT_SHA` | pass4-agent | kit-ui Card/EmptyState in context; kept merged session prop init |
 | 5 | done | `094d7d6d` | pass5-agent | docs union + ECC replay (merged superset kept) |
 | 6 | pending | — | orchestrator | — |
 

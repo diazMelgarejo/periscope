@@ -11,6 +11,7 @@ import (
 	"github.com/latentsignal-org/periscope/internal/config"
 	"github.com/latentsignal-org/periscope/internal/db"
 	"github.com/latentsignal-org/periscope/internal/importer"
+	"github.com/latentsignal-org/periscope/internal/pathutil"
 )
 
 type ImportConfig struct {
@@ -19,17 +20,22 @@ type ImportConfig struct {
 }
 
 func runImport(cfg ImportConfig) {
+	expandedPath, err := pathutil.ExpandHome(cfg.Path)
+	if err != nil {
+		log.Fatalf("expanding import path: %v", err)
+	}
+	cfg.Path = expandedPath
+
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
 
-	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
+	database, writeLock, err := openWriteDB(context.Background(), appCfg)
 	if err != nil {
 		log.Fatalf("Error opening database: %v", err)
 	}
-	defer database.Close()
+	defer closeWriteDB(database, writeLock)
 
 	ctx := context.Background()
 
@@ -46,11 +52,13 @@ func runImport(cfg ImportConfig) {
 
 	switch cfg.Type {
 	case "claude-ai":
-		stats, err = runClaudeAIImport(ctx, database, dir)
+		stats, err = runClaudeAIImport(
+			ctx, database, dir, appCfg.LocalMachineName,
+		)
 	case "chatgpt":
 		assetsDir := filepath.Join(appCfg.DataDir, "assets")
 		stats, err = runChatGPTImport(
-			ctx, database, dir, assetsDir,
+			ctx, database, dir, assetsDir, appCfg.LocalMachineName,
 		)
 	default:
 		log.Fatalf(
@@ -72,7 +80,7 @@ func runImport(cfg ImportConfig) {
 }
 
 func runClaudeAIImport(
-	ctx context.Context, database *db.DB, path string,
+	ctx context.Context, database *db.DB, path, machine string,
 ) (importer.ImportStats, error) {
 	jsonPath := path
 	info, err := os.Stat(path)
@@ -105,13 +113,13 @@ func runClaudeAIImport(
 					"\rRebuilding search index...   ",
 				)
 			},
-		},
+		}, machine,
 	)
 }
 
 func runChatGPTImport(
 	ctx context.Context, database *db.DB,
-	dir, assetsDir string,
+	dir, assetsDir, machine string,
 ) (importer.ImportStats, error) {
 	return importer.ImportChatGPT(
 		ctx, database, dir, assetsDir,
@@ -129,7 +137,7 @@ func runChatGPTImport(
 					"\rRebuilding search index...   ",
 				)
 			},
-		},
+		}, machine,
 	)
 }
 

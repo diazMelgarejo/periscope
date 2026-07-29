@@ -48,38 +48,20 @@ func ExtractTextContent(
 				parts = append(parts,
 					"[Thinking]\n"+thinking+"\n[/Thinking]")
 			}
-		case "tool_use":
+		case "tool_use", "toolCall":
+			// "tool_use" is the Anthropic block type; "toolCall" is
+			// the camelCase variant emitted by OpenClaw. OpenClaw
+			// usually carries the call arguments under "input", but
+			// some tools populate only "arguments", so fall back to
+			// it when "input" is missing or empty.
 			hasToolUse = true
-			name := block.Get("name").Str
-			if name != "" {
-				tc := ParsedToolCall{
-					ToolUseID: block.Get("id").Str,
-					ToolName:  name,
-					Category:  NormalizeToolCategory(name),
-					InputJSON: block.Get("input").Raw,
-				}
-				switch name {
-				case "Skill":
-					tc.SkillName = block.Get("input.skill").Str
-				case "skill":
-					tc.SkillName = block.Get("input.skill").Str
-					if tc.SkillName == "" {
-						tc.SkillName = block.Get("input.name").Str
-					}
-				}
+			if tc, ok := parseToolCall(block); ok {
 				toolCalls = append(toolCalls, tc)
 			}
 			parts = append(parts, formatToolUse(block))
 		case "tool_result":
-			tuid := block.Get("tool_use_id").Str
-			if tuid != "" {
-				rc := block.Get("content")
-				cl := toolResultContentLength(rc)
-				toolResults = append(toolResults, ParsedToolResult{
-					ToolUseID:     tuid,
-					ContentLength: cl,
-					ContentRaw:    rc.Raw,
-				})
+			if tr, ok := parseToolResult(block); ok {
+				toolResults = append(toolResults, tr)
 			}
 		}
 		return true
@@ -88,6 +70,55 @@ func ExtractTextContent(
 	return strings.Join(parts, "\n"),
 		strings.Join(thinkingParts, "\n\n"),
 		hasThinking, hasToolUse, toolCalls, toolResults
+}
+
+func parseToolCall(block gjson.Result) (ParsedToolCall, bool) {
+	name := block.Get("name").Str
+	if name == "" {
+		return ParsedToolCall{}, false
+	}
+	input := toolCallInput(block)
+	tc := ParsedToolCall{
+		ToolUseID: block.Get("id").Str,
+		ToolName:  name,
+		Category:  NormalizeToolCategory(name),
+		InputJSON: input.Raw,
+	}
+	switch name {
+	case "Skill":
+		tc.SkillName = input.Get("skill").Str
+	case "skill":
+		tc.SkillName = input.Get("skill").Str
+		if tc.SkillName == "" {
+			tc.SkillName = input.Get("name").Str
+		}
+	default:
+		tc.SkillName = inferToolSkillName(name, tc.InputJSON)
+	}
+	return tc, true
+}
+
+func toolCallInput(block gjson.Result) gjson.Result {
+	input := block.Get("input")
+	if input.Raw == "" || input.Raw == "{}" {
+		if args := block.Get("arguments"); args.Exists() {
+			input = args
+		}
+	}
+	return input
+}
+
+func parseToolResult(block gjson.Result) (ParsedToolResult, bool) {
+	tuid := block.Get("tool_use_id").Str
+	if tuid == "" {
+		return ParsedToolResult{}, false
+	}
+	rc := block.Get("content")
+	return ParsedToolResult{
+		ToolUseID:     tuid,
+		ContentLength: toolResultContentLength(rc),
+		ContentRaw:    rc.Raw,
+	}, true
 }
 
 func toolResultContentLength(content gjson.Result) int {
@@ -151,6 +182,13 @@ var todoIcons = map[string]string{
 func formatToolUse(block gjson.Result) string {
 	name := block.Get("name").Str
 	input := block.Get("input")
+	if input.Raw == "" || input.Raw == "{}" {
+		// OpenClaw emits some tool calls with args only under
+		// "arguments" rather than "input".
+		if args := block.Get("arguments"); args.Exists() {
+			input = args
+		}
+	}
 
 	switch name {
 	case "AskUserQuestion":
@@ -194,7 +232,9 @@ func formatToolUse(block gjson.Result) string {
 	case "look_at":
 		return fmt.Sprintf("[Read: %s]", input.Get("path").Str)
 	case "apply_patch":
-		return fmt.Sprintf("[Patch: %s]", input.Get("path").Str)
+		return formatPatch(input)
+	case "ApplyPatch":
+		return formatPatch(input)
 	case "undo_edit":
 		return fmt.Sprintf("[Undo: %s]", input.Get("path").Str)
 	case "finder":
@@ -326,6 +366,14 @@ func formatBash(input gjson.Result) string {
 	return fmt.Sprintf("[Bash]\n$ %s", cmd)
 }
 
+func formatPatch(input gjson.Result) string {
+	path := resolveFilePath(input)
+	if path == "" {
+		return "[Patch]"
+	}
+	return fmt.Sprintf("[Patch: %s]", path)
+}
+
 func formatTask(input gjson.Result) string {
 	desc := input.Get("description").Str
 	if desc == "" {
@@ -345,8 +393,8 @@ func formatTask(input gjson.Result) string {
 }
 
 // resolveFilePath extracts a file path from tool input, trying
-// file_path, path, and filePath in order. Covers Claude Code,
-// Amp, and Pi payload shapes.
+// file_path, path, filePath, and file in order. Covers Claude Code,
+// Amp, Pi, and Kiro IDE payload shapes.
 func resolveFilePath(input gjson.Result) string {
 	if p := input.Get("file_path").Str; p != "" {
 		return p
@@ -354,7 +402,20 @@ func resolveFilePath(input gjson.Result) string {
 	if p := input.Get("path").Str; p != "" {
 		return p
 	}
-	return input.Get("filePath").Str
+	if p := input.Get("filePath").Str; p != "" {
+		return p
+	}
+	return input.Get("file").Str
+}
+
+// ResolveFilePathFromJSON extracts a file path from a tool call's raw input
+// JSON, checking file_path, path, filePath, then file. It returns "" when the
+// input is not valid JSON (e.g. a raw diff string) or carries no path key.
+func ResolveFilePathFromJSON(inputJSON string) string {
+	if inputJSON == "" || !gjson.Valid(inputJSON) {
+		return ""
+	}
+	return resolveFilePath(gjson.Parse(inputJSON))
 }
 
 func orDefault(s, def string) string {
