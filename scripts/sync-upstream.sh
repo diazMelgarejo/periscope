@@ -16,6 +16,14 @@
 #   4. Prompts the user interactively for any remaining conflicts
 #   5. Prints a diff summary of periscope-owned invariants to verify nothing was lost
 #
+# kenn-io/agentsview Layer 1 paths (integrative synthesis — take purified/theirs):
+#   During agentsview+periscope synthesis, these upstream paths are auto-resolved
+#   from the purified replay branch (kenn-io/agentsview stack), not from merged:
+#     - internal/parser/   (agent parsers, omnigent, s3source, etc.)
+#     - internal/sync/     (sync engine, watchers, integration tests)
+#     - internal/postgres/ (PG store, vector search, activity reports)
+#   Layer 3 identity paths below remain periscope-owned (take merged/ours).
+#
 # Periscope invariants (MUST survive every upstream merge):
 #   - internal/summarize/        (summarizer service)
 #   - internal/llm/              (LLM integration)
