@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick, untrack } from "svelte";
+  import { Card } from "@kenn-io/kit-ui";
+  import { onDestroy, onMount, tick, untrack } from "svelte";
   import {
     usage,
     buildUsageUrlParams,
@@ -12,22 +13,40 @@
     parseFiltersFromParams,
     splitExcludeProjectParam,
   } from "../../stores/sessions.svelte.js";
-  import { router } from "../../stores/router.svelte.js";
   import { events } from "../../stores/events.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
+  import { settings } from "../../stores/settings.svelte.js";
+  import RangePicker from "../shared/RangePicker.svelte";
+  import {
+    resolveRange,
+    selectionFromWindow,
+    type RangeSelection,
+  } from "../shared/rangeSelection.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
+  import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
   import AttributionPanel from "./AttributionPanel.svelte";
   import TopSessionsTable from "./TopSessionsTable.svelte";
   import CacheEfficiencyPanel from "./CacheEfficiencyPanel.svelte";
-  import DateRangeSelector from "../shared/DateRangeSelector.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
+  import RefreshControl from "../shared/RefreshControl.svelte";
+  import {
+    yokedDates,
+    panelDateState,
+    type PanelDateState,
+  } from "../../stores/yokedDates.svelte.js";
+  import { m } from "../../i18n/index.js";
+  import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 
-  const REFRESH_MS = 5 * 60 * 1000;
-  let refreshTimer: ReturnType<typeof setInterval> | undefined;
-  let unsubEvents: (() => void) | undefined;
   let mounted = false;
+  let unsubEvents: (() => void) | undefined;
+
+  const chartColorMaps = $derived(
+    usageChartColorMaps(usage.summary, settings.chartPalette),
+  );
 
   const projectItems = $derived(
     sessions.projects.map((p) => ({
@@ -35,6 +54,41 @@
       count: p.session_count,
     })),
   );
+
+  const agentItems = $derived(
+    sessions.agents.map((a) => ({
+      name: a.name,
+      count: a.session_count,
+    })),
+  );
+
+  const earliestSession = $derived(sync.stats?.earliest_session ?? null);
+
+  const rangeSelection = $derived(
+    selectionFromWindow({
+      isPinned: usage.isPinned,
+      windowDays: usage.windowDays,
+      from: usage.from,
+      to: usage.to,
+      earliestSession,
+    }),
+  );
+
+  function applyRange(sel: RangeSelection) {
+    if (sel.mode === "relative" && sel.days > 0) {
+      usage.setRollingWindow(sel.days);
+      updateYokeFromUsage(panelDateState(usage.from, usage.to, {
+        mode: "rolling",
+        windowDays: sel.days,
+      }));
+    } else {
+      const range = resolveRange(sel, earliestSession);
+      usage.setDateRange(range.from, range.to);
+      updateYokeFromUsage(panelDateState(range.from, range.to, {
+        mode: "fixed",
+      }));
+    }
+  }
 
   // Track every model we've seen in any summary response or
   // model filter — never remove one. This keeps the model
@@ -82,12 +136,46 @@
       ? usage.selectedModels.split(",").filter(Boolean)
       : [],
   );
+  const unsupportedUsageMessage = $derived.by(() => {
+    const kind = usage.summary?.unsupportedUsage?.kind;
+    if (kind === "copilot-no-token-data") {
+      return m.usage_summary_unsupported_copilot_no_token_data();
+    }
+    if (kind) {
+      return m.usage_summary_unsupported_generic();
+    }
+    return "";
+  });
   const sessionUrlParams = $derived(
     filtersToParams(sessions.filters),
   );
   const sessionFilterSignature = $derived(
     JSON.stringify(sessionUrlParams),
   );
+  function applyUsagePanelDate(state: PanelDateState): boolean {
+    const before = JSON.stringify({
+      from: usage.from,
+      to: usage.to,
+      isPinned: usage.isPinned,
+      windowDays: usage.windowDays,
+    });
+    if (state.mode === "rolling" && state.windowDays) {
+      usage.applyRollingWindow(state.windowDays);
+    } else {
+      usage.applyDateRange(state.from, state.to);
+    }
+    const after = JSON.stringify({
+      from: usage.from,
+      to: usage.to,
+      isPinned: usage.isPinned,
+      windowDays: usage.windowDays,
+    });
+    return before !== after;
+  }
+
+  function updateYokeFromUsage(state: PanelDateState | null): void {
+    if (state) yokedDates.updateFromPanel(state);
+  }
 
   // URL-init: seed store filters from URL params when landing
   // on /usage with a deep-link. A bare /usage preserves the
@@ -95,15 +183,27 @@
   // apply params that are actually present in the URL.
   const USAGE_FILTER_KEYS = new Set([
     "from", "to", "window_days",
-    "model", "exclude_model",
+    "model", "exclude_model", "exclude_agent",
   ]);
   const SESSION_FILTER_KEYS = new Set([
     "project", "machine", "agent",
-    "date", "date_from", "date_to",
+    "termination",
     "active_since", "exclude_project",
     "min_messages", "max_messages", "min_user_messages",
     "include_one_shot", "include_automated",
   ]);
+  function usageSupportedSessionParams(
+    params: Record<string, string>,
+  ): Record<string, string> {
+    const supported: Record<string, string> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (SESSION_FILTER_KEYS.has(key)) {
+        supported[key] = value;
+      }
+    }
+    return supported;
+  }
+
   let urlInitRan = $state(false);
   let urlWritebackReady = $state(false);
   let initialFetchDone = $state(false);
@@ -114,33 +214,60 @@
       if (route !== "usage") return;
       const hasDateParam = !!params["from"] || !!params["to"];
       const parsedWindowDays = parseWindowDays(params["window_days"]);
-      const hasFilterKeys = Object.keys(params).some(
-        (k) =>
-          USAGE_FILTER_KEYS.has(k) ||
-          SESSION_FILTER_KEYS.has(k),
+      const supportedSessionParams =
+        usageSupportedSessionParams(params);
+      const hasSessionFilterKeys =
+        Object.keys(supportedSessionParams).length > 0;
+      const hasUsageFilterKeys = Object.keys(params).some(
+        (k) => USAGE_FILTER_KEYS.has(k),
       );
-      const hasSessionFilterKeys = Object.keys(params).some(
-        (k) => SESSION_FILTER_KEYS.has(k),
-      );
+      const hasFilterKeys =
+        hasUsageFilterKeys || hasSessionFilterKeys;
 
       let changed = false;
       let sessionChanged = false;
 
-      // Sync pin state from URL: dated URL pins, undated URL unpins.
-      // Runs before the !hasFilterKeys early return so a fully bare URL
-      // (no exclude_* either) still flips the pin off.
-      if (usage.isPinned !== hasDateParam) {
-        usage.isPinned = hasDateParam;
-        changed = true;
+      if (!hasDateParam && parsedWindowDays === null) {
+        const seed = yokedDates.seedForPanel();
+        const state = seed
+          ? panelDateState(seed.from, seed.to, {
+              mode: seed.mode,
+              windowDays: seed.windowDays,
+            })
+          : null;
+        if (state) {
+          changed = applyUsagePanelDate(state) || changed;
+        } else {
+          changed = applyUsagePanelDate({
+            from: usage.from,
+            to: usage.to,
+            mode: "rolling",
+            windowDays: usage.windowDays,
+          }) || changed;
+        }
       }
 
       // Apply rolling window from URL when present and the URL is
       // not pinning a specific date range.
       if (!hasDateParam && parsedWindowDays !== null) {
-        if (usage.windowDays !== parsedWindowDays) {
-          usage.windowDays = parsedWindowDays;
-          changed = true;
-        }
+        const stateBefore = JSON.stringify({
+          from: usage.from,
+          to: usage.to,
+          isPinned: usage.isPinned,
+          windowDays: usage.windowDays,
+        });
+        usage.applyRollingWindow(parsedWindowDays);
+        const stateAfter = JSON.stringify({
+          from: usage.from,
+          to: usage.to,
+          isPinned: usage.isPinned,
+          windowDays: usage.windowDays,
+        });
+        changed = stateBefore !== stateAfter || changed;
+        updateYokeFromUsage(panelDateState(usage.from, usage.to, {
+          mode: "rolling",
+          windowDays: parsedWindowDays,
+        }));
       }
 
       if (!hasFilterKeys) {
@@ -152,7 +279,7 @@
       }
       if (hasSessionFilterKeys) {
         const nextSessionParams = filtersToParams(
-          parseFiltersFromParams(params),
+          parseFiltersFromParams(supportedSessionParams),
         );
         const currentSessionParams = filtersToParams(
           sessions.filters,
@@ -161,23 +288,31 @@
           JSON.stringify(nextSessionParams) !==
           JSON.stringify(currentSessionParams)
         ) {
-          sessions.initFromParams(params);
+          sessions.initFromParams(supportedSessionParams);
           sessionChanged = true;
         }
       }
-      if (params["from"] && params["from"] !== usage.from) {
-        usage.from = params["from"];
-        changed = true;
-      }
-      if (params["to"] && params["to"] !== usage.to) {
-        usage.to = params["to"];
-        changed = true;
+      if (hasDateParam) {
+        const state = panelDateState(
+          params["from"] ?? usage.from,
+          params["to"] ?? usage.to,
+          { mode: "fixed" },
+        );
+        if (state) {
+          changed = applyUsagePanelDate(state) || changed;
+          updateYokeFromUsage(state);
+        }
       }
       const newExProject = splitExcludeProjectParam(
         params["exclude_project"],
       ).usageExcludedProjects;
       if (newExProject !== usage.excludedProjects) {
         usage.excludedProjects = newExProject;
+        changed = true;
+      }
+      const newExAgent = params["exclude_agent"] ?? "";
+      if (newExAgent !== usage.excludedAgents) {
+        usage.excludedAgents = newExAgent;
         changed = true;
       }
       if (usage.excludedModels) {
@@ -206,6 +341,7 @@
       isPinned: usage.isPinned,
       windowDays: usage.windowDays,
       excludedProjects: usage.excludedProjects,
+      excludedProjectKeys: usage.excludedProjectKeys,
       excludedAgents: usage.excludedAgents,
       excludedModels: usage.excludedModels,
       selectedModels: usage.selectedModels,
@@ -237,22 +373,20 @@
 
   onMount(() => {
     mounted = true;
+    // The Agent dropdown reads sessions.agents, which is otherwise loaded
+    // lazily by the sidebar filter control; a direct /usage visit needs it too.
+    sessions.loadAgents();
+    // SSE events only flag new data; RefreshControl owns the periodic refresh
+    // and the manual button. The initial and filter-change fetches run from the
+    // effects above once URL/filter state is hydrated.
+    unsubEvents = events.subscribe(() => usage.markNewData());
     tick().then(() => {
       urlWritebackReady = true;
     });
-    refreshTimer = setInterval(
-      () => usage.fetchAll(),
-      REFRESH_MS,
-    );
-    unsubEvents = events.subscribeDebounced(
-      () => usage.fetchAll(),
-    );
   });
 
   onDestroy(() => {
-    if (refreshTimer !== undefined) {
-      clearInterval(refreshTimer);
-    }
+    usage.cancelInFlightReads();
     unsubEvents?.();
   });
 </script>
@@ -273,15 +407,15 @@
         />
       </div>
 
-      <DateRangeSelector
-        from={usage.from}
-        to={usage.to}
-        onChange={(from, to) => usage.setDateRange(from, to)}
-        onPreset={(days) => usage.setRollingWindow(days)}
+      <RangePicker
+        selection={rangeSelection}
+        busy={usage.isQuerying}
+        {earliestSession}
+        onSelect={applyRange}
       />
 
       <FilterDropdown
-        label="Project"
+        label={m.analytics_col_project()}
         items={projectItems}
         excludedCsv={usage.excludedProjects}
         onToggle={(name) => usage.toggleProject(name)}
@@ -291,7 +425,17 @@
       />
 
       <FilterDropdown
-        label="Model"
+        label={m.analytics_col_agent()}
+        items={agentItems}
+        excludedCsv={usage.excludedAgents}
+        onToggle={(name) => usage.toggleAgent(name)}
+        onSelectAll={() => usage.selectAllAgents()}
+        onDeselectAll={() =>
+          usage.deselectAllAgents(agentItems.map((a) => a.name))}
+      />
+
+      <FilterDropdown
+        label={m.usage_model()}
         items={modelItems}
         excludedCsv={usage.selectedModels}
         mode="include"
@@ -301,21 +445,13 @@
           usage.deselectAllModels(modelItems.map((m) => m.name))}
       />
 
-      <button
-        class="refresh-btn"
-        onclick={() => usage.fetchAll()}
-        title="Refresh"
-        aria-label="Refresh usage data"
-      >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 16 16"
-          fill="currentColor"
-        >
-          <path d="M8 3a5 5 0 00-4.546 2.914.5.5 0 01-.908-.418A6 6 0 0114 8a.5.5 0 01-1 0 5 5 0 00-5-5zm4.546 7.086a.5.5 0 01.908.418A6 6 0 012 8a.5.5 0 011 0 5 5 0 005 5 5 5 0 004.546-2.914z" />
-        </svg>
-      </button>
+      <RefreshControl
+        lastUpdatedAt={usage.lastUpdatedAt}
+        busy={usage.isQuerying}
+        onRefresh={() => usage.fetchAll()}
+        label={m.usage_refresh()}
+        title={m.shared_refresh()}
+      />
 
     </div>
   </div>
@@ -323,29 +459,54 @@
   <SessionActiveFilters
     modelFilters={selectedModels}
     onClearProjects={() => usage.selectAllProjects()}
+    onClearAgents={() => usage.selectAllAgents()}
     onRemoveModel={(model) => usage.toggleModel(model)}
     onClearModels={() => usage.selectAllModels()}
   />
 
-  <div class="usage-content">
+  <div
+    class="usage-content"
+    class:querying={usage.isQuerying}
+    aria-busy={usage.isQuerying}
+  >
+    {#if usage.isQuerying}
+      <div class="query-progress" aria-hidden="true"></div>
+    {/if}
+
+    {#if unsupportedUsageMessage}
+      <Card level="default" padding="none" class="usage-note">
+        <div role="status">
+          {unsupportedUsageMessage}
+        </div>
+      </Card>
+    {/if}
+
     <UsageSummaryCards />
 
-    <div class="chart-panel wide">
-      <CostTimeSeriesChart />
-    </div>
+    <Card level="default" padding="none" class="chart-panel wide">
+      <CostTimeSeriesChart
+        colorMap={chartColorMaps[usage.toggles.timeSeries.groupBy]}
+      />
+    </Card>
 
-    <div class="chart-panel wide">
-      <AttributionPanel />
-    </div>
+    <Card level="default" padding="none" class="chart-panel wide">
+      <AttributionPanel
+        colorMap={chartColorMaps[usage.toggles.attribution.groupBy]}
+      />
+    </Card>
 
     <div class="bottom-grid">
-      <div class="chart-panel">
+      <Card level="default" padding="none" class="chart-panel bounded">
         <TopSessionsTable />
-      </div>
-      <div class="chart-panel">
+      </Card>
+      <Card level="default" padding="none" class="chart-panel bounded">
         <CacheEfficiencyPanel />
-      </div>
+      </Card>
     </div>
+
+    <Card level="default" padding="none" class="chart-panel wide">
+      <UsagePairwiseComparisonPanel />
+    </Card>
   </div>
 </div>
 
@@ -381,22 +542,6 @@
     align-items: center;
   }
 
-  .refresh-btn {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    cursor: pointer;
-  }
-
-  .refresh-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-  }
-
   .usage-content {
     flex: 1;
     overflow-y: auto;
@@ -404,17 +549,51 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    position: relative;
+    transition: opacity 0.12s;
   }
 
-  .chart-panel {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-md);
+  .usage-content :global(.usage-note) {
+    padding: 12px 14px;
+    border-left: 4px solid var(--accent-blue);
+    color: var(--text-secondary);
+  }
+
+  .usage-content.querying {
+    opacity: 0.88;
+  }
+
+  .query-progress {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 4;
+    height: 2px;
+    overflow: hidden;
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 16%,
+      transparent
+    );
+  }
+
+  .query-progress::before {
+    content: "";
+    display: block;
+    width: 38%;
+    height: 100%;
+    background: var(--accent-blue);
+    border-radius: 999px;
+    animation: query-progress 1s ease-in-out infinite;
+  }
+
+  .usage-content :global(.chart-panel) {
     padding: 12px;
     min-width: 0;
   }
 
-  .chart-panel.wide {
+  .usage-content :global(.chart-panel.wide) {
     width: 100%;
   }
 
@@ -422,11 +601,26 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
+    align-items: start;
   }
 
-  @media (max-width: 800px) {
+  .usage-content :global(.chart-panel.bounded) {
+    max-height: min(420px, 48vh);
+    overflow: auto;
+  }
+
+  @media (max-width: 760px) {
     .bottom-grid {
       grid-template-columns: 1fr;
+    }
+  }
+
+  @keyframes query-progress {
+    0% {
+      transform: translateX(-105%);
+    }
+    100% {
+      transform: translateX(265%);
     }
   }
 </style>

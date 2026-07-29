@@ -4,13 +4,16 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
-  import { projectColor } from "../../utils/projectColor.js";
   import Treemap from "./Treemap.svelte";
+  import { m } from "../../i18n/index.js";
+  import type { Money } from "../../money.js";
+  import { formatMoney, moneyFromMicrodollars } from "../../money.js";
 
-  function fmtCost(v: number): string {
-    if (v >= 100) return `$${v.toFixed(0)}`;
-    return `$${v.toFixed(2)}`;
+  interface Props {
+    colorMap: ReadonlyMap<string, string>;
   }
+
+  let { colorMap }: Props = $props();
 
   function fmtPct(v: number, total: number): string {
     if (total <= 0) return "";
@@ -28,19 +31,19 @@
     pct: number;
   }
 
-  const rows = $derived.by((): Row[] => {
+  const rowItems = $derived.by(() => {
     const s = usage.summary;
     if (!s) return [];
 
     let items: Array<{
       id: string;
       label: string;
-      cost: number;
+      cost: Money;
     }> = [];
 
     if (groupBy === "project") {
       items = s.projectTotals.map((p) => ({
-        id: p.project,
+        id: p.project_key,
         label: p.project,
         cost: p.cost,
       }));
@@ -58,15 +61,20 @@
       }));
     }
 
-    items.sort((a, b) => b.cost - a.cost);
-    const total = items.reduce((s, d) => s + d.cost, 0);
+    items.sort((a, b) => b.cost.microdollars - a.cost.microdollars);
+    return items;
+  });
+
+  const rows = $derived.by((): Row[] => {
+    const items = rowItems;
+    const total = items.reduce((s, d) => s + d.cost.microdollars, 0);
 
     return items.map((d) => ({
       id: d.id,
       label: d.label,
-      cost: d.cost,
-      color: projectColor(d.id),
-      pct: total > 0 ? d.cost / total : 0,
+      cost: d.cost.microdollars,
+      color: colorMap.get(d.id) ?? "var(--text-muted)",
+      pct: total > 0 ? d.cost.microdollars / total : 0,
     }));
   });
 
@@ -84,7 +92,7 @@
 
   function handleSelect(id: string) {
     if (groupBy === "project") {
-      usage.toggleProject(id);
+      usage.toggleProjectKey(id);
     } else if (groupBy === "agent") {
       usage.toggleAgent(id);
     } else {
@@ -103,7 +111,7 @@
 
 <div class="attribution-panel">
   <div class="panel-header">
-    <h3 class="chart-title">Cost Attribution</h3>
+    <h3 class="chart-title">{m.usage_cost_attribution_title()}</h3>
     <div class="toggles">
       <div class="segment-toggle">
         <button
@@ -111,21 +119,21 @@
           class:active={groupBy === "project"}
           onclick={() => handleGroupByChange("project")}
         >
-          Project
+          {m.analytics_col_project()}
         </button>
         <button
           class="toggle-btn"
           class:active={groupBy === "model"}
           onclick={() => handleGroupByChange("model")}
         >
-          Model
+          {m.usage_model()}
         </button>
         <button
           class="toggle-btn"
           class:active={groupBy === "agent"}
           onclick={() => handleGroupByChange("agent")}
         >
-          Agent
+          {m.analytics_col_agent()}
         </button>
       </div>
       <div class="segment-toggle">
@@ -134,23 +142,23 @@
           class:active={view === "treemap"}
           onclick={() => handleViewChange("treemap")}
         >
-          Treemap
+          {m.usage_attribution_treemap()}
         </button>
         <button
           class="toggle-btn"
           class:active={view === "list"}
           onclick={() => handleViewChange("list")}
         >
-          List
+          {m.usage_attribution_list()}
         </button>
       </div>
     </div>
   </div>
 
   {#if rows.length === 0}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    <div class="hint">Click to hide from chart</div>
+    <div class="hint">{m.usage_click_to_hide_hint()}</div>
     {#if view === "treemap"}
       <div class="treemap-layout">
         <div class="treemap-main">
@@ -166,7 +174,7 @@
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="rail-row"
-              title="Click to hide {row.label}"
+              title={m.usage_click_to_hide({ label: row.label })}
               onclick={() => handleSelect(row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
@@ -175,7 +183,7 @@
                 style="background: {row.color}"
               ></span>
               <span class="rail-label">{row.label}</span>
-              <span class="rail-cost">{fmtCost(row.cost)}</span>
+              <span class="rail-cost">{formatMoney(moneyFromMicrodollars(row.cost))}</span>
             </div>
           {/each}
         </div>
@@ -187,7 +195,7 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="list-row"
-            title="Click to hide {row.label}"
+            title={m.usage_click_to_hide({ label: row.label })}
             onclick={() => handleSelect(row.id)}
           >
             <span class="list-rank">{i + 1}</span>
@@ -208,7 +216,7 @@
             <span class="list-pct">
               {(row.pct * 100).toFixed(1)}%
             </span>
-            <span class="list-cost">{fmtCost(row.cost)}</span>
+            <span class="list-cost">{formatMoney(moneyFromMicrodollars(row.cost))}</span>
           </div>
         {/each}
       </div>
@@ -378,7 +386,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: var(--space-2);
   }
 
   .list-label {
@@ -435,7 +443,7 @@
     font-style: italic;
   }
 
-  @media (max-width: 600px) {
+  @media (max-width: 640px) {
     .treemap-layout {
       grid-template-columns: 1fr;
     }

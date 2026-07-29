@@ -19,7 +19,7 @@ func ExtractZip(zipPath string) (string, func(), error) {
 	}
 	defer r.Close()
 
-	dir, err := os.MkdirTemp("", "periscope-import-*")
+	dir, err := os.MkdirTemp("", "agentsview-import-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("creating temp dir: %w", err)
 	}

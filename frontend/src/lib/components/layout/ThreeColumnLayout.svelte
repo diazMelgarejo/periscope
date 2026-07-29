@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { m } from "../../i18n/index.js";
   import {
     SIDEBAR_DESKTOP_BREAKPOINT,
     SIDEBAR_WIDTH_DEFAULT,
@@ -12,6 +13,16 @@
   import { router } from "../../stores/router.svelte.js";
   import type { Route } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import {
+    ActivityIcon,
+    ChartColumnIcon,
+    Grid2x2Icon,
+    LayoutGridIcon,
+    LogsIcon,
+    PencilIcon,
+    PinIcon,
+    TrashIcon,
+  } from "../../icons.js";
 
   interface Props {
     sidebar: Snippet;
@@ -223,6 +234,7 @@
 
   $effect(() => {
     if (!layoutElement) return;
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- reactive dependency: re-measure layout when viewport width changes
     viewportWidth;
     measureLayoutWidth();
   });
@@ -281,7 +293,7 @@
   {#if ui.isMobileViewport && ui.sidebarOpen}
     <button
       class="sidebar-backdrop"
-      aria-label="Close sidebar"
+      aria-label={m.nav_close_sidebar()}
       onclick={handleBackdropClick}
     ></button>
   {/if}
@@ -297,63 +309,64 @@
         class:active={router.route === "sessions" || router.route === "context"}
         onclick={() => mobileNav("sessions")}
       >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M0 1.5A1.5 1.5 0 011.5 0h2A1.5 1.5 0 015 1.5v2A1.5 1.5 0 013.5 5h-2A1.5 1.5 0 010 3.5v-2zm6 0A1.5 1.5 0 017.5 0h2A1.5 1.5 0 0111 1.5v2A1.5 1.5 0 019.5 5h-2A1.5 1.5 0 016 3.5v-2zm5 0A1.5 1.5 0 0112.5 0h2A1.5 1.5 0 0116 1.5v2A1.5 1.5 0 0114.5 5h-2A1.5 1.5 0 0111 3.5v-2zM0 7.5A1.5 1.5 0 011.5 6h2A1.5 1.5 0 015 7.5v2A1.5 1.5 0 013.5 11h-2A1.5 1.5 0 010 9.5v-2zm6 0A1.5 1.5 0 017.5 6h2A1.5 1.5 0 0111 7.5v2A1.5 1.5 0 019.5 11h-2A1.5 1.5 0 016 9.5v-2zm5 0A1.5 1.5 0 0112.5 6h2A1.5 1.5 0 0116 7.5v2a1.5 1.5 0 01-1.5 1.5h-2A1.5 1.5 0 0111 9.5v-2zM0 13.5A1.5 1.5 0 011.5 12h2A1.5 1.5 0 015 13.5v2A1.5 1.5 0 013.5 17h-2A1.5 1.5 0 010 15.5v-2zm6 0A1.5 1.5 0 017.5 12h2a1.5 1.5 0 011.5 1.5v2A1.5 1.5 0 019.5 17h-2A1.5 1.5 0 016 15.5v-2zm5 0a1.5 1.5 0 011.5-1.5h2a1.5 1.5 0 011.5 1.5v2a1.5 1.5 0 01-1.5 1.5h-2a1.5 1.5 0 01-1.5-1.5v-2z"/>
-        </svg>
-        Sessions
+        <LayoutGridIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_sessions()}
       </button>
       <button
         class="mobile-nav-btn"
         class:active={router.route === "usage"}
         onclick={() => mobileNav("usage")}
       >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M1 2.5A1.5 1.5 0 012.5 1h3A1.5 1.5 0 017 2.5v3A1.5 1.5 0 015.5 7h-3A1.5 1.5 0 011 5.5v-3zM2.5 2a.5.5 0 00-.5.5v3a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3a.5.5 0 00-.5-.5h-3zm6.5.5A1.5 1.5 0 0110.5 1h3A1.5 1.5 0 0115 2.5v3A1.5 1.5 0 0113.5 7h-3A1.5 1.5 0 019 5.5v-3zm1.5-.5a.5.5 0 00-.5.5v3a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3a.5.5 0 00-.5-.5h-3zM1 10.5A1.5 1.5 0 012.5 9h3A1.5 1.5 0 017 10.5v3A1.5 1.5 0 015.5 15h-3A1.5 1.5 0 011 13.5v-3zm1.5-.5a.5.5 0 00-.5.5v3a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3a.5.5 0 00-.5-.5h-3zm6.5.5A1.5 1.5 0 0110.5 9h3a1.5 1.5 0 011.5 1.5v3a1.5 1.5 0 01-1.5 1.5h-3A1.5 1.5 0 019 13.5v-3zm1.5-.5a.5.5 0 00-.5.5v3a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-3a.5.5 0 00-.5-.5h-3z"/>
-        </svg>
-        Usage
+        <Grid2x2Icon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_usage()}
+      </button>
+      <button
+        class="mobile-nav-btn"
+        class:active={router.route === "activity"}
+        onclick={() => mobileNav("activity")}
+      >
+        <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_activity()}
       </button>
       <button
         class="mobile-nav-btn"
         class:active={router.route === "trends"}
         onclick={() => mobileNav("trends")}
       >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M2 13.5a.5.5 0 01-.5-.5V2a.5.5 0 011 0v10.5H14a.5.5 0 010 1H2z"/>
-          <path d="M3.35 10.35a.5.5 0 010-.7l2.5-2.5a.5.5 0 01.7 0L8.5 9.09l3.15-4.44a.5.5 0 01.82.58l-3.5 4.94a.5.5 0 01-.76.06L6.2 8.21l-2.15 2.14a.5.5 0 01-.7 0z"/>
-        </svg>
-        Trends
+        <ChartColumnIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_trends()}
       </button>
       <button
         class="mobile-nav-btn"
         class:active={router.route === "pinned"}
         onclick={() => mobileNav("pinned")}
       >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M4.146.146A.5.5 0 014.5 0h7a.5.5 0 01.5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 01-.5.5H8.5v5.5a.5.5 0 01-1 0V10H3.5a.5.5 0 01-.5-.5c0-.973.64-1.725 1.17-2.189A6 6 0 015 6.708V2.277a3 3 0 01-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 01.146-.354z"/>
-        </svg>
-        Pinned
+        <PinIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_pinned()}
       </button>
       <button
         class="mobile-nav-btn"
         class:active={router.route === "insights"}
         onclick={() => mobileNav("insights")}
       >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M14.5 3a.5.5 0 01.5.5v9a.5.5 0 01-.5.5h-13a.5.5 0 01-.5-.5v-9a.5.5 0 01.5-.5h13zm-13-1A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0014.5 2h-13z"/>
-          <path d="M3 5.5a.5.5 0 01.5-.5h9a.5.5 0 010 1h-9a.5.5 0 01-.5-.5zM3 8a.5.5 0 01.5-.5h9a.5.5 0 010 1h-9A.5.5 0 013 8zm0 2.5a.5.5 0 01.5-.5h6a.5.5 0 010 1h-6a.5.5 0 01-.5-.5z"/>
-        </svg>
-        Insights
+        <LogsIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_insights()}
       </button>
       <button
         class="mobile-nav-btn"
         class:active={router.route === "trash"}
         onclick={() => mobileNav("trash")}
       >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
-          <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H5.5l1-1h3l1 1h2.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-        </svg>
-        Trash
+        <TrashIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_trash()}
+      </button>
+      <button
+        class="mobile-nav-btn"
+        class:active={router.route === "recent-edits"}
+        onclick={() => mobileNav("recent-edits")}
+      >
+        <PencilIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_recent_edits()}
       </button>
     </nav>
     {@render sidebar()}
@@ -365,7 +378,7 @@
       bind:this={resizeHandleElement}
       data-testid="sidebar-resize-handle"
       role="separator"
-      aria-label="Resize sidebar"
+      aria-label={m.nav_resize_sidebar()}
       aria-orientation="vertical"
       aria-valuemin={SIDEBAR_WIDTH_MIN}
       aria-valuemax={SIDEBAR_WIDTH_STORAGE_MAX}
@@ -413,6 +426,7 @@
   .resize-handle {
     position: relative;
     flex-shrink: 0;
+    /* kit-ui-check-ignore: pointer-capture resizer with persisted width and test contract predates kit-ui SplitResizeHandle; swapping (and gaining keyboard resize) is tracked as a follow-up */
     cursor: col-resize;
     touch-action: none;
     transition: background-color 120ms ease;
@@ -486,12 +500,13 @@
   }
 
   :global(body.sidebar-resizing) {
+    /* kit-ui-check-ignore: body-level drag cursor for the sidebar resizer above */
     cursor: col-resize;
     user-select: none;
     -webkit-user-select: none;
   }
 
-  @media (max-width: 767px) {
+  @media (max-width: 760px) {
     .sidebar {
       position: fixed;
       top: var(--header-height, 40px);
@@ -510,6 +525,7 @@
     .sidebar-backdrop {
       display: block;
       position: fixed;
+      /* kit-ui-check-ignore: scrim behind the mobile sidebar drawer, not a dialog — Modal's centered panel/focus-trap chrome does not apply */
       inset: 0;
       background: var(--overlay-bg);
       z-index: 49;

@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
 	"github.com/latentsignal-org/periscope/internal/parser"
 	"github.com/latentsignal-org/periscope/internal/sync"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // testWatcher creates a Watcher backed by a fresh SQLite database
@@ -19,9 +22,7 @@ func testWatcher(t *testing.T) *Watcher {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database, err := db.Open(dbPath)
-	if err != nil {
-		t.Fatalf("opening db: %v", err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
@@ -38,23 +39,15 @@ func TestStatMtime_NonexistentFile(t *testing.T) {
 	got := StatMtime(
 		filepath.Join(t.TempDir(), "no-such-file"),
 	)
-	if got != 0 {
-		t.Errorf("StatMtime(nonexistent) = %d, want 0", got)
-	}
+	assert.Equal(t, int64(0), got)
 }
 
 func TestStatMtime_ExistingFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "file.txt")
-	if err := os.WriteFile(
-		path, []byte("data"), 0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte("data"), 0o644))
 	got := StatMtime(path)
-	if got == 0 {
-		t.Error("StatMtime(existing) = 0, want nonzero")
-	}
+	assert.NotZero(t, got)
 }
 
 func TestCheckDBForChanges_FileDisappears(t *testing.T) {
@@ -75,13 +68,48 @@ func TestCheckDBForChanges_FileDisappears(t *testing.T) {
 		&lastMtime,
 		&mchanged,
 	)
-	if changed {
-		t.Error("expected no change signal")
-	}
-	if path != "" {
-		t.Errorf("sourcePath = %q, want empty", path)
-	}
-	if lastMtime != 0 {
-		t.Errorf("lastMtime = %d, want 0", lastMtime)
-	}
+	assert.False(t, changed, "expected no change signal")
+	assert.Empty(t, path)
+	assert.Equal(t, int64(0), lastMtime)
+}
+
+func TestCheckDBForChanges_FileHashChange(t *testing.T) {
+	t.Parallel()
+	w := testWatcher(t)
+	database, ok := w.db.(*db.DB)
+	require.True(t, ok, "test watcher should use SQLite DB")
+
+	const sessionID = "hash-change"
+	var mtime int64 = 12345
+	hash1 := "shelley-fingerprint-1"
+	dbtest.SeedSession(t, database, sessionID, "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.FileMtime = &mtime
+		s.FileHash = &hash1
+	})
+
+	lastCount, lastDBMtime, ok := w.db.GetSessionVersion(sessionID)
+	require.True(t, ok, "initial session version")
+
+	hash2 := "shelley-fingerprint-2"
+	dbtest.SeedSession(t, database, sessionID, "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.FileMtime = &mtime
+		s.FileHash = &hash2
+	})
+
+	sourcePath := ""
+	var lastFileMtime int64
+	var mchanged time.Time
+	changed := w.checkDBForChanges(
+		sessionID,
+		&lastCount,
+		&lastDBMtime,
+		&sourcePath,
+		&lastFileMtime,
+		&mchanged,
+	)
+
+	assert.True(t, changed,
+		"file_hash-only rewrites must refresh session watchers")
 }

@@ -1,8 +1,12 @@
 # AgentsView → Periscope rename catalogue
 
-**Status:** living operator guide for upstream merges  
-**Base:** `origin/merged` @ `6cf2f38f` (2026-07-28)  
-**Machine index:** [`agentsview-rename-index.json`](./agentsview-rename-index.json) (96 files, 514 matches)
+**Status:** living operator guide for upstream merges
+**Base:** `candidate@2b6e5128` (2026-07-28) — refreshed from prior snapshot `origin/merged@6cf2f38f`
+**Machine index:** [`agentsview-rename-index.json`](./agentsview-rename-index.json) (844 files, 5165 matches)
+
+> **Historical snapshot:** the milestone index at `origin/merged@6cf2f38f` tracked 96
+> files / 514 matches before the synthesis replay landed. Counts below reflect the
+> current candidate tree; category notes and `session_fixes_2026_07_28` are preserved.
 
 ## Why this exists
 
@@ -19,7 +23,7 @@ canonical merge checklist so agents do not treat the mirror branch as the produc
 name or miss CI/desktop rename debt.
 
 See also: [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) (matryoshka model),
-[`scripts/sync-upstream.sh`](../../scripts/sync-upstream.sh).
+[`scripts/sync-upstream.sh`](https://github.com/diazMelgarejo/periscope/blob/merged/scripts/sync-upstream.sh).
 
 ## Decision tree (use on every upstream merge)
 
@@ -72,23 +76,20 @@ Apply these on **`merged`** (and PR branches targeting `merged`), not on the
 | UI title `AgentsView` | `Periscope` | `internal/web/fallback/index.html`, docs |
 | PG schema default (product) | `periscope` | CLI default; many pg tests still say `agentsview` |
 
-## Category index (all 96 files)
+## Category index (844 files)
 
 | Category | Files | Action |
 | --- | ---: | --- |
-| `rename_ci` | 3 | Rename workflow env vars, build paths, smoke checks |
-| `rename_desktop` | 6 | Sidecar, Tauri spawn, desktop tests, README |
-| `rename_build_release` | 9 | Makefile, install scripts, wheels, e2e |
-| `rename_docs_operator` | 5 | AGENTS.md, README, desktop-release-setup, roborev |
+| `rename_residual` | 704 | Comments, tests, docs — review per hunk |
+| `rename_pg_tests` | 82 | PG integration test schema names |
+| `rename_localstorage` | 16 | localStorage keys — migrate with legacy read |
+| `rename_build_release` | 14 | Makefile, install scripts, wheels, e2e |
+| `rename_desktop` | 11 | Sidecar, Tauri spawn, desktop tests, README |
+| `keep_test_fixtures` | 6 | Parser/sync integration fixtures |
+| `keep_historical` | 4 | `docs/superpowers/*` plans |
+| `rename_docs_operator` | 3 | AGENTS.md, README, desktop-release-setup |
 | `rename_product_strings` | 2 | Export User-Agent / HTML footer |
-| `rename_localstorage` | 8 | localStorage keys — migrate with legacy read |
-| `rename_pg_tests` | 18 | PG integration test schema names |
-| `rename_residual` | 35 | Comments, tests, misc — review per hunk |
 | `compat_env` | 1 | `internal/config/config.go` — keep legacy env reads |
-| `keep_historical` | 2 | `docs/superpowers/*` plans |
-| `keep_upstream_reference` | 1 | `docs/ARCHITECTURE.md` |
-| `keep_test_fixtures` | 5 | Parser/sync integration fixtures |
-| `keep_branch_name` | 1 | `scripts/sync-upstream.sh` |
 | `keep_upstream_sample` | 1 | `support/launchd/io.agentsview.pg-serve.plist` |
 
 Full per-file rows: [`agentsview-rename-index.json`](./agentsview-rename-index.json).
@@ -97,21 +98,21 @@ Full per-file rows: [`agentsview-rename-index.json`](./agentsview-rename-index.j
 
 | Matches | Path | Merge action |
 | ---: | --- | --- |
-| 66 | `scripts/build_wheels_test.py` | Wheel/archive regex → `periscope_*` |
-| 37 | `docs/desktop-release-setup.md` | Operator doc branding |
-| 31 | `desktop/src-tauri/src/lib.rs` | `sidecar("agentsview")` → `"periscope"` |
-| 30 | `README.md` | Product naming |
-| 30 | `internal/postgres/sync_test.go` | Test schema `agentsview` → `periscope` where product-facing |
-| 18 | `scripts/install.ps1` | Windows installer still targets wesm/agentsview |
-| 14 | `internal/sync/engine_integration_test.go` | Fixture cwd paths — **keep** |
-| 11 | `docs/superpowers/specs/…` | **keep** (historical) |
-| 9 | `desktop/README.md` | Sidecar path docs |
-| 6 | `frontend/src/lib/stores/ui.svelte.ts` | localStorage keys — migrate |
-| 6 | `AGENTS.md` | Stale `cmd/agentsview/` paths |
-| 5 | `Makefile` | Residual binary/path names |
-| 3 | `.github/workflows/desktop-artifacts.yml` | See session fixes below |
-| 3 | `desktop/scripts/test-desktop-workflows.sh` | Artifact assert names |
-| 3 | `desktop/scripts/test-prepare-sidecar.sh` | Stale `AGENTSVIEW_VERSION` test comment |
+| 216 | `docs/commands.md` | Operator doc branding |
+| 129 | `docs/changelog.md` | Historical changelog references — review |
+| 125 | `cmd/agentsview/recall_test.go` | Residual `cmd/agentsview/` test paths |
+| 125 | `desktop/src-tauri/src/lib.rs` | `sidecar("agentsview")` → `"periscope"` |
+| 118 | `README.md` | Product naming |
+| 99 | `internal/db/recall_test.go` | Test/schema strings — review |
+| 80 | `docs/configuration.md` | Operator doc branding |
+| 71 | `docs/pg-sync.md` | Operator doc branding |
+| 71 | `internal/db/recall_import_test.go` | Test strings — review |
+| 70 | `scripts/build_wheels_test.py` | Wheel/archive regex → `periscope_*` |
+| 69 | `docs/token-usage.md` | Operator doc branding |
+| 60 | `internal/server/recall_test.go` | Test strings — review |
+| 59 | `docs/session-api.md` | Operator doc branding |
+| 51 | `cmd/agentsview/pg_service_test.go` | Residual `cmd/agentsview/` paths |
+| 6 | `AGENTS.md` | Stale `cmd/agentsview/` paths in examples |
 
 ## CI / desktop checklist after each agentsview sync
 

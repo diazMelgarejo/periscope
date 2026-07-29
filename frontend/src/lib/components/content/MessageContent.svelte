@@ -15,27 +15,49 @@
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
+  import {
+    configureGeneratedClient,
+    isRemoteConnection,
+  } from "../../api/runtime.js";
+  import {
+    SessionsService,
+    type ResumeRequest,
+    type ResumeResponse,
+  } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
   import ParallelGroup from "./ParallelGroup.svelte";
   import CodeBlock from "./CodeBlock.svelte";
+  import MermaidBlock from "./MermaidBlock.svelte";
   import SkillBlock from "./SkillBlock.svelte";
+  import { CopyButton } from "@kenn-io/kit-ui";
   import { ui } from "../../stores/ui.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import { applyHighlight } from "../../utils/highlight.js";
+  import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
+  import { CirclePlayIcon, PinIcon } from "../../icons.js";
   import type { Session } from "../../api/types.js";
+  import { m } from "../../i18n/index.js";
 
   interface Props {
     message: Message;
+    session?: Session | null;
     isSubagentContext?: boolean;
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
   }
 
-  let { message, isSubagentContext = false, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
+  let {
+    message,
+    session,
+    isSubagentContext = false,
+    highlightQuery = "",
+    isCurrentHighlight = false,
+  }: Props = $props();
 
   let copied = $state(false);
 
@@ -82,10 +104,12 @@
     ),
   );
 
-  /** Resolve the session that owns this message, falling back to activeSession. */
+  /** Resolve the owning session, favoring explicit embedded-session context. */
   let owningSession = $derived(
-    sessions.sessions.find((s) => s.id === message.session_id) ??
-      sessions.activeSession,
+    session !== undefined
+      ? session
+      : sessions.sessions.find((s) => s.id === message.session_id) ??
+        sessions.activeSession,
   );
 
   /** Walk the parent chain to check if any ancestor has the teammate tag. */
@@ -120,6 +144,19 @@
     return false;
   }
 
+  const INLINE_TEAMMATE_MESSAGE_RE =
+    /<teammate-message\b[^>]*\bteammate_id\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)[^>]*>[\s\S]*?<\/teammate-message\s*>/;
+
+  let hasInlineTeammateMessage = $derived(
+    isUser &&
+    !isSubagentContext &&
+    segments.some(
+      (segment) =>
+        segment.type === "text" &&
+        INLINE_TEAMMATE_MESSAGE_RE.test(segment.content),
+    ),
+  );
+
   /** Classify the session kind, walking the parent chain. */
   let sessionKind = $derived.by((): "teammate" | "subagent" | "user" => {
     const s = owningSession;
@@ -132,18 +169,19 @@
 
   /** Context-aware role labels based on session type. */
   let roleLabel = $derived.by(() => {
-    if (!isUser) return "Assistant";
-    if (isSubagentContext) return "Agent";
-    if (sessionKind === "teammate") return "Teammate";
-    if (sessionKind === "subagent") return "Agent";
-    return "User";
+    if (!isUser) return m.message_content_role_assistant();
+    if (isSubagentContext) return m.message_content_role_agent();
+    if (sessionKind === "subagent") return m.message_content_role_agent();
+    if (sessionKind === "teammate" || hasInlineTeammateMessage)
+      return m.message_content_role_teammate();
+    return m.message_content_role_user();
   });
 
   let roleIcon = $derived.by(() => {
     if (!isUser) return "A";
     if (isSubagentContext) return "S";
-    if (sessionKind === "teammate") return "T";
     if (sessionKind === "subagent") return "S";
+    if (sessionKind === "teammate" || hasInlineTeammateMessage) return "T";
     return "U";
   });
 
@@ -157,6 +195,9 @@
   let accentColor = $derived(
     isUser ? "var(--accent-blue)" : "var(--accent-purple)",
   );
+  let accentForeground = $derived(
+    isUser ? "var(--accent-blue-foreground)" : "var(--accent-purple-foreground)",
+  );
 
   let roleBg = $derived(
     isUser ? "var(--user-bg)" : "var(--assistant-bg)",
@@ -164,6 +205,7 @@
 
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
+  let forkFeedback = $state("");
 
   /** Index turn timings by message id for O(1) lookup. */
   let turnByMessage = $derived.by(() => {
@@ -206,7 +248,9 @@
       const elapsed = Number.isNaN(startMs)
         ? 0
         : Math.max(0, liveTick.now - startMs);
-      return `running ${formatDuration(elapsed)}+`;
+      return m.message_content_running_duration({
+        duration: formatDuration(elapsed),
+      });
     }
     return undefined;
   }
@@ -227,7 +271,10 @@
     const turn = turnByMessage.get(message.id);
     if (turn?.duration_ms != null) {
       return {
-        text: `turn ${formatDuration(turn.duration_ms)} · ${calls} call${calls === 1 ? "" : "s"}`,
+        text: m.message_content_turn_summary({
+          duration: formatDuration(turn.duration_ms),
+          count: calls,
+        }),
         slow: false,
         running: false,
       };
@@ -239,7 +286,10 @@
         ? 0
         : Math.max(0, liveTick.now - startMs);
       return {
-        text: `running ${formatDuration(elapsed)}+ · ${calls} call${calls === 1 ? "" : "s"}`,
+        text: m.message_content_running_turn_summary({
+          duration: formatDuration(elapsed),
+          count: calls,
+        }),
         slow: false,
         running: true,
       };
@@ -249,6 +299,7 @@
 
   let copyTimer: ReturnType<typeof setTimeout>;
   let pinTimer: ReturnType<typeof setTimeout>;
+  let forkTimer: ReturnType<typeof setTimeout>;
 
   async function handleCopy() {
     const ok = await copyToClipboard(formatMessageForCopy(message));
@@ -268,11 +319,57 @@
         message.ordinal,
       );
       clearTimeout(pinTimer);
-      pinFeedback = wasPinned ? "Unpinned" : "Pinned";
+      pinFeedback = wasPinned
+        ? m.message_content_unpinned()
+        : m.message_content_pinned();
       pinTimer = setTimeout(() => { pinFeedback = ""; }, 1500);
     } catch {
       // silently fail
     }
+  }
+
+  let canForkFromMessage = $derived(
+    owningSession?.agent === "claude" &&
+      !(owningSession?.id ?? "").includes("~") &&
+      !(sync.readOnly && isRemoteConnection()),
+  );
+
+  async function handleForkFromHere() {
+    if (!canForkFromMessage) return;
+    clearTimeout(forkTimer);
+    try {
+      configureGeneratedClient();
+      const resp =
+        await SessionsService.postApiV1SessionsIdResume({
+          id: message.session_id,
+          requestBody: {
+            ...(sync.readOnly && !isRemoteConnection()
+              ? { command_only: true }
+              : {}),
+            from_ordinal: message.ordinal,
+            fork_session: true,
+          } satisfies ResumeRequest,
+        }) as ResumeResponse;
+      if (resp.launched) {
+        forkFeedback = m.session_breadcrumb_resumed_in({
+          target: resp.terminal ?? "terminal",
+        });
+        forkTimer = setTimeout(() => { forkFeedback = ""; }, 2000);
+        return;
+      }
+      if (resp.command) {
+        const ok = await copyToClipboard(resp.command);
+        forkFeedback = ok
+          ? m.session_breadcrumb_command_copied()
+          : m.session_breadcrumb_failed();
+        forkTimer = setTimeout(() => { forkFeedback = ""; }, 2000);
+        return;
+      }
+    } catch {
+      // silently fail
+    }
+    forkFeedback = m.session_breadcrumb_failed();
+    forkTimer = setTimeout(() => { forkFeedback = ""; }, 2000);
   }
 </script>
 
@@ -286,6 +383,7 @@
     <span
       class="role-icon"
       style:background={accentColor}
+      style:color={accentForeground}
     >
       {roleIcon}
     </span>
@@ -295,36 +393,42 @@
     >
       {roleLabel}
     </span>
-    <button
-      type="button"
-      class="copy-btn"
-      title={copied ? "Copied!" : "Copy message"}
+    <CopyButton
+      revealOnHover
+      {copied}
+      ariaLabel={m.message_content_copy_message()}
+      copiedAriaLabel={m.message_content_copied_message()}
+      title={m.message_content_copy_message()}
+      copiedTitle={m.message_content_copied()}
       onclick={handleCopy}
-    >
-      {#if copied}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
-        </svg>
-      {:else}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/>
-          <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/>
-        </svg>
-      {/if}
-    </button>
+    />
     <button
       type="button"
       class="pin-btn"
       class:pinned
-      title={pinned ? "Unpin message" : "Pin message"}
+      title={pinned
+        ? m.message_content_unpin_message()
+        : m.message_content_pin_message()}
       onclick={handleTogglePin}
     >
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M4.146.146A.5.5 0 014.5 0h7a.5.5 0 01.5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 01-.5.5H8.5v5.5a.5.5 0 01-1 0V10H3.5a.5.5 0 01-.5-.5c0-.973.64-1.725 1.17-2.189A6 6 0 015 6.708V2.277a3 3 0 01-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 01.146-.354z"/>
-      </svg>
+      <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
+    {#if canForkFromMessage}
+      <button
+        type="button"
+        class="pin-btn fork-btn"
+        title={m.session_breadcrumb_resume_session()}
+        aria-label={m.session_breadcrumb_resume_session()}
+        onclick={handleForkFromHere}
+      >
+        <CirclePlayIcon size="14" strokeWidth="1.8" aria-hidden="true" />
+      </button>
+    {/if}
     {#if pinFeedback}
       <span class="pin-feedback">{pinFeedback}</span>
+    {/if}
+    {#if forkFeedback}
+      <span class="fork-feedback">{forkFeedback}</span>
     {/if}
     <div class="header-meta">
       {#if tokenSummary}
@@ -368,12 +472,26 @@
              (v1 simplification: text first, then all tools). -->
       {:else if segment.type === "code"}
         {#if hasSearchQuery || ui.isBlockVisible("code")}
-          <CodeBlock
-            content={segment.content}
-            language={segment.label}
-            highlightQuery={highlightQuery}
-            isCurrentHighlight={isCurrentHighlight}
-          />
+          {@const codeLabel = segment.label?.trim().toLowerCase()}
+          {#if codeLabel === "mermaid"}
+            {#if hasSearchQuery}
+              <CodeBlock
+                content={segment.content}
+                language={segment.label}
+                highlightQuery={highlightQuery}
+                isCurrentHighlight={isCurrentHighlight}
+              />
+            {:else}
+              <MermaidBlock content={segment.content} />
+            {/if}
+          {:else}
+            <CodeBlock
+              content={segment.content}
+              language={segment.label}
+              highlightQuery={highlightQuery}
+              isCurrentHighlight={isCurrentHighlight}
+            />
+          {/if}
         {/if}
       {:else if segment.type === "skill"}
         {#if showText}
@@ -387,6 +505,11 @@
               q: highlightQuery,
               current: isCurrentHighlight,
               content: segment.content,
+            }}
+            use:highlightCodeFences={{
+              q: highlightQuery,
+              content: segment.content,
+              current: isCurrentHighlight,
             }}
           >
             {@html renderMarkdown(segment.content)}
@@ -511,10 +634,10 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-muted);
-    background: rgba(255, 255, 255, 0.04);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
     padding: 2px 8px;
     border-radius: var(--radius-sm);
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
     white-space: nowrap;
     flex-shrink: 0;
   }
@@ -532,40 +655,8 @@
     animation: duration-pulse 1.6s ease-in-out infinite;
   }
 
-  .copy-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.15s, background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .message:hover .copy-btn,
-  .copy-btn:focus-visible {
+  .message:hover :global(.kit-copy-btn) {
     opacity: 1;
-  }
-
-  @media (hover: none) {
-    .copy-btn {
-      opacity: 1;
-    }
-  }
-
-  .copy-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-secondary);
-  }
-
-  .copy-btn:active {
-    transform: scale(0.92);
   }
 
   .pin-btn {
@@ -610,6 +701,12 @@
   }
 
   .pin-feedback {
+    font-size: 11px;
+    color: var(--text-muted);
+    animation: fade-in-out 1.5s ease-in-out;
+  }
+
+  .fork-feedback {
     font-size: 11px;
     color: var(--text-muted);
     animation: fade-in-out 1.5s ease-in-out;

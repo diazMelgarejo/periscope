@@ -1403,7 +1403,7 @@ func toolOutputSnippet(tc db.ToolCall) string {
 }
 
 func firstNonEmptyLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		if trimmed := strings.TrimSpace(line); trimmed != "" {
 			return trimmed
 		}

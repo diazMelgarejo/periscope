@@ -1,3 +1,8 @@
+---
+title: Periscope V1 Implementation Plan
+description: Draft implementation plan for Periscope V1
+---
+
 # Periscope V1 Implementation Plan
 
 ## Document Status

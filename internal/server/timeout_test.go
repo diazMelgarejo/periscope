@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/latentsignal-org/periscope/internal/sessionwatch"
 	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
@@ -18,7 +21,11 @@ import (
 func TestServerTimeouts(t *testing.T) {
 	// Set a very short WriteTimeout to verify SSE is exempt.
 	writeTimeout := 100 * time.Millisecond
-	sleepDuration := 500 * time.Millisecond
+	sleepDuration := 300 * time.Millisecond
+	const watchPoll = 25 * time.Millisecond
+	t.Cleanup(sessionwatch.SetTimingsForTest(
+		watchPoll, 50*time.Millisecond,
+	))
 
 	te := setup(t, withWriteTimeout(writeTimeout))
 
@@ -45,19 +52,13 @@ func TestServerTimeouts(t *testing.T) {
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, url, nil,
 	)
-	if err != nil {
-		t.Fatalf("creating request: %v", err)
-	}
+	require.NoError(t, err)
 
 	resp, err := (&http.Client{}).Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
+	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
-	}
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Trigger an update after 500ms (> WriteTimeout).
 	errCh := make(chan error, 1)
@@ -97,6 +98,9 @@ func TestServerTimeouts(t *testing.T) {
 				readCh <- scanner.Text()
 				return
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			t.Logf("reading watch stream: %v", err)
 		}
 		close(readCh)
 	}()
