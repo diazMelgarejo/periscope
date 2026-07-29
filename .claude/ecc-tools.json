@@ -5,8 +5,8 @@
   "generatedAt": "2026-07-28T14:38:14.771Z",
   "repo": "https://github.com/diazMelgarejo/periscope",
   "referenceSetReadiness": {
-    "score": 29,
-    "present": 2,
+    "score": 43,
+    "present": 3,
     "total": 7,
     "items": [
       {
@@ -19,8 +19,10 @@
       {
         "id": "rag-evaluator",
         "label": "RAG/evaluator comparison",
-        "status": "missing",
-        "evidence": [],
+        "status": "present",
+        "evidence": [
+          "frontend/src/lib/storage/local-storage-key.test.ts"
+        ],
         "recommendation": "Add retrieval or evaluator reference-set comparison fixtures with expected ranking behavior."
       },
       {
@@ -42,9 +44,9 @@
         "label": "Harness compatibility",
         "status": "present",
         "evidence": [
-          ".agents/skills/localization-paraglide/SKILL.md",
-          ".agents/skills/localization-paraglide/agents/openai.yaml",
-          ".agents/skills/localization-paraglide/references/paraglide-formatting.md"
+          ".agents/skills/periscope/SKILL.md",
+          ".agents/skills/periscope/agents/openai.yaml",
+          ".claude/ecc-tools.json"
         ],
         "recommendation": "Add cross-harness, adapter-compliance, or harness-audit evidence for Claude, Codex, OpenCode, Zed, dmux, and agent surfaces."
       },
@@ -53,8 +55,8 @@
         "label": "Security evidence",
         "status": "present",
         "evidence": [
-          "SECURITY.md",
-          "scripts/git/audit_attribution.sh"
+          "scripts/git/audit_attribution.sh",
+          "scripts/git/audit_engine.py"
         ],
         "recommendation": "Attach security evidence such as SBOMs, SARIF, audit reports, or AgentShield evidence packs."
       },
@@ -184,7 +186,10 @@
     ".claude/homunculus/instincts/inherited/periscope-instincts.yaml",
     ".claude/commands/database-migration.md",
     ".claude/commands/feature-development.md",
-    ".claude/commands/refactoring.md"
+    ".claude/commands/refactoring.md",
+    ".claude/commands/add-or-update-backend-feature-with-tests.md",
+    ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
+    ".claude/commands/documentation-and-blueprint-update.md"
   ],
   "packageFiles": {
     "runtime-core": [
@@ -202,7 +207,10 @@
     "workflow-pack": [
       ".claude/commands/database-migration.md",
       ".claude/commands/feature-development.md",
-      ".claude/commands/refactoring.md"
+      ".claude/commands/refactoring.md",
+      ".claude/commands/add-or-update-backend-feature-with-tests.md",
+      ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
+      ".claude/commands/documentation-and-blueprint-update.md"
     ]
   },
   "moduleFiles": {
@@ -221,7 +229,10 @@
     "workflow-pack": [
       ".claude/commands/database-migration.md",
       ".claude/commands/feature-development.md",
-      ".claude/commands/refactoring.md"
+      ".claude/commands/refactoring.md",
+      ".claude/commands/add-or-update-backend-feature-with-tests.md",
+      ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
+      ".claude/commands/documentation-and-blueprint-update.md"
     ]
   },
   "files": [
@@ -289,20 +300,35 @@
       "moduleId": "workflow-pack",
       "path": ".claude/commands/refactoring.md",
       "description": "Workflow command scaffold for refactoring."
+    },
+    {
+      "moduleId": "workflow-pack",
+      "path": ".claude/commands/add-or-update-backend-feature-with-tests.md",
+      "description": "Workflow command scaffold for add-or-update-backend-feature-with-tests."
+    },
+    {
+      "moduleId": "workflow-pack",
+      "path": ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
+      "description": "Workflow command scaffold for frontend-component-update-with-i18n-and-tests."
+    },
+    {
+      "moduleId": "workflow-pack",
+      "path": ".claude/commands/documentation-and-blueprint-update.md",
+      "description": "Workflow command scaffold for documentation-and-blueprint-update."
     }
   ],
   "workflows": [
     {
-      "command": "database-migration",
-      "path": ".claude/commands/database-migration.md"
+      "command": "add-or-update-backend-feature-with-tests",
+      "path": ".claude/commands/add-or-update-backend-feature-with-tests.md"
     },
     {
-      "command": "feature-development",
-      "path": ".claude/commands/feature-development.md"
+      "command": "frontend-component-update-with-i18n-and-tests",
+      "path": ".claude/commands/frontend-component-update-with-i18n-and-tests.md"
     },
     {
-      "command": "refactoring",
-      "path": ".claude/commands/refactoring.md"
+      "command": "documentation-and-blueprint-update",
+      "path": ".claude/commands/documentation-and-blueprint-update.md"
     }
   ],
   "adapters": {
@@ -312,7 +338,10 @@
       "commandPaths": [
         ".claude/commands/database-migration.md",
         ".claude/commands/feature-development.md",
-        ".claude/commands/refactoring.md"
+        ".claude/commands/refactoring.md",
+        ".claude/commands/add-or-update-backend-feature-with-tests.md",
+        ".claude/commands/frontend-component-update-with-i18n-and-tests.md",
+        ".claude/commands/documentation-and-blueprint-update.md"
       ]
     },
     "codex": {
