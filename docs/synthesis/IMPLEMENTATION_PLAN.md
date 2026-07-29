@@ -111,7 +111,7 @@ Unify `merged` (Periscope fork Layer 3) with `cursor/agentsview-purified-onto-ke
 | 2 | pending | — | pass2-agent | — |
 | 3 | done | `4321d36b` | pass3-agent | identity invariants verified vs merged; sync-upstream Layer 1 docs; verify-staged copied |
 | 4 | done | — | pass4-agent | kit-ui Card/EmptyState in context; kept merged session prop init |
-| 5 | done | (this commit) | pass5-agent | docs union + ECC replay (merged superset kept) |
+| 5 | done | `PASS5_SHA` | pass5-agent | docs union + ECC replay (merged superset kept) |
 | 6 | pending | — | orchestrator | — |
 
 ## Doctrine

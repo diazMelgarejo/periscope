@@ -345,3 +345,16 @@ The sync script's known-patterns table will auto-preserve it.
 - [ ] JetBrains plugin built: `cd jetbrains-plugin && ./gradlew buildPlugin`
 - [ ] Plugin zip attached to GitHub release manually (or via CI)
 - [ ] Install script tested on clean Mac: `curl ... | bash`
+
+---
+
+## Related documents
+
+| Document | Role |
+| --- | --- |
+| [`periscope-upstream-sync-blueprint.md`](guides/periscope-upstream-sync-blueprint.md) | Canonical sync policy |
+| [`periscope-modernization-status.md`](guides/periscope-modernization-status.md) | Current modernization snapshot |
+| [`agentsview-to-periscope-rename-catalogue.md`](guides/agentsview-to-periscope-rename-catalogue.md) | Rename decision tree |
+| [`superpowers/specs/2026-05-10-periscope-build-design.md`](https://github.com/diazMelgarejo/periscope/blob/merged/docs/superpowers/specs/2026-05-10-periscope-build-design.md) | Historical build design (May 2026) |
+| [`superpowers/plans/2026-05-10-periscope-build-system.md`](https://github.com/diazMelgarejo/periscope/blob/merged/docs/superpowers/plans/2026-05-10-periscope-build-system.md) | Historical implementation plan |
+
