@@ -1,5 +1,5 @@
-<!-- kit-ui-check-ignore: context visualizer MVP cherry-picked upstream; kit-ui Card/TopBar/spacing migration tracked as follow-up -->
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import type { ContextCapacity, ContextSummary } from "../../api/types.js";
   import type { Session } from "../../api/types.js";
   import { formatRelativeTime, formatTimestamp, formatTokenCount } from "../../utils/format.js";
@@ -44,9 +44,9 @@
   }
 </script>
 
-<section class="context-card">
-  <div class="header">
-    <div class="header-left">
+<Card level="default" padding="none" class="context-card">
+  <div class="summary-header">
+    <div class="summary-leading">
       <div class="eyebrow">Context Summary</div>
       <h2>{subtitle}</h2>
       <div class="session-pills">
@@ -82,17 +82,17 @@
   </div>
 
   <div class="stats-grid">
-    <div class="stat" title={provenanceTooltip(summary.tokens_provenance)}>
-      <span class="label">Used</span>
+    <Card level="inset" padding="none" class="stat">
+      <span class="label" title={provenanceTooltip(summary.tokens_provenance)}>Used</span>
       <strong>
         {formatTokenCount(summary.tokens_in_use)}
         {#if capacity.max_tokens > 0}
           <span class="stat-pct">of {formatTokenCount(capacity.max_tokens)} ({percentLabel(summary.percent_consumed)})</span>
         {/if}
       </strong>
-    </div>
-    <div class="stat" title={provenanceTooltip(capacity.provenance)}>
-      <span class="label">Remaining</span>
+    </Card>
+    <Card level="inset" padding="none" class="stat">
+      <span class="label" title={provenanceTooltip(capacity.provenance)}>Remaining</span>
       <strong>
         {#if summary.remaining_known}
           {formatTokenCount(summary.remaining_tokens)}
@@ -101,7 +101,7 @@
           —
         {/if}
       </strong>
-    </div>
+    </Card>
   </div>
 
   {#if warnings.length > 0}
@@ -111,26 +111,23 @@
       {/each}
     </div>
   {/if}
-</section>
+</Card>
 
 <style>
-  .context-card {
-    border: 1px solid var(--border-muted);
-    background: var(--bg-surface);
-    border-radius: var(--radius-md);
+  :global(.context-card) {
     padding: 12px;
     display: grid;
     gap: 12px;
   }
 
-  .header {
+  .summary-header {
     display: flex;
     justify-content: space-between;
     gap: 16px;
     align-items: end;
   }
 
-  .header-left {
+  .summary-leading {
     display: grid;
     gap: 4px;
   }
@@ -224,16 +221,13 @@
     gap: 8px;
   }
 
-  .stat {
+  :global(.stat) {
     padding: 10px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
     display: grid;
     gap: 2px;
   }
 
-  .stat strong {
+  :global(.stat) strong {
     font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
@@ -259,7 +253,7 @@
   }
 
   @media (max-width: 900px) {
-    .header {
+    .summary-header {
       flex-direction: column;
       align-items: start;
     }

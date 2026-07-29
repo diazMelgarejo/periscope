@@ -8,6 +8,8 @@ repo_root="$(cd "$docs_root/.." && pwd)"
 static_branch="${AGENTSVIEW_DOCS_ASSETS_BRANCH:-docs-assets}"
 generated_branch="${AGENTSVIEW_DOCS_GENERATED_ASSETS_BRANCH:-docs-generated-assets}"
 use_local_branches="${AGENTSVIEW_DOCS_USE_LOCAL_ASSET_BRANCHES:-false}"
+assets_upstream="${AGENTSVIEW_DOCS_ASSETS_UPSTREAM:-https://github.com/kenn-io/agentsview.git}"
+assets_upstream_remote="${AGENTSVIEW_DOCS_ASSETS_UPSTREAM_REMOTE:-docs-assets-upstream}"
 
 static_target="$docs_root/assets/static"
 generated_target="$docs_root/assets/generated"
@@ -110,6 +112,23 @@ in_git_worktree() {
   git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
 
+fetch_asset_branch() {
+  local remote="$1"
+  local branch="$2"
+
+  git -C "$repo_root" fetch --force --depth=1 "$remote" \
+    "+refs/heads/$branch:refs/remotes/$remote/$branch" >/dev/null
+}
+
+ensure_upstream_assets_remote() {
+  if git -C "$repo_root" remote get-url "$assets_upstream_remote" >/dev/null 2>&1; then
+    git -C "$repo_root" remote set-url "$assets_upstream_remote" "$assets_upstream"
+    return 0
+  fi
+
+  git -C "$repo_root" remote add "$assets_upstream_remote" "$assets_upstream"
+}
+
 resolve_asset_ref() {
   local branch="$1"
 
@@ -120,15 +139,19 @@ resolve_asset_ref() {
     fi
   fi
 
-  if ! git -C "$repo_root" fetch --force --depth=1 origin \
-    "+refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null; then
-    printf 'docs assets not hydrated: failed to fetch origin/%s\n' "$branch" >&2
-    return 1
+  if fetch_asset_branch origin "$branch"; then
+    if git -C "$repo_root" rev-parse --verify --quiet "origin/$branch" >/dev/null; then
+      printf 'origin/%s\n' "$branch"
+      return 0
+    fi
   fi
 
-  if git -C "$repo_root" rev-parse --verify --quiet "origin/$branch" >/dev/null; then
-    printf 'origin/%s\n' "$branch"
-    return 0
+  if ensure_upstream_assets_remote && fetch_asset_branch "$assets_upstream_remote" "$branch"; then
+    if git -C "$repo_root" rev-parse --verify --quiet \
+      "$assets_upstream_remote/$branch" >/dev/null; then
+      printf '%s/%s\n' "$assets_upstream_remote" "$branch"
+      return 0
+    fi
   fi
 
   if [[ "$use_local_branches" == "1" || "$use_local_branches" == "true" ]] &&
@@ -137,6 +160,7 @@ resolve_asset_ref() {
     return 0
   fi
 
+  printf 'docs assets not hydrated: failed to fetch %s from origin or upstream\n' "$branch" >&2
   return 1
 }
 

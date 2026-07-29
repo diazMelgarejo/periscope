@@ -1,5 +1,5 @@
-<!-- kit-ui-check-ignore: context visualizer MVP cherry-picked upstream; kit-ui Card/TopBar/spacing migration tracked as follow-up -->
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import type { ContextCompositionItem } from "../../api/types.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { CATEGORY_COLORS, categoryLabel } from "./context-utils.js";
@@ -15,7 +15,7 @@
   );
 </script>
 
-<section class="panel">
+<Card level="default" padding="none" class="panel">
   <div class="panel-header">
     <div>
       <div class="eyebrow">Composition by category</div>
@@ -51,13 +51,10 @@
       </div>
     {/each}
   </div>
-</section>
+</Card>
 
 <style>
-  .panel {
-    border: 1px solid var(--border-muted);
-    background: var(--bg-surface);
-    border-radius: var(--radius-md);
+  :global(.panel) {
     padding: 12px;
     display: grid;
     gap: 12px;
@@ -107,7 +104,7 @@
   .legend-metrics {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-5);
     flex-wrap: wrap;
   }
 

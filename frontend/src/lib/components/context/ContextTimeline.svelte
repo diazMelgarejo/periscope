@@ -1,5 +1,5 @@
-<!-- kit-ui-check-ignore: context visualizer MVP cherry-picked upstream; kit-ui Card/TopBar/spacing migration tracked as follow-up -->
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import type {
     ContextTimelineEntry,
     ContextTimelineTurn,
@@ -122,7 +122,7 @@
   }
 </script>
 
-<section class="panel">
+<Card level="default" padding="none" class="panel">
   <div class="panel-header">
     <div>
       <div class="eyebrow">Timeline</div>
@@ -273,13 +273,10 @@
       </details>
     {/each}
   </div>
-</section>
+</Card>
 
 <style>
-  .panel {
-    border: 1px solid var(--border-muted);
-    background: var(--bg-surface);
-    border-radius: var(--radius-md);
+  :global(.panel) {
     padding: 12px;
     display: grid;
     gap: 12px;
@@ -295,7 +292,7 @@
   .sort-btn {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-2);
     padding: 4px 10px;
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-md);
@@ -331,7 +328,7 @@
 
   .rows {
     display: grid;
-    gap: 10px;
+    gap: var(--space-5);
   }
 
   .turn-shell {
@@ -396,7 +393,7 @@
   .turn-topline,
   .category-summary {
     display: flex;
-    gap: 10px;
+    gap: var(--space-5);
     flex-wrap: wrap;
     align-items: center;
   }

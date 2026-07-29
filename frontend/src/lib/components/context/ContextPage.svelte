@@ -1,5 +1,5 @@
-<!-- kit-ui-check-ignore: context visualizer MVP cherry-picked upstream; kit-ui Card/TopBar/spacing migration tracked as follow-up -->
 <script lang="ts">
+  import { EmptyState } from "@kenn-io/kit-ui";
   import { onDestroy } from "svelte";
   import {
     getSession,
@@ -116,9 +116,9 @@
   {/if}
 
   {#if loading}
-    <div class="empty">Loading context…</div>
+    <EmptyState title="Loading context…" />
   {:else if error}
-    <div class="empty error">{error}</div>
+    <EmptyState title="Failed to load context" description={error} />
   {:else if summaryData && timelineData}
     {#if summaryData.rewind_signal || summaryData.compact_signal || summaryData.summary_coverage}
       <div class="signals-group">
@@ -254,7 +254,7 @@
 
   .signals-group {
     display: grid;
-    gap: 10px;
+    gap: var(--space-5);
   }
 
   .signals-header {
@@ -323,20 +323,6 @@
   .summarize-error {
     font-size: 11px;
     color: var(--accent-rose);
-  }
-
-  .empty {
-    border: 1px dashed var(--border-muted);
-    background: var(--bg-surface);
-    color: var(--text-secondary);
-    border-radius: var(--radius-md);
-    padding: 24px;
-    text-align: center;
-    font-size: 13px;
-  }
-
-  .empty.error {
-    color: var(--accent-red);
   }
 
   @media (max-width: 900px) {

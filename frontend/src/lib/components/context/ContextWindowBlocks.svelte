@@ -1,5 +1,5 @@
-<!-- kit-ui-check-ignore: context visualizer MVP cherry-picked upstream; kit-ui Card/TopBar/spacing migration tracked as follow-up -->
 <script lang="ts">
+  import { Card, EmptyState } from "@kenn-io/kit-ui";
   import type {
     ContextCapacity,
     ContextCompositionItem,
@@ -268,7 +268,7 @@
   });
 </script>
 
-<section class="panel">
+<Card level="default" padding="none" class="panel">
   <div class="panel-header">
     <div class="header-main">
       <div class="eyebrow">Context Window</div>
@@ -277,9 +277,10 @@
   </div>
 
   {#if unknownCapacity}
-    <div class="empty-state">
-      This session does not have a known model context window, so the block map cannot be rendered.
-    </div>
+    <EmptyState
+      title="Context window unknown"
+      description="This session does not have a known model context window, so the block map cannot be rendered."
+    />
   {:else}
     <div class="viz-layout">
       <ContextWindowMapPane
@@ -302,13 +303,10 @@
       />
     </div>
   {/if}
-</section>
+</Card>
 
 <style>
-  .panel {
-    border: 1px solid var(--border-muted);
-    background: var(--bg-surface);
-    border-radius: var(--radius-md);
+  :global(.panel) {
     padding: 12px;
     display: grid;
     gap: 12px;
@@ -344,16 +342,6 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px;
     align-items: start;
-  }
-
-  .empty-state {
-    border: 1px dashed var(--border-muted);
-    background: var(--bg-inset);
-    border-radius: var(--radius-sm);
-    padding: 16px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.4;
   }
 
   @media (max-width: 900px) {

@@ -1,4 +1,3 @@
-<!-- kit-ui-check-ignore: context visualizer MVP cherry-picked upstream; kit-ui Card/TopBar/spacing migration tracked as follow-up -->
 <script lang="ts">
   interface Segment {
     key: string;
@@ -97,7 +96,7 @@
     border-radius: var(--radius-sm);
     padding: 12px;
     display: grid;
-    gap: 10px;
+    gap: var(--space-5);
     align-content: start;
     min-height: 100%;
   }
@@ -121,7 +120,7 @@
   .layout {
     display: grid;
     grid-template-columns: max-content minmax(140px, 1fr);
-    gap: 18px;
+    gap: var(--space-6);
     align-content: start;
     align-items: center;
   }
@@ -169,7 +168,7 @@
   .legend-row {
     display: flex;
     justify-content: space-between;
-    gap: 10px;
+    gap: var(--space-5);
     align-items: center;
     color: var(--text-muted);
     font-size: 11px;
