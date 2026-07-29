@@ -23,7 +23,7 @@ canonical merge checklist so agents do not treat the mirror branch as the produc
 name or miss CI/desktop rename debt.
 
 See also: [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) (matryoshka model),
-[`scripts/sync-upstream.sh`](../../scripts/sync-upstream.sh).
+[`scripts/sync-upstream.sh`](https://github.com/diazMelgarejo/periscope/blob/merged/scripts/sync-upstream.sh).
 
 ## Decision tree (use on every upstream merge)
 

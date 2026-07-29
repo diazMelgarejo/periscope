@@ -281,5 +281,5 @@ on the next replay.
 | [`periscope-upstream-sync-blueprint.md`](guides/periscope-upstream-sync-blueprint.md) | Canonical sync policy |
 | [`periscope-modernization-status.md`](guides/periscope-modernization-status.md) | Current modernization snapshot |
 | [`agentsview-to-periscope-rename-catalogue.md`](guides/agentsview-to-periscope-rename-catalogue.md) | Rename decision tree |
-| [`superpowers/specs/2026-05-10-periscope-build-design.md`](superpowers/specs/2026-05-10-periscope-build-design.md) | Historical build design (May 2026) |
-| [`superpowers/plans/2026-05-10-periscope-build-system.md`](superpowers/plans/2026-05-10-periscope-build-system.md) | Historical implementation plan |
+| [`superpowers/specs/2026-05-10-periscope-build-design.md`](https://github.com/diazMelgarejo/periscope/blob/merged/docs/superpowers/specs/2026-05-10-periscope-build-design.md) | Historical build design (May 2026) |
+| [`superpowers/plans/2026-05-10-periscope-build-system.md`](https://github.com/diazMelgarejo/periscope/blob/merged/docs/superpowers/plans/2026-05-10-periscope-build-system.md) | Historical implementation plan |
