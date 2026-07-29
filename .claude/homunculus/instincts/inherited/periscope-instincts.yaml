@@ -1164,3 +1164,200 @@ Edit schema.sql, update Go structs/queries, sync logic, tests, migration/resync 
 
 - Workflow: db-schema-migration-and-sync
 - Example commits and files for DB migrations
+---
+id: periscope-instinct-add-new-parser-or-provider
+trigger: "When adding support for a new agent, provider, or parser"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Add New Parser Or Provider
+
+## Action
+
+Add new provider Go files, update registry, add test data/cases, integrate with sync engine, update docs and frontend if needed
+
+## Evidence
+
+- Workflow: add-new-parser-or-provider
+- Pattern in files: internal/parser/*_provider.go, internal/parser/testdata/*/*.json, frontend/src/lib/utils/agents.ts
+
+---
+id: periscope-instinct-add-or-update-database-feature
+trigger: "When adding or updating a database-backed feature or modifying database structure/logic"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Add Or Update Database Feature
+
+## Action
+
+Edit SQL schema, update Go database logic, add migration logic, write tests, and update docs/specs as needed
+
+## Evidence
+
+- Workflow: add-or-update-database-feature
+- Pattern in files: internal/db/schema.sql, internal/db/*.go, internal/db/*_test.go, docs/superpowers/specs/*.md
+
+---
+id: periscope-instinct-feature-development-with-tests-and-docs
+trigger: "When developing a new feature or significant enhancement"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Feature Development With Tests And Docs
+
+## Action
+
+Implement feature in Go, write/update tests, update/add documentation/specs, and update frontend if user-facing
+
+## Evidence
+
+- Workflow: feature-development-with-tests-and-docs
+- Pattern in files: internal/*/*.go, internal/*/*_test.go, docs/superpowers/specs/*.md, frontend/src/lib/utils/agents.ts
+
+---
+id: periscope-instinct-git-commit-prefix
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Git Commit Prefix
+
+## Action
+
+Prefix the message with fix or feat (or similar), followed by the scope in parentheses and a brief description
+
+## Evidence
+
+- fix(cli): expand leading tilde in DuckDB mirror paths (#1274)
+- feat(parser): add Omnigent support (#1284)
+
+---
+id: periscope-instinct-test-coverage
+trigger: "When adding or modifying a feature"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Test Coverage
+
+## Action
+
+Write or update corresponding *_test.go files to cover new/changed logic
+
+## Evidence
+
+- Workflow commit sequences for all workflows
+- Pattern in internal/*/*_test.go
+
+---
+id: periscope-instinct-testdata-usage
+trigger: "When adding a new parser/provider"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Testdata Usage
+
+## Action
+
+Add or update test data in internal/parser/testdata/<provider>/*.json
+
+## Evidence
+
+- Workflow: add-new-parser-or-provider
+- Pattern in internal/parser/testdata/
+
+---
+id: periscope-workflow-add-new-parser-or-provider
+trigger: "when doing add new parser or provider"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Add New Parser Or Provider
+
+## Action
+
+Follow the add-new-parser-or-provider workflow:
+1. Add new parser/provider Go files (e.g., internal/parser/<provider>_provider.go, internal/parser/<provider>.go).
+2. Update provider registry or discovery (e.g., internal/parser/provider.go).
+3. Add or update test data and test cases (e.g., internal/parser/testdata/<provider>/*.json, internal/parser/<provider>_test.go).
+4. Integrate with sync engine if needed (e.g., internal/sync/engine.go).
+5. Update documentation and format sources (e.g., docs/internal/session-format-sources.md, docs/configuration.md).
+6. Update frontend agent lists if surfaced (e.g., frontend/src/lib/utils/agents.ts).
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: internal/parser/*_provider.go, internal/parser/*.go, internal/parser/testdata/*/*.json
+
+---
+id: periscope-workflow-add-or-update-database-feature
+trigger: "when doing add or update database feature"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Add Or Update Database Feature
+
+## Action
+
+Follow the add-or-update-database-feature workflow:
+1. Edit or add SQL schema files (e.g., internal/db/schema.sql).
+2. Update Go code for database access and logic (e.g., internal/db/*.go).
+3. Add or update trigger DDL and migration logic in Go (e.g., internal/db/db.go).
+4. Write or update tests for new/changed database logic (e.g., internal/db/*_test.go, cmd/agentsview/*_test.go).
+5. Update or add documentation/specs if the feature is significant (e.g., docs/superpowers/specs/...).
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: internal/db/schema.sql, internal/db/*.go, internal/db/*_test.go
+
+---
+id: periscope-workflow-feature-development-with-tests-and-docs
+trigger: "when doing feature development with tests and docs"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Feature Development With Tests And Docs
+
+## Action
+
+Follow the feature-development-with-tests-and-docs workflow:
+1. Implement feature in Go (e.g., internal/<area>/*.go).
+2. Write or update tests (e.g., internal/<area>/*_test.go, cmd/agentsview/*_test.go).
+3. Update or add documentation/specs (e.g., docs/superpowers/specs/*.md, docs/configuration.md).
+4. Update frontend if feature is user-facing (e.g., frontend/src/lib/utils/agents.ts).
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: internal/*/*.go, internal/*/*_test.go, cmd/agentsview/*_test.go

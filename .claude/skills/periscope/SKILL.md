@@ -235,3 +235,6 @@ and handoff notes before expanding scope.
 | `/add-or-update-backend-feature-with-tests` | `.claude/commands/add-or-update-backend-feature-with-tests.md` |
 | `/frontend-component-update-with-i18n-and-tests` | `.claude/commands/frontend-component-update-with-i18n-and-tests.md` |
 | `/documentation-and-blueprint-update` | `.claude/commands/documentation-and-blueprint-update.md` |
+| `/add-or-update-database-feature` | `.claude/commands/add-or-update-database-feature.md` |
+| `/add-new-parser-or-provider` | `.claude/commands/add-new-parser-or-provider.md` |
+| `/feature-development-with-tests-and-docs` | `.claude/commands/feature-development-with-tests-and-docs.md` |
