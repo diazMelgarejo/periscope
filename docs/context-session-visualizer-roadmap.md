@@ -13,7 +13,7 @@ description: Sequenced roadmap for the context session visualizer feature
 **Goal:** Break the Context Session Visualizer into MVP, v1, and v2 delivery
 phases with concrete implementation tickets for this codebase.
 
-**Reference spec:** [`docs/context-session-visualizer-spec.md`](./context-session-visualizer-spec.md)
+**Reference spec:** [`periscope-spec.md`](./periscope-spec.md)
 
 **Tech stack:** Go, SQLite, Svelte 5, TypeScript
 

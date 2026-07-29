@@ -14,7 +14,7 @@ description: MVP implementation plan for the read-only context session visualize
 
 **Reference docs:**
 
-- [`docs/context-session-visualizer-spec.md`](./context-session-visualizer-spec.md)
+- [`periscope-spec.md`](./periscope-spec.md)
 - [`docs/context-session-visualizer-roadmap.md`](./context-session-visualizer-roadmap.md)
 
 **Tech stack:** Go, SQLite, Svelte 5, TypeScript
