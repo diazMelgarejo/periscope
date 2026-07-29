@@ -1,3 +1,8 @@
+---
+title: Context Session Visualizer Roadmap
+description: Sequenced roadmap for the context session visualizer feature
+---
+
 # Context Session Visualizer Roadmap
 
 > **For agentic workers:** Implement in sequence unless explicitly parallelized.

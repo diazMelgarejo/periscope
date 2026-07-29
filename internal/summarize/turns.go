@@ -76,12 +76,12 @@ func BuildTurns(msgs []db.Message) []TurnBundle {
 			}
 		}
 		cur.EndOrdinal = m.Ordinal
-		switch {
-		case m.Role == "user":
+		switch m.Role {
+		case "user":
 			cur.UserMessage = appendSnippet(
 				cur.UserMessage, stripContent(m.Content),
 			)
-		case m.Role == "assistant":
+		case "assistant":
 			thinking, assistant := splitThinking(m.Content)
 			if thinking != "" {
 				cur.Thinking = appendSnippet(cur.Thinking, thinking)

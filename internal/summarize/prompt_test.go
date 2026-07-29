@@ -89,7 +89,7 @@ func TestRenderTurnPrompt_TruncatesLargeBundles(t *testing.T) {
 	client := &captureClient{}
 	largeAssistant := strings.Repeat("assistant output ", 400)
 	toolCalls := make([]ToolCallBundle, 0, 40)
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		toolCalls = append(toolCalls, ToolCallBundle{
 			ToolName:  "Read",
 			Category:  "Read",

@@ -448,7 +448,7 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 
 func splitInsertSessionColumnList(colList string) []string {
 	var items []string
-	for _, part := range strings.Split(colList, ",") {
+	for part := range strings.SplitSeq(colList, ",") {
 		part = strings.TrimSpace(part)
 		if part != "" {
 			items = append(items, part)

@@ -718,9 +718,7 @@ func EnsureSchema(
 		},
 		{
 			"sessions", "model_context_window_tokens",
-			`ALTER TABLE sessions
-			 ADD COLUMN IF NOT EXISTS model_context_window_tokens
-			 INT NOT NULL DEFAULT 0`,
+			`model_context_window_tokens INT NOT NULL DEFAULT 0`,
 			"adding sessions.model_context_window_tokens",
 		},
 		{
@@ -735,9 +733,7 @@ func EnsureSchema(
 		},
 		{
 			"sessions", "has_model_context_window_tokens",
-			`ALTER TABLE sessions
-			 ADD COLUMN IF NOT EXISTS has_model_context_window_tokens
-			 BOOLEAN NOT NULL DEFAULT FALSE`,
+			`has_model_context_window_tokens BOOLEAN NOT NULL DEFAULT FALSE`,
 			"adding sessions.has_model_context_window_tokens",
 		},
 		{

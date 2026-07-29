@@ -54,7 +54,7 @@ else
       'keep embed dir for generated frontend assets' \
       > "$ROOT/internal/web/dist/.keep"
     CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
-      -o "$SERVER" "$ROOT/cmd/agentsview"
+      -o "$SERVER" "$ROOT/cmd/periscope"
 fi
 
 # Run server with test DB, no sync dirs, fixed port. Every agent dir override

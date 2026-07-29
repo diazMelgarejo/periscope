@@ -126,7 +126,7 @@ if (-not $SkipBuild) {
         if ($LASTEXITCODE -ne 0) {
             throw "pricing snapshot restore failed with exit code $LASTEXITCODE"
         }
-        go build -tags fts5 -ldflags $ldflags -o agentsview.exe ./cmd/agentsview
+        go build -tags fts5 -ldflags $ldflags -o periscope.exe ./cmd/periscope
     } finally {
         Pop-Location
     }

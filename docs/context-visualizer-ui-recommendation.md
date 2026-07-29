@@ -1,3 +1,8 @@
+---
+title: Context Visualizer UI Recommendation
+description: Recommended MVP UI direction for the context visualizer
+---
+
 # Context Visualizer UI Recommendation
 
 ## Document Status

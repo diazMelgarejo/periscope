@@ -1,3 +1,8 @@
+---
+title: Context Session Visualizer MVP Implementation Plan
+description: MVP implementation plan for the read-only context session visualizer
+---
+
 # Context Session Visualizer MVP Implementation Plan
 
 > **For agentic workers:** Execute this plan in order. Keep the scope strictly

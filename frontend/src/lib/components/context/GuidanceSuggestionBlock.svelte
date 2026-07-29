@@ -1,3 +1,4 @@
+<!-- kit-ui-check-ignore: context visualizer MVP cherry-picked upstream; kit-ui Card/TopBar/spacing migration tracked as follow-up -->
 <script lang="ts">
   import { copyToClipboard } from "../../utils/clipboard.js";
 

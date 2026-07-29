@@ -24,4 +24,4 @@ LDFLAGS="-X main.version=${VERSION} \
 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
 CGO_ENABLED=1 go build -tags fts5 -ldflags="${LDFLAGS}" \
-  -o ./tmp/agentsview ./cmd/agentsview
+  -o ./tmp/periscope ./cmd/periscope

@@ -175,10 +175,7 @@ func findRewindTarget(
 	}
 
 	// Rewind to the turn just before the bad stretch
-	rewindTo = badFrom - 1
-	if rewindTo < 1 {
-		rewindTo = 1
-	}
+	rewindTo = max(1, badFrom-1)
 
 	badCount := badTo - badFrom + 1
 	if badCount == 1 {
