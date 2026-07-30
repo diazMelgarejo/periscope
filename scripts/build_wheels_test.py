@@ -213,7 +213,7 @@ class TestExtractBinary:
 class TestBuildWheel:
     def test_wheel_filename_matches_convention(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
-        assert whl.name == "periscope-0.15.0-py3-none-manylinux_2_28_x86_64.whl"
+        assert whl.name == "periscope_agentsview-0.15.0-py3-none-manylinux_2_28_x86_64.whl"
 
     def test_wheel_is_valid_zip(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
@@ -226,10 +226,10 @@ class TestBuildWheel:
         assert "periscope/__init__.py" in names
         assert "periscope/__main__.py" in names
         assert "periscope/bin/periscope" in names
-        assert "periscope-0.15.0.dist-info/METADATA" in names
-        assert "periscope-0.15.0.dist-info/WHEEL" in names
-        assert "periscope-0.15.0.dist-info/entry_points.txt" in names
-        assert "periscope-0.15.0.dist-info/RECORD" in names
+        assert "periscope_agentsview-0.15.0.dist-info/METADATA" in names
+        assert "periscope_agentsview-0.15.0.dist-info/WHEEL" in names
+        assert "periscope_agentsview-0.15.0.dist-info/entry_points.txt" in names
+        assert "periscope_agentsview-0.15.0.dist-info/RECORD" in names
 
     def test_binary_has_executable_permissions(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
@@ -264,9 +264,9 @@ class TestBuildWheel:
     def test_metadata_required_fields(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
         with zipfile.ZipFile(whl) as zf:
-            metadata = zf.read("periscope-0.15.0.dist-info/METADATA").decode()
+            metadata = zf.read("periscope_agentsview-0.15.0.dist-info/METADATA").decode()
         assert "Metadata-Version: 2.1" in metadata
-        assert "Name: periscope" in metadata
+        assert "Name: periscope-agentsview" in metadata
         assert "Version: 0.15.0" in metadata
         assert "Requires-Python: >=3.9" in metadata
         assert "License: MIT" in metadata
@@ -275,21 +275,21 @@ class TestBuildWheel:
     def test_wheel_file_has_root_is_purelib_false(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
         with zipfile.ZipFile(whl) as zf:
-            wheel_meta = zf.read("periscope-0.15.0.dist-info/WHEEL").decode()
+            wheel_meta = zf.read("periscope_agentsview-0.15.0.dist-info/WHEEL").decode()
         assert "Root-Is-Purelib: false" in wheel_meta
         assert "Generator: periscope-build-wheels" in wheel_meta
 
     def test_entry_points_correct(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
         with zipfile.ZipFile(whl) as zf:
-            ep = zf.read("periscope-0.15.0.dist-info/entry_points.txt").decode()
+            ep = zf.read("periscope_agentsview-0.15.0.dist-info/entry_points.txt").decode()
         assert "[console_scripts]" in ep
         assert "periscope = periscope:main" in ep
 
     def test_record_contains_hashes(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
         with zipfile.ZipFile(whl) as zf:
-            record = zf.read("periscope-0.15.0.dist-info/RECORD").decode()
+            record = zf.read("periscope_agentsview-0.15.0.dist-info/RECORD").decode()
         # Each non-RECORD entry should have a sha256 hash
         lines = [ln for ln in record.splitlines() if ln.strip()]
         record_line = None
@@ -306,7 +306,7 @@ class TestBuildWheel:
         readme = "# periscope\nA great tool."
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64", readme=readme)
         with zipfile.ZipFile(whl) as zf:
-            metadata = zf.read("periscope-0.15.0.dist-info/METADATA").decode()
+            metadata = zf.read("periscope_agentsview-0.15.0.dist-info/METADATA").decode()
         assert "A great tool." in metadata
 
     def test_init_py_uses_execvp_on_unix(self, tmp_path: Path) -> None:
@@ -330,12 +330,12 @@ class TestBuildWheel:
         )
         assert (
             whl.name
-            == "periscope-0.29.2+periscope.2.258218f5-py3-none-manylinux_2_28_x86_64.whl"
+            == "periscope_agentsview-0.29.2+periscope.2.258218f5-py3-none-manylinux_2_28_x86_64.whl"
         )
 
     def test_wheel_filename_darwin_arm64(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "1.0.0", "darwin_arm64")
-        assert whl.name == "periscope-1.0.0-py3-none-macosx_11_0_arm64.whl"
+        assert whl.name == "periscope_agentsview-1.0.0-py3-none-macosx_11_0_arm64.whl"
 
 
 # ---------------------------------------------------------------------------
@@ -381,12 +381,12 @@ class TestBuildAllWheels:
         wheels = build_all_wheels(input_dir, output_dir, "0.15.0")
         names = {w.name for w in wheels}
         expected = {
-            "periscope-0.15.0-py3-none-manylinux_2_28_x86_64.whl",
-            "periscope-0.15.0-py3-none-manylinux_2_28_aarch64.whl",
-            "periscope-0.15.0-py3-none-macosx_11_0_x86_64.whl",
-            "periscope-0.15.0-py3-none-macosx_11_0_arm64.whl",
-            "periscope-0.15.0-py3-none-win_amd64.whl",
-            "periscope-0.15.0-py3-none-win_arm64.whl",
+            "periscope_agentsview-0.15.0-py3-none-manylinux_2_28_x86_64.whl",
+            "periscope_agentsview-0.15.0-py3-none-manylinux_2_28_aarch64.whl",
+            "periscope_agentsview-0.15.0-py3-none-macosx_11_0_x86_64.whl",
+            "periscope_agentsview-0.15.0-py3-none-macosx_11_0_arm64.whl",
+            "periscope_agentsview-0.15.0-py3-none-win_amd64.whl",
+            "periscope_agentsview-0.15.0-py3-none-win_arm64.whl",
         }
         assert names == expected
 

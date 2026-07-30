@@ -343,7 +343,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           WHL_VERSION=$(python3 -c "import re,sys; v='${VERSION}'; m=re.match(r'^(\d+\.\d+\.\d+)-(.+)$',v); print(m.group(1)+'+'+m.group(2).replace('-','.')if m else v)")
-          pip install "wheels/periscope-${WHL_VERSION}-py3-none-manylinux_2_28_x86_64.whl"
+          pip install "wheels/periscope_agentsview-${WHL_VERSION}-py3-none-manylinux_2_28_x86_64.whl"
           periscope --version
 
       - name: Publish to PyPI
