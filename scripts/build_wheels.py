@@ -45,6 +45,18 @@ def normalize_wheel_version(version: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Package identity
+# ---------------------------------------------------------------------------
+
+# PyPI project name. The upstream name "periscope" is registered by an
+# unrelated project (a subtitle downloader), so this fork publishes under
+# a distinct distribution name. The installed console script and the
+# internal module/import name stay "periscope" -- only the PyPI project
+# identity (and therefore the wheel filename and dist-info dir) differ.
+PYPI_DIST_NAME = "periscope-agentsview"
+PYPI_DIST_NAME_NORMALIZED = PYPI_DIST_NAME.replace("-", "_")
+
+# ---------------------------------------------------------------------------
 # Platform constants
 # ---------------------------------------------------------------------------
 
@@ -217,8 +229,8 @@ def build_wheel(
 
     # Normalize version for PEP 440 compliance (dashes → local identifier)
     whl_version = normalize_wheel_version(version)
-    dist_info = f"periscope-{whl_version}.dist-info"
-    whl_name = f"periscope-{whl_version}-py3-none-{wheel_tag}.whl"
+    dist_info = f"{PYPI_DIST_NAME_NORMALIZED}-{whl_version}.dist-info"
+    whl_name = f"{PYPI_DIST_NAME_NORMALIZED}-{whl_version}-py3-none-{wheel_tag}.whl"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     whl_path = output_dir / whl_name
@@ -271,7 +283,7 @@ def build_wheel(
 def _build_metadata(version: str, readme: str | None) -> str:
     lines = [
         "Metadata-Version: 2.1",
-        "Name: periscope",
+        f"Name: {PYPI_DIST_NAME}",
         f"Version: {version}",
         "Summary: Local web viewer for AI agent sessions",
         "Home-page: https://github.com/latentsignal-org/periscope",

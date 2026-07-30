@@ -7,7 +7,7 @@ description: Matryoshka model, branch roles, and fork invariants for diazMelgare
 
 > **Status:** Living document. Update after every upstream replay and fork enhancement.
 > **Canonical integration branch:** `merged`
-> **Last updated:** 2026-07-28
+> **Last updated:** 2026-07-30
 
 **Operator policy:** [`docs/guides/periscope-upstream-sync-blueprint.md`](guides/periscope-upstream-sync-blueprint.md)
 **Rename checklist:** [`docs/guides/agentsview-to-periscope-rename-catalogue.md`](guides/agentsview-to-periscope-rename-catalogue.md)
@@ -171,24 +171,70 @@ The shipping integration line uses
 
 ## Versioning and release tags
 
-Semver pre-release identity:
+### Fork release tags (Layer 3 — Periscope identity)
+
+Fork releases use a **grandmother-derived semver** plus a **`-periscope.N`**
+suffix that marks the fork’s major AgentsView integrative merge generation on
+`merged`. Product binaries and CI artifacts stay branded `periscope`; the
+`agentsview` mirror branch name is unrelated to release tags.
+
+**Formula:**
 
 ```
-v0.(upstream_minor + 1).2-periscope.2
+v0.(upstream_minor + 1).2-periscope.N
 ```
+
+| Part | Meaning |
+| --- | --- |
+| `v0.(upstream_minor + 1)` | kenn-io/agentsview release minor + 1 (readable upstream base) |
+| `.2` | Periscope patch slot on that upstream-derived minor (established convention) |
+| `-periscope.N` | Fork identity generation — **N** = major AgentsView → `merged` integrative absorption count |
+
+**Grandmother → fork tag map (canonical examples):**
+
+| Grandmother (`kenn-io/agentsview`) | Fork release tag | Note |
+| --- | --- | --- |
+| v0.28.x (latentsignal era) | `v0.29.2-periscope.2` | First shipped fork generation |
+| v0.39.0 (current grandmother) | **`v0.40.2-periscope.3`** | **Third** major AgentsView integrative merge onto `merged` |
+
+**Current target (post–third AgentsView merge):** `v0.40.2-periscope.3` — bump
+`jetbrains-plugin/gradle.properties`, release `-ldflags`, and operator tags when
+that integrative merge lands on `merged` (not when the mirror alone advances).
+
+Historical tags (`v0.29.2-periscope.2-*`, `v0.29.2-periscope.3-*`) remain valid
+release pointers; do not rewrite them.
+
+### Desktop app semver (parallel track)
+
+`desktop/src-tauri/tauri.conf.json` `version` follows the **grandmother desktop
+tree** (currently `0.12.1` on both mirror and `merged`). `productName` on
+`merged` is **Periscope**; on the mirror it remains **AgentsView**. Bump desktop
+semver when grandmother bumps it during replay — independent of the fork tag
+suffix above.
+
+### Commit-suffixed release tags
 
 Tags **always embed the short commit hash** of the release commit. Convention
 adopted in `5bd2e8a` (May 2026):
 
 ```
-v{semver}-{8-char-commit}   e.g.  v0.29.2-periscope.2-657a1090
+v{semver}-{8-char-commit}   e.g.  v0.40.2-periscope.3-657a1090
 ```
 
 ```bash
 COMMIT=$(git rev-parse --short=8 HEAD)
-VERSION="v0.29.2-periscope.2"
+VERSION="v0.40.2-periscope.3"
 git tag -a "${VERSION}-${COMMIT}" -m "Release ${VERSION}-${COMMIT}"
 # Push only after operator review — never automatic from tooling here.
+```
+
+After each major AgentsView integrative merge onto `merged`:
+
+```bash
+# Example: grandmother v0.39.0 → v0.40.2-periscope.3 (third absorption)
+OLD_VERSION="v0.29.2-periscope.2"
+NEW_VERSION="v0.40.2-periscope.3"
+# Update jetbrains-plugin/gradle.properties and release ldflags; then tag as above.
 ```
 
 ---
