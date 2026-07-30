@@ -10,16 +10,17 @@ Use this workflow when working on **add-new-parser-or-provider** in `periscope`.
 
 ## Goal
 
-Adds support for a new agent/provider/parser, including implementation, integration, and test coverage.
+Adds support for a new agent, data source, or provider to the system, including schema detection, discovery, and integration with sync and test coverage.
 
 ## Common Files
 
-- `internal/parser/*_provider.go`
-- `internal/parser/*.go`
-- `internal/parser/testdata/*/*.json`
-- `internal/parser/*_test.go`
+- `internal/parser/<agent>_provider.go`
+- `internal/parser/<agent>.go`
+- `internal/parser/types.go`
 - `internal/parser/provider.go`
-- `internal/sync/engine.go`
+- `internal/parser/provider_migration.go`
+- `internal/parser/testdata/<agent>/*`
+- `internal/parser/<agent>_test.go`
 
 ## Suggested Sequence
 
@@ -30,11 +31,12 @@ Adds support for a new agent/provider/parser, including implementation, integrat
 
 ## Typical Commit Signals
 
-- Add new parser/provider Go files (e.g., internal/parser/<provider>_provider.go, internal/parser/<provider>.go).
-- Update provider registry or discovery (e.g., internal/parser/provider.go).
-- Add or update test data and test cases (e.g., internal/parser/testdata/<provider>/*.json, internal/parser/<provider>_test.go).
-- Integrate with sync engine if needed (e.g., internal/sync/engine.go).
-- Update documentation and format sources (e.g., docs/internal/session-format-sources.md, docs/configuration.md).
+- Implement parser/provider logic in `internal/parser` (e.g., `<agent>_provider.go`, `<agent>.go`).
+- Add or update types in `internal/parser/types.go`.
+- Update provider registration in `internal/parser/provider.go` and/or `provider_migration.go`.
+- Add test fixtures and coverage in `internal/parser/testdata/<agent>/*` and `<agent>_test.go`.
+- Integrate with sync engine (`internal/sync/engine.go`, `engine_test.go`, `integration_test.go`).
+- Update documentation and format sources (e.g., `docs/internal/session-format-sources.md`, `docs/configuration.md`).
 
 ## Notes
 
