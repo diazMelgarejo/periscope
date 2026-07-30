@@ -1,6 +1,6 @@
 # Periscope modernization status
 
-**Updated:** 2026-07-28
+**Updated:** 2026-07-30
 **Base commit:** `2b6e5128` (3way modernization replay)
 **Integration branch:** `merged`
 **Replaces:** historical `PROGRESS.md` completion ledger (archive only — not active truth)
@@ -35,26 +35,33 @@ related specs.
 
 ---
 
+## Fork release tags (Layer 3 — Periscope identity)
+
+See [`ARCHITECTURE.md`](../ARCHITECTURE.md) § Versioning for the full matryoshka
+context. Summary:
+
+| Track | Rule |
+| --- | --- |
+| Fork release tag | `v0.(upstream_minor + 1).2-periscope.N` — **N** = major AgentsView → `merged` merge generation |
+| Grandmother v0.39.0 | Target **`v0.40.2-periscope.3`** (third integrative absorption) |
+| Desktop `tauri.conf.json` | Follows grandmother semver (`0.12.1` today); `productName` **Periscope** on `merged` |
+
+Historical shipped tag: `v0.29.2-periscope.2-*` (grandmother v0.28 era).
+
 ## Release tag convention (5bd2e8a)
 
 Fork releases **always embed the short commit hash** of the release commit.
 Adopted in commit `5bd2e8a421c326a9a40e73437930ba76f475b9cb` (May 2026).
 
 ```
-v{semver}-{8-char-commit}   e.g.  v0.29.2-periscope.2-657a1090
-```
-
-Semver pre-release identity on `merged`:
-
-```
-v0.(upstream_minor + 1).2-periscope.2
+v{semver}-{8-char-commit}   e.g.  v0.40.2-periscope.3-657a1090
 ```
 
 Operator tagging (after verification — never automatic from tooling):
 
 ```bash
 COMMIT=$(git rev-parse --short=8 HEAD)
-VERSION="v0.29.2-periscope.2"
+VERSION="v0.40.2-periscope.3"
 git tag -a "${VERSION}-${COMMIT}" -m "Release ${VERSION}-${COMMIT}"
 ```
 
@@ -117,7 +124,7 @@ shell environment overrides (see `desktop/src-tauri/src/lib.rs`).
 
 # Release tag (operator, after verification)
 COMMIT=$(git rev-parse --short=8 HEAD)
-git tag -a "v0.29.2-periscope.2-${COMMIT}" -m "Release v0.29.2-periscope.2-${COMMIT}"
+git tag -a "v0.40.2-periscope.3-${COMMIT}" -m "Release v0.40.2-periscope.3-${COMMIT}"
 ```
 
 ---
