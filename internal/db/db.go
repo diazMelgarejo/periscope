@@ -19,9 +19,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1"
@@ -366,7 +366,7 @@ var ErrWALCheckpointBusy = errors.New("wal checkpoint busy")
 var ErrWriterClosed = errors.New("writer closed for maintenance pass")
 
 // DataVersionTooNewError reports that an archive was written by a newer
-// agentsview parser than the current binary understands.
+// Periscope parser than the current binary understands.
 type DataVersionTooNewError struct {
 	DatabaseVersion int
 	BinaryVersion   int
@@ -374,7 +374,7 @@ type DataVersionTooNewError struct {
 
 func (e *DataVersionTooNewError) Error() string {
 	return fmt.Sprintf(
-		"database data version %d is newer than this agentsview binary's data version %d, so this binary cannot safely open the archive. Use an AgentsView build with data version %d or newer, or restore an archive backup compatible with data version %d. The archive was not modified",
+		"database data version %d is newer than this periscope binary's data version %d, so this binary cannot safely open the archive. Use a Periscope build with data version %d or newer, or restore an archive backup compatible with data version %d. The archive was not modified",
 		e.DatabaseVersion, e.BinaryVersion,
 		e.DatabaseVersion, e.BinaryVersion,
 	)
@@ -1803,6 +1803,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "has_peak_context_tokens",
 			"ALTER TABLE sessions ADD COLUMN has_peak_context_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "model_context_window_tokens",
+			"ALTER TABLE sessions ADD COLUMN model_context_window_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "has_model_context_window_tokens",
+			"ALTER TABLE sessions ADD COLUMN has_model_context_window_tokens INTEGER NOT NULL DEFAULT 0",
 		},
 		{
 			"sessions", "local_modified_at",

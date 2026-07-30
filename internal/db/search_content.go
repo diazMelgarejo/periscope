@@ -12,8 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/latentsignal-org/periscope/internal/secrets"
 	"github.com/mattn/go-sqlite3"
-	"go.kenn.io/agentsview/internal/secrets"
 )
 
 // DefaultContentSearchLimit and MaxContentSearchLimit bound result pages.

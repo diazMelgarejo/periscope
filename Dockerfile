@@ -49,9 +49,9 @@ RUN go run ./internal/pricing/cmd/litellm-snapshot -restore
 RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -tags fts5 -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
-      -o /out/agentsview ./cmd/agentsview
+      -o /out/periscope ./cmd/periscope
 
-RUN /out/agentsview --version
+RUN /out/periscope --version
 
 FROM debian:bookworm-slim
 
@@ -60,12 +60,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /agents
 
-ENV AGENTSVIEW_DATA_DIR=/data
+ENV PERISCOPE_DATA_DIR=/data
 
-COPY --from=build /out/agentsview /usr/local/bin/agentsview
+COPY --from=build /out/periscope /usr/local/bin/periscope
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/agentsview /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/periscope /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8080
 

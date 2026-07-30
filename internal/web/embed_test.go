@@ -22,5 +22,5 @@ func TestFallbackAssetsIncludePlaceholderIndex(t *testing.T) {
 
 	raw, err := fs.ReadFile(fallback, "index.html")
 	require.NoError(t, err)
-	assert.Contains(t, string(raw), "AgentsView frontend assets are not built.")
+	assert.Contains(t, string(raw), "Periscope frontend assets are not built.")
 }

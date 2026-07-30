@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 const maxSessions = 50

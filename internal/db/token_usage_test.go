@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -443,4 +444,80 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 		assert.True(t, got.HasTotalOutputTokens, "HasTotalOutputTokens")
 		assert.True(t, got.HasPeakContextTokens, "HasPeakContextTokens")
 	})
+}
+
+func splitInsertSessionColumnList(colList string) []string {
+	var items []string
+	for part := range strings.SplitSeq(colList, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			items = append(items, part)
+		}
+	}
+	return items
+}
+
+func countInsertSessionArityParts(t *testing.T) (columns, placeholders, args int) {
+	t.Helper()
+
+	open := strings.Index(insertSessionSQL, "INSERT INTO sessions (")
+	require.NotEqual(t, -1, open, "insertSessionSQL column list open")
+	close := strings.Index(insertSessionSQL, ") VALUES")
+	require.NotEqual(t, -1, close, "insertSessionSQL column list close")
+	colList := insertSessionSQL[open+len("INSERT INTO sessions (") : close]
+	columns = len(splitInsertSessionColumnList(colList))
+
+	valuesOpen := strings.Index(insertSessionSQL, "VALUES (")
+	require.NotEqual(t, -1, valuesOpen, "insertSessionSQL values open")
+	valuesClose := strings.LastIndex(insertSessionSQL, ")")
+	require.NotEqual(t, -1, valuesClose, "insertSessionSQL values close")
+	placeholders = strings.Count(
+		insertSessionSQL[valuesOpen:valuesClose+1], "?",
+	)
+
+	args = len(upsertSessionArgs(Session{}))
+	return columns, placeholders, args
+}
+
+func TestUpsertSessionModelContextWindowArityAndRoundTrip(t *testing.T) {
+	columns, placeholders, args := countInsertSessionArityParts(t)
+	assert.Equal(t, columns, placeholders, "insert columns vs placeholders")
+	assert.Equal(t, columns, args, "insert columns vs upsertSessionArgs")
+
+	d := testDB(t)
+	ctx := context.Background()
+
+	s := Session{
+		ID:                          "ctx-window",
+		Project:                     "proj",
+		Machine:                     defaultMachine,
+		Agent:                       defaultAgent,
+		MessageCount:                1,
+		ModelContextWindowTokens:    200000,
+		HasModelContextWindowTokens: true,
+	}
+	require.NoError(t, d.UpsertSession(s), "upsert")
+
+	got, err := d.GetSession(ctx, "ctx-window")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, got, "expected session")
+	assert.Equal(t, 200000, got.ModelContextWindowTokens,
+		"ModelContextWindowTokens")
+	assert.True(t, got.HasModelContextWindowTokens,
+		"HasModelContextWindowTokens")
+
+	err = d.UpdateSessionIncremental("ctx-window", IncrementalSessionUpdate{
+		MsgCount:                    1,
+		ModelContextWindowTokens:    128000,
+		HasModelContextWindowTokens: true,
+	})
+	require.NoError(t, err, "UpdateSessionIncremental")
+
+	got, err = d.GetSession(ctx, "ctx-window")
+	require.NoError(t, err, "GetSession after incremental")
+	require.NotNil(t, got, "expected session after incremental")
+	assert.Equal(t, 128000, got.ModelContextWindowTokens,
+		"ModelContextWindowTokens after incremental")
+	assert.True(t, got.HasModelContextWindowTokens,
+		"HasModelContextWindowTokens after incremental")
 }

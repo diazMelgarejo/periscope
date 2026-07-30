@@ -1,10 +1,14 @@
-# agentsview
+# Periscope
 
-Browse, search, and track costs across all your AI coding agents. One binary, no
-accounts, everything local.
+Context session visualizer and improver for AI coding agents.
+
+Browse, search, and track costs across all your AI coding agents. See where
+your context window is going, understand session health, and get guidance on
+when to continue, rewind, compact, or start fresh. One binary, no accounts,
+everything local.
 
 <p align="center">
-  <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
+  <img src="screenshots/periscope-context-view.png" alt="Periscope context view" width="720">
 </p>
 
 ## Install
@@ -279,6 +283,12 @@ agentsview stats --format json --agent claude | jq '.schema_version'
 agentsview stats --include-git-outcomes
 ```
 
+## Context Visualizer and Guidance
+
+| Context guidance                                    | Timeline view                                     |
+| --------------------------------------------------- | ------------------------------------------------- |
+| ![Guidance](screenshots/guidance.png)               | ![Timeline](screenshots/timeline-view.png)        |
+
 ## Session Browser
 
 | Dashboard                                                                      | Session viewer                                                                           |
@@ -306,6 +316,23 @@ agentsview stats --include-git-outcomes
 - **Keyboard-first** navigation (`j`/`k`/`[`/`]`, `Cmd+K` search, `?` for all
   shortcuts)
 - **Export** sessions as HTML or publish to GitHub Gist
+
+## Context Engineering
+
+Periscope adds a context visualizer and guidance layer on top of the session
+browser. It answers questions that raw transcripts cannot:
+
+- Where did the context budget go?
+- Which tool outputs are now dead weight?
+- Is the session still healthy enough to continue?
+- Would a rewind, compaction, or fresh session be the better move?
+
+It provides a turn-by-turn timeline view with composition breakdowns and token
+accounting, plus a guidance layer that classifies session health, detects
+branch points, and recommends concrete next actions — continue, rewind,
+compact, fork, or delegate. See the full
+[Periscope spec](docs/periscope-spec.md) for detailed design, data model,
+and implementation notes.
 
 ## Supported Agents
 
@@ -339,7 +366,6 @@ thread JSON files.
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                                                                                                               |
 | Kilo (legacy)         | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/` (macOS), `~/.config/Code/User/globalStorage/kilocode.kilo-code/` (Linux)                                                                                                 |
 | Kimi                  | `~/.kimi/sessions/`                                                                                                                                                                                                                                  |
-| Kimi Work             | `~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions/` (macOS)                                                                                                                 |
 | Kiro CLI              | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`                                                                                                                                                                                                  |
 | Kiro IDE              | `~/Library/Application Support/Kiro/` (macOS)                                                                                                                                                                                                        |
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                                                                                                           |
@@ -648,6 +674,13 @@ make build          # build binary with embedded frontend
 make install        # install to ~/.local/bin
 ```
 
+If `make dev` auto-selects a port other than `8080`, point the Vite proxy at
+that backend before starting the frontend dev server:
+
+```bash
+AGENTSVIEW_DEV_PROXY_TARGET=http://127.0.0.1:8081 make frontend-dev
+```
+
 ```bash
 make test           # Go tests (CGO_ENABLED=1 -tags "fts5")
 make bench-backends # compare SQLite, DuckDB, and PostgreSQL store reads
@@ -668,6 +701,18 @@ Pre-commit and pre-push hooks via [prek](https://github.com/j178/prek): run
 `make lint-tools` and `make install-hooks` after cloning (requires `prek` and
 `uv`).
 
+### JetBrains Plugin
+
+The `jetbrains-plugin/` directory contains a JetBrains IDE plugin that embeds
+the agentsview web UI in a tool window. Requires JDK 17+.
+
+```bash
+cd jetbrains-plugin
+./gradlew build       # compile and package the plugin
+./gradlew runIde      # launch a sandboxed IDE with the plugin loaded
+./gradlew buildPlugin # produce distributable ZIP in build/distributions/
+```
+
 ### Project Layout
 
 ```
@@ -675,11 +720,14 @@ cmd/agentsview/     CLI entrypoint
 internal/           Go packages (config, db, parser, server, sync, postgres)
 frontend/           Svelte 5 SPA (Vite+, TypeScript)
 desktop/            Tauri desktop wrapper
+jetbrains-plugin/   JetBrains IDE plugin (Kotlin, Gradle)
 ```
 
 ## Acknowledgements
 
-Inspired by
+Forked from [agentsview](https://github.com/wesm/agentsview) by Wes McKinney.
+
+Also inspired by
 [claude-history-tool](https://github.com/andyfischer/ai-coding-tools/tree/main/claude-history-tool)
 by Andy Fischer and
 [claude-code-transcripts](https://github.com/simonw/claude-code-transcripts) by

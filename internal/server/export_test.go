@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // testSession returns a *db.Session with sensible defaults.
@@ -46,7 +46,7 @@ func stubServer(
 		http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, expectedMethod, r.Method)
-				assert.Equal(t, "agentsview", r.Header.Get("User-Agent"))
+				assert.Equal(t, "periscope", r.Header.Get("User-Agent"))
 				assert.Equal(t, "token "+expectedToken, r.Header.Get("Authorization"))
 				w.WriteHeader(status)
 				if body != "" {

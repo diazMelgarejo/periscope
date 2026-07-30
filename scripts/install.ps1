@@ -1,10 +1,15 @@
-# agentsview installer for Windows
-# Usage: powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/kenn-io/agentsview/main/scripts/install.ps1 | iex"
+# periscope installer for Windows — diazMelgarejo/periscope fork
+# Usage: powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/diazMelgarejo/periscope/merged/scripts/install.ps1 | iex"
+#
+# Installs the Periscope product binary. Accepts legacy agentsview release
+# archive names and environment variables for compatibility during transition.
 
 $ErrorActionPreference = 'Stop'
 
-$repo = 'kenn-io/agentsview'
-$binaryName = 'agentsview.exe'
+$repo = 'diazMelgarejo/periscope'
+$binaryName = 'periscope.exe'
+$legacyBinaryName = 'agentsview.exe'
+$installLegacyAlias = if ($env:PERISCOPE_LEGACY_SYMLINK) { $env:PERISCOPE_LEGACY_SYMLINK } else { '1' }
 
 function Write-Info($msg) { Write-Host $msg -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host $msg -ForegroundColor Yellow }
@@ -13,6 +18,10 @@ function Write-Err($msg) { Write-Host $msg -ForegroundColor Red }
 function Test-EnvBool($name) {
     $val = [Environment]::GetEnvironmentVariable($name)
     return ($val -match '^(1|true|yes)$')
+}
+
+function Test-SkipChecksum {
+    return (Test-EnvBool 'PERISCOPE_SKIP_CHECKSUM') -or (Test-EnvBool 'AGENTSVIEW_SKIP_CHECKSUM')
 }
 
 function Get-Architecture {
@@ -147,6 +156,18 @@ function Test-ReleaseAsset {
     }
 }
 
+function Get-ReleaseArchiveCandidates {
+    param([string]$Version, [string]$Arch)
+
+    $versionNum = $Version.TrimStart('v')
+    return @(
+        "periscope_${versionNum}_windows_${Arch}.zip",
+        "periscope_${Version}_windows_${Arch}.zip",
+        "agentsview_${versionNum}_windows_${Arch}.zip",
+        "agentsview_${Version}_windows_${Arch}.zip"
+    )
+}
+
 function Resolve-ReleaseArch {
     # Returns the release arch to install for the detected CPU arch.
     # Prefers a native build, but falls back to amd64 on arm64 because
@@ -160,22 +181,32 @@ function Resolve-ReleaseArch {
         $candidates += 'amd64'
     }
 
-    $versionNum = $Version.TrimStart('v')
     foreach ($candidate in $candidates) {
-        $name = "agentsview_${versionNum}_windows_${candidate}.zip"
-        $url = "https://github.com/$repo/releases/download/$Version/$name"
-        if (Test-ReleaseAsset $url) {
-            return $candidate
+        foreach ($archiveName in (Get-ReleaseArchiveCandidates -Version $Version -Arch $candidate)) {
+            $url = "https://github.com/$repo/releases/download/$Version/$archiveName"
+            if (Test-ReleaseAsset $url) {
+                return @{
+                    Arch = $candidate
+                    ArchiveName = $archiveName
+                }
+            }
         }
     }
     return $null
 }
 
 function Get-InstallDir {
+    if ($env:PERISCOPE_INSTALL_DIR) {
+        return $env:PERISCOPE_INSTALL_DIR
+    }
     if ($env:AGENTSVIEW_INSTALL_DIR) {
         return $env:AGENTSVIEW_INSTALL_DIR
     }
-    return Join-Path $env:USERPROFILE '.agentsview\bin'
+    return Join-Path $env:USERPROFILE '.periscope\bin'
+}
+
+function Test-NoModifyPath {
+    return (Test-EnvBool 'PERISCOPE_NO_MODIFY_PATH') -or (Test-EnvBool 'AGENTSVIEW_NO_MODIFY_PATH')
 }
 
 function Add-ToPath($dir) {
@@ -197,8 +228,35 @@ function Add-ToPath($dir) {
     return $true
 }
 
-function Install-Agentsview {
-    Write-Info "Installing agentsview..."
+function Find-ExtractedBinary {
+    param([string]$Dir)
+
+    $primary = Get-ChildItem -Path $Dir -Recurse -Filter $binaryName -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($primary) {
+        return $primary
+    }
+
+    return Get-ChildItem -Path $Dir -Recurse -Filter $legacyBinaryName -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+}
+
+function Install-LegacyAlias {
+    param([string]$InstallDir, [string]$SourcePath)
+
+    if ($installLegacyAlias -notmatch '^(1|true|yes)$') {
+        return
+    }
+
+    $legacyPath = Join-Path $InstallDir $legacyBinaryName
+    if (Test-Path $legacyPath) {
+        Remove-Item $legacyPath -Force
+    }
+    Copy-Item $SourcePath $legacyPath -Force
+}
+
+function Install-Periscope {
+    Write-Info "Installing periscope..."
     Write-Host ""
 
     $arch = Get-Architecture
@@ -206,26 +264,27 @@ function Install-Agentsview {
 
     if ($arch -eq '386') {
         Write-Err "Error: 32-bit Windows is not supported."
-        Write-Err "agentsview requires 64-bit Windows (amd64 or arm64)."
+        Write-Err "periscope requires 64-bit Windows (amd64 or arm64)."
         exit 1
     }
 
     $version = Get-LatestVersion
     Write-Info "Latest version: $version"
 
-    $resolvedArch = Resolve-ReleaseArch -DetectedArch $arch -Version $version
-    if (-not $resolvedArch) {
+    $resolved = Resolve-ReleaseArch -DetectedArch $arch -Version $version
+    if (-not $resolved) {
         Write-Err "Error: No Windows release asset found for $version (detected windows/$arch)."
         Write-Err "See https://github.com/$repo for build-from-source instructions."
         exit 1
     }
+
+    $resolvedArch = $resolved.Arch
+    $archiveName = $resolved.ArchiveName
     if ($resolvedArch -ne $arch) {
         Write-Warn "No native windows/$arch build for $version; installing windows/$resolvedArch (runs under emulation)."
         $arch = $resolvedArch
     }
 
-    $versionNum = $version.TrimStart('v')
-    $archiveName = "agentsview_${versionNum}_windows_${arch}.zip"
     $downloadUrl = "https://github.com/$repo/releases/download/$version/$archiveName"
 
     $installDir = Get-InstallDir
@@ -236,7 +295,7 @@ function Install-Agentsview {
         New-Item -ItemType Directory -Path $installDir -Force | Out-Null
     }
 
-    $tmpDir = Join-Path $env:TEMP "agentsview-install-$(Get-Random)"
+    $tmpDir = Join-Path $env:TEMP "periscope-install-$(Get-Random)"
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
 
     try {
@@ -248,15 +307,15 @@ function Install-Agentsview {
         $checksumUrl = "https://github.com/$repo/releases/download/$version/SHA256SUMS"
         $checksumFile = Join-Path $tmpDir "SHA256SUMS"
 
-        if (Test-EnvBool 'AGENTSVIEW_SKIP_CHECKSUM') {
-            Write-Warn "Warning: Skipping checksum verification (AGENTSVIEW_SKIP_CHECKSUM is set)"
+        if (Test-SkipChecksum) {
+            Write-Warn "Warning: Skipping checksum verification (PERISCOPE_SKIP_CHECKSUM or AGENTSVIEW_SKIP_CHECKSUM is set)"
         } else {
             Write-Info "Verifying checksum..."
             try {
                 Invoke-WebRequestCompat -Uri $checksumUrl -OutFile $checksumFile
             } catch {
                 Write-Err "Error: Could not download checksums file: $_"
-                Write-Err "Set AGENTSVIEW_SKIP_CHECKSUM=1 to bypass verification (not recommended)"
+                Write-Err "Set PERISCOPE_SKIP_CHECKSUM=1 to bypass verification (not recommended)"
                 exit 1
             }
 
@@ -277,7 +336,7 @@ function Install-Agentsview {
 
             if ($matchingLines.Count -eq 0) {
                 Write-Err "Error: Could not find checksum for $archiveName in SHA256SUMS"
-                Write-Err "Set AGENTSVIEW_SKIP_CHECKSUM=1 to bypass verification (not recommended)"
+                Write-Err "Set PERISCOPE_SKIP_CHECKSUM=1 to bypass verification (not recommended)"
                 exit 1
             }
 
@@ -311,9 +370,9 @@ function Install-Agentsview {
             exit 1
         }
 
-        $binaryFile = Get-ChildItem -Path $tmpDir -Recurse -Filter $binaryName | Select-Object -First 1
+        $binaryFile = Find-ExtractedBinary -Dir $tmpDir
         if (-not $binaryFile) {
-            Write-Err "Error: Could not find $binaryName in extracted archive"
+            Write-Err "Error: Could not find $binaryName (or legacy $legacyBinaryName) in extracted archive"
             exit 1
         }
 
@@ -324,12 +383,13 @@ function Install-Agentsview {
         }
 
         Move-Item $binaryFile.FullName $destPath -Force
+        Install-LegacyAlias -InstallDir $installDir -SourcePath $destPath
 
         Write-Host ""
         Write-Info "Installation complete!"
         Write-Host ""
 
-        if (-not (Test-EnvBool 'AGENTSVIEW_NO_MODIFY_PATH')) {
+        if (-not (Test-NoModifyPath)) {
             $pathUpdated = Add-ToPath $installDir
             if ($pathUpdated) {
                 Write-Info "Added $installDir to PATH"
@@ -339,8 +399,11 @@ function Install-Agentsview {
         }
 
         Write-Host "Get started:"
-        Write-Host "  agentsview serve    # Start the server and open browser"
-        Write-Host "  agentsview update   # Check for and install updates"
+        Write-Host "  periscope serve    # Start the server and open browser"
+        Write-Host "  periscope update   # Check for and install updates"
+        if ($installLegacyAlias -match '^(1|true|yes)$') {
+            Write-Host "  agentsview serve   # Legacy compatibility alias"
+        }
 
     } finally {
         if (Test-Path $tmpDir) {
@@ -349,4 +412,6 @@ function Install-Agentsview {
     }
 }
 
-Install-Agentsview
+if ($MyInvocation.InvocationName -ne '.') {
+    Install-Periscope
+}

@@ -6,9 +6,9 @@ import (
 	"errors"
 	"net/http"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 func handleContextError(w http.ResponseWriter, err error) bool {

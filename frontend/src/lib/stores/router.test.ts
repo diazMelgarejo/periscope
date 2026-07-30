@@ -320,12 +320,33 @@ describe("RouterStore", () => {
   });
 
   it("navigateToContext updates URL to /context/{id}", () => {
-    setURL("/sessions");
+    setURL("/sessions?project=myproj&date_from=2026-01-01");
     store = new RouterStore();
     store.navigateToContext("abc-123");
     expect(window.location.pathname).toBe("/context/abc-123");
+    expect(window.location.search).toContain("project=myproj");
+    expect(window.location.search).toContain("date_from=2026-01-01");
     expect(store.route).toBe("context");
     expect(store.sessionId).toBe("abc-123");
+  });
+
+  it("buildContextHref preserves session filters", () => {
+    setURL("/sessions?project=myproj&window_days=30");
+    store = new RouterStore();
+
+    expect(store.buildContextHref("abc-123")).toBe(
+      "/context/abc-123?project=myproj&window_days=30",
+    );
+  });
+
+  it("replaceParams keeps the standalone context path", () => {
+    setURL("/context/abc-123?project=old");
+    store = new RouterStore();
+
+    store.replaceParams({ project: "new" });
+
+    expect(window.location.pathname).toBe("/context/abc-123");
+    expect(window.location.search).toBe("?project=new");
   });
 
   it("navigateFromSession returns to /sessions", () => {

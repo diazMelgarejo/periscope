@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // contentSearchSchema is an isolated schema for content-search tests so
@@ -671,7 +671,7 @@ func TestPGSearchContentRegex(t *testing.T) {
 	insertCSSession(t, store, "cs-re1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
 	insertCSMessage(t, store, "cs-re1", 0, "user",
-		"key AKIA"+"7QHWN2DKR4FYPLJM here", "2026-05-01T10:00:00Z", false)
+		"key AKIA"+"3VBMK8XJZ6WPCNQH here", "2026-05-01T10:00:00Z", false)
 	insertCSMessage(t, store, "cs-re1", 1, "user",
 		"no secrets in this line", "2026-05-01T10:00:01Z", false)
 

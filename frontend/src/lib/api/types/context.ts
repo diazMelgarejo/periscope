@@ -34,12 +34,61 @@ export interface ContextSupports {
   compaction_trimmed: boolean;
 }
 
+export interface RewindSignal {
+  should_rewind: boolean;
+  confidence: string;
+  reasons: string[];
+  tokens_recoverable: number;
+  score: number;
+  rewind_to_turn?: number;
+  rewind_to_reason?: string;
+  bad_stretch_from?: number;
+  bad_stretch_to?: number;
+  tangent_label?: string;
+  rewind_reprompt_text?: string;
+  reprompt_provenance?: string;
+  reprompt_model?: string;
+  evidence_turns?: number[];
+}
+
+export interface CompactSignal {
+  should_compact: boolean;
+  confidence: string;
+  reasons: string[];
+  score: number;
+  estimated_reclaimable: number;
+  compact_focus?: string[];
+  keep_items?: string[];
+  drop_items?: string[];
+  compact_focus_text?: string;
+  focus_provenance?: string;
+  focus_model?: string;
+  evidence_turns?: number[];
+}
+
+export type SummaryCoverageStatus =
+  | "disabled"
+  | "idle"
+  | "pending"
+  | "complete";
+
+export interface SummaryCoverage {
+  status: SummaryCoverageStatus;
+  total_turns: number;
+  summarised_turns: number;
+  starred: boolean;
+  last_updated_at?: string;
+}
+
 export interface SessionContextResponse {
   summary: ContextSummary;
   capacity: ContextCapacity;
   composition: ContextCompositionItem[];
   supports: ContextSupports;
   warnings?: string[];
+  rewind_signal?: RewindSignal;
+  compact_signal?: CompactSignal;
+  summary_coverage?: SummaryCoverage;
 }
 
 export interface ContextCategoryValue {
@@ -47,11 +96,31 @@ export interface ContextCategoryValue {
   tokens: number;
 }
 
-export interface ContextTimelineRow {
+export interface ContextTimelineMessagePreview {
   ordinal: number;
+  preview: string;
+}
+
+export interface ContextTimelineToolPreview {
+  ordinal: number;
+  tool_name: string;
+  snippet?: string;
+}
+
+export interface ContextTimelineEntry {
+  kind: string;
+  ordinal: number;
+  label: string;
+  preview?: string;
+  output_preview?: string;
+}
+
+export interface ContextTimelineTurn {
+  turn: number;
+  start_ordinal: number;
+  end_ordinal: number;
   timestamp?: string;
   label: string;
-  granularity: string;
   delta_tokens: number;
   delta_provenance: string;
   cumulative_tokens: number;
@@ -60,10 +129,14 @@ export interface ContextTimelineRow {
   categories: ContextCategoryValue[];
   markers?: string[];
   annotations?: string[];
+  user_message?: ContextTimelineMessagePreview;
+  assistant_message?: ContextTimelineMessagePreview;
+  tool_calls?: ContextTimelineToolPreview[];
+  entries?: ContextTimelineEntry[];
 }
 
 export interface SessionContextTimelineResponse {
-  timeline: ContextTimelineRow[];
+  timeline: ContextTimelineTurn[];
   supports: ContextSupports;
   warnings?: string[];
 }

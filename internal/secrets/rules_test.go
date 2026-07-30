@@ -186,7 +186,7 @@ func TestCandidateRules(t *testing.T) {
 // (high-entropy assignments, JWTs, basic-auth URLs) entirely.
 func TestScanDefiniteReturnsOnlyDefinite(t *testing.T) {
 	// One definite AWS key and one candidate high-entropy assignment.
-	text := "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"
+	text := "aws AKIA3VBMK8XJZ6WPCNQH and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"
 	full := Scan(text)
 	require.Len(t, full, 2,
 		"precondition: Scan should report 2 matches (1 definite, 1 candidate)")
@@ -203,7 +203,7 @@ func TestScanDefiniteReturnsOnlyDefinite(t *testing.T) {
 // same spans (rule, offsets, redaction) that Scan reports for definite rules,
 // so findings stored by the inline path and the full scan stay consistent.
 func TestScanDefiniteMatchesScanDefiniteSubset(t *testing.T) {
-	text := "key AKIA7QHWN2DKR4FYPLJM tok ghp_8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg" +
+	text := "key AKIA3VBMK8XJZ6WPCNQH tok ghp_8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg" +
 		" SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"
 	var wantDef []Match
 	for _, m := range Scan(text) {
@@ -254,9 +254,9 @@ func TestRulesVersionStableAndHex(t *testing.T) {
 
 func TestVerify(t *testing.T) {
 	// Non-grouped rule: the stored span is the full regex match.
-	awsSrc := "export KEY=AKIA7QHWN2DKR4FYPLJM done"
+	awsSrc := "export KEY=AKIA3VBMK8XJZ6WPCNQH done"
 	s := strings.Index(awsSrc, "AKIA")
-	e := s + len("AKIA7QHWN2DKR4FYPLJM")
+	e := s + len("AKIA3VBMK8XJZ6WPCNQH")
 	assert.True(t, Verify("aws-access-key", awsSrc, s, e),
 		"Verify should accept a valid AWS key at its coordinates")
 	assert.False(t, Verify("aws-access-key", awsSrc, 0, 6),
@@ -278,7 +278,7 @@ func TestVerify(t *testing.T) {
 // produces coordinates, Verify accepts them on the unchanged source, and
 // rejects them once the bytes at those coordinates are no longer the secret.
 func TestVerifyDetectsChangedSource(t *testing.T) {
-	source := "export AWS=AKIA7QHWN2DKR4FYPLJM"
+	source := "export AWS=AKIA3VBMK8XJZ6WPCNQH"
 	// Seed from canonical Scan (what produces findings and what Verify uses).
 	matches := Scan(source)
 	require.NotEmpty(t, matches, "expected at least one match in source")
@@ -340,7 +340,7 @@ func TestHasRepeatingBlock(t *testing.T) {
 		{"block size 5 aB3_x", strings.Repeat("aB3_x", 7), true},
 		{"block size 2", strings.Repeat("xy", 10), true},
 		{"random body", "7Qh3Wn8Dk4Rp9Vx2Mb6Tj0Qc5Lm", false},
-		{"random aws body", "7QHWN2DKR4FYPLJM", false},
+		{"random aws body", "3VBMK8XJZ6WPCNQH", false},
 		{"random pat body", "8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg", false},
 		{"too short", "abcd", false},
 	}

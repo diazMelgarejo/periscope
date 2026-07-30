@@ -90,7 +90,7 @@ if (-not $Triple) {
     Write-Error "Could not detect Rust host triple. Is rustc installed?"
     exit 1
 }
-$SidecarBin = Join-Path $BinDir "agentsview-$Triple.exe"
+$SidecarBin = Join-Path $BinDir "periscope-$Triple.exe"
 
 if (-not $SkipBuild) {
     # --- Build frontend ---
@@ -126,7 +126,7 @@ if (-not $SkipBuild) {
         if ($LASTEXITCODE -ne 0) {
             throw "pricing snapshot restore failed with exit code $LASTEXITCODE"
         }
-        go build -tags fts5 -ldflags $ldflags -o agentsview.exe ./cmd/agentsview
+        go build -tags fts5 -ldflags $ldflags -o periscope.exe ./cmd/periscope
     } finally {
         Pop-Location
     }
@@ -135,7 +135,7 @@ if (-not $SkipBuild) {
     if (-not (Test-Path $BinDir)) {
         New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
     }
-    Copy-Item (Join-Path $RepoRoot "agentsview.exe") $SidecarBin -Force
+    Copy-Item (Join-Path $RepoRoot "periscope.exe") $SidecarBin -Force
 
     Write-Host "Sidecar ready: $SidecarBin" -ForegroundColor Green
 

@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"go.kenn.io/agentsview/internal/db"
-	recall "go.kenn.io/agentsview/internal/recall"
-	"go.kenn.io/agentsview/internal/secrets"
+	"github.com/latentsignal-org/periscope/internal/db"
+	recall "github.com/latentsignal-org/periscope/internal/recall"
+	"github.com/latentsignal-org/periscope/internal/secrets"
 )
 
 const (
@@ -451,7 +451,7 @@ func extractableSession(id string, s *db.Session) error {
 	case !currentScanVersion(s.SecretsRulesVersion):
 		return fmt.Errorf(
 			"session %s has no secret scan under the current rules; run "+
-				"'agentsview secrets scan --backfill' first", id,
+				"'periscope secrets scan --backfill' first", id,
 		)
 	case s.MessageCount == 0:
 		return fmt.Errorf("session %s has no messages", id)
@@ -659,7 +659,7 @@ func (m *Manager) extractSession(
 				ctx, sessionID, digest, cursor,
 				fmt.Sprintf(
 					"transcript matches %d secret rule pattern(s) despite "+
-						"a current scan stamp; run 'agentsview secrets "+
+						"a current scan stamp; run 'periscope secrets "+
 						"scan --backfill'", secretMatches,
 				),
 			); derr != nil {

@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	pricingpkg "go.kenn.io/agentsview/internal/pricing"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/money"
+	pricingpkg "github.com/latentsignal-org/periscope/internal/pricing"
+	"github.com/latentsignal-org/periscope/internal/service"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -672,7 +672,7 @@ func TestSearchContentRedactsSecretsUnlessRevealed(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	sessionID := "duck-secret-content"
-	secretBody := "prefix AKIA" + "7QHWN2DKR4FYPLJM needle suffix"
+	secretBody := "prefix AKIA" + "3VBMK8XJZ6WPCNQH needle suffix"
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session:         syncSession(sessionID, "alpha", "secret first", "2026-01-16T00:00:00.000Z", 1),
 		Messages:        []db.Message{syncMessage(sessionID, 0, "user", secretBody, "2026-01-16T00:00:00.000Z")},
@@ -695,7 +695,7 @@ func TestSearchContentRedactsSecretsUnlessRevealed(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, redacted.Matches, 1)
-	assert.NotContains(t, redacted.Matches[0].Snippet, "AKIA"+"7QHWN2DKR4FYPLJM")
+	assert.NotContains(t, redacted.Matches[0].Snippet, "AKIA"+"3VBMK8XJZ6WPCNQH")
 
 	revealed, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern:        "needle",
@@ -706,7 +706,7 @@ func TestSearchContentRedactsSecretsUnlessRevealed(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, revealed.Matches, 1)
-	assert.Contains(t, revealed.Matches[0].Snippet, "AKIA"+"7QHWN2DKR4FYPLJM")
+	assert.Contains(t, revealed.Matches[0].Snippet, "AKIA"+"3VBMK8XJZ6WPCNQH")
 }
 
 func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {

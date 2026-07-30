@@ -27,15 +27,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/sessionwatch"
-	"go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/server"
+	"github.com/latentsignal-org/periscope/internal/service"
+	"github.com/latentsignal-org/periscope/internal/sessionwatch"
+	"github.com/latentsignal-org/periscope/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 // Timestamp constants for test data.
@@ -589,7 +589,7 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 	require.Equal(t, "3.1.0", spec.OpenAPI)
-	assert.Equal(t, "AgentsView API", spec.Info.Title)
+	assert.Equal(t, "Periscope API", spec.Info.Title)
 	assert.NotEmpty(t, spec.Info.Version)
 
 	require.Contains(t, spec.Paths, "/api/v1/sessions")

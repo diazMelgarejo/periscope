@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/sessionwatch"
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/sessionwatch"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 // TestServerTimeouts starts a real HTTP server and verifies that

@@ -42,7 +42,7 @@ func TestRejectsAWSDocsPlaceholders(t *testing.T) {
 // monotone alphabet/digit run) must still match.
 func TestAcceptsRealAWSKeys(t *testing.T) {
 	realLooking := []string{
-		"AKIA7QHWN2DKR4FYPLJM",
+		"AKIA3VBMK8XJZ6WPCNQH",
 		"AKIA3VBMK8XJZ6WPCNQH",
 		"ASIA5GTKD7RPYNXQVMBL",
 	}
@@ -287,7 +287,7 @@ func TestFixtureDenyListSuppressesAgentsviewFixtures(t *testing.T) {
 		name string
 		text string
 	}{
-		{"aws", "key=AKIA7QHWN2DKR4FYPLJM end"},
+		{"aws", "key=AKIA3VBMK8XJZ6WPCNQH end"},
 		{"anthropic", "TOKEN=sk-ant-api03-Xa9Kd03Lm5Qp7Rt2Vw8Zb4 done"},
 		{"slack", "TOKEN=xoxb-549271836401-fHk7Bm3Pz9Wt5Vx2Yq8Nc done"},
 		{"github_pat", "tok ghp_8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg"},
@@ -328,7 +328,7 @@ func TestFixtureDenyListExcludesTranscriptOnlyLeakHashes(t *testing.T) {
 // default: ordinary unit tests must see fixture matches (otherwise
 // every test that uses a fixture would need a deny-disable call).
 func TestFixtureDenyListOffByDefault(t *testing.T) {
-	matches := Scan("key=AKIA7QHWN2DKR4FYPLJM end")
+	matches := Scan("key=AKIA3VBMK8XJZ6WPCNQH end")
 	found := false
 	for _, m := range matches {
 		if m.Rule == "aws-access-key" {

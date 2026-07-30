@@ -3,20 +3,12 @@ import type {
   SyncStats,
   Insight,
   GenerateInsightRequest,
-} from "./types.js";
-import type { SessionTiming } from "./types/timing.js";
-import type { SessionActivityResponse } from "./types/session-activity.js";
-import type {
+  Session,
   SessionContextResponse,
   SessionContextTimelineResponse,
-} from "./types/context.js";
-import type { PinsResponse, TrashResponse } from "./types/core.js";
-import type {
-  UsageSummaryResponse,
-  TopUsageSessionsResponse,
-  UsageParams,
-  UsageTopSessionsParams,
-} from "./types/usage.js";
+} from "./types.js";
+import type { SessionTiming } from "./types/timing.js";
+import { SessionsService } from "./generated/index.js";
 import {
   ApiError,
   authHeaders,
@@ -25,189 +17,6 @@ import {
   isRemoteConnection,
   responseErrorMessage,
 } from "./runtime.js";
-
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getBase()}${path}`, authHeaders(init));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
-  return res.json() as Promise<T>;
-}
-
-type QueryValue = string | number | boolean | undefined | null;
-
-function buildQuery(params: Record<string, QueryValue>): string {
-  const q = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") {
-      q.set(key, String(value));
-    }
-  }
-  const qs = q.toString();
-  return qs ? `?${qs}` : "";
-}
-
-/* Sessions */
-
-export interface ListSessionsParams {
-  project?: string;
-  exclude_project?: string;
-  machine?: string;
-  agent?: string;
-  date?: string;
-  date_from?: string;
-  date_to?: string;
-  active_since?: string;
-  min_messages?: number;
-  max_messages?: number;
-  min_user_messages?: number;
-  include_one_shot?: boolean;
-  include_children?: boolean;
-  cursor?: string;
-  limit?: number;
-}
-
-export function listSessions(
-  params: ListSessionsParams = {},
-): Promise<SessionPage> {
-  return fetchJSON(`/sessions${buildQuery({ ...params })}`);
-}
-
-export function getSession(id: string, init?: RequestInit): Promise<Session> {
-  return fetchJSON(`/sessions/${id}`, init);
-}
-
-export function getChildSessions(
-  id: string,
-  init?: RequestInit,
-): Promise<Session[]> {
-  return fetchJSON(`/sessions/${id}/children`, init);
-}
-
-export function getSessionActivity(
-  sessionId: string,
-): Promise<SessionActivityResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/activity`,
-  );
-}
-
-export function getSessionContext(
-  sessionId: string,
-  init?: RequestInit,
-): Promise<SessionContextResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/context`,
-    init,
-  );
-}
-
-export function getSessionContextTimeline(
-  sessionId: string,
-  init?: RequestInit,
-): Promise<SessionContextTimelineResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/context/timeline`,
-    init,
-  );
-}
-
-/* Messages */
-
-export interface GetMessagesParams {
-  from?: number;
-  limit?: number;
-  direction?: "asc" | "desc";
-}
-
-export function getMessages(
-  sessionId: string,
-  params: GetMessagesParams = {},
-  init?: RequestInit,
-): Promise<MessagesResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/messages${buildQuery({ ...params })}`,
-    init,
-  );
-}
-
-/* Search */
-
-export function search(
-  query: string,
-  params: {
-    project?: string;
-    limit?: number;
-    cursor?: number;
-    sort?: "relevance" | "recency";
-  } = {},
-  init?: RequestInit,
-): Promise<SearchResponse> {
-  if (!query) {
-    throw new Error("search query must not be empty");
-  }
-  return fetchJSON(`/search${buildQuery({ q: query, ...params })}`, init);
-}
-
-export interface SessionSearchResponse {
-  ordinals: number[];
-}
-
-export function searchSession(
-  sessionId: string,
-  query: string,
-  init?: RequestInit,
-): Promise<SessionSearchResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/search${buildQuery({ q: query })}`,
-    init,
-  );
-}
-
-/* Metadata */
-
-interface MetadataParams {
-  include_one_shot?: boolean;
-  include_automated?: boolean;
-}
-
-export function getProjects(
-  params: MetadataParams = {},
-): Promise<ProjectsResponse> {
-  return fetchJSON(`/projects${buildQuery({ ...params })}`);
-}
-
-export function getMachines(
-  params: MetadataParams = {},
-): Promise<MachinesResponse> {
-  return fetchJSON(`/machines${buildQuery({ ...params })}`);
-}
-
-export function getAgents(
-  params: MetadataParams = {},
-): Promise<AgentsResponse> {
-  return fetchJSON(`/agents${buildQuery({ ...params })}`);
-}
-
-export function getStats(
-  params: MetadataParams = {},
-): Promise<Stats> {
-  return fetchJSON(`/stats${buildQuery({ ...params })}`);
-}
-
-export function getVersion(): Promise<VersionInfo> {
-  return fetchJSON("/version");
-}
-
-export function checkForUpdate(): Promise<UpdateCheck> {
-  return fetchJSON("/update/check");
-}
-
-/* Sync */
-
-export function getSyncStatus(): Promise<SyncStatus> {
-  return fetchJSON("/sync/status");
-}
 
 export interface SyncHandle {
   abort: () => void;
@@ -502,6 +311,52 @@ export function watchEvents(
   };
 
   return es;
+}
+
+/* Periscope context visualizer (not in generated OpenAPI client yet). */
+
+export async function getSessionContext(
+  sessionId: string,
+  init?: RequestInit,
+): Promise<SessionContextResponse> {
+  const res = await fetch(
+    `${getBase()}/sessions/${encodeURIComponent(sessionId)}/context`,
+    authHeaders(init),
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, await responseErrorMessage(res));
+  }
+  return res.json() as Promise<SessionContextResponse>;
+}
+
+export async function getSessionContextTimeline(
+  sessionId: string,
+  init?: RequestInit,
+): Promise<SessionContextTimelineResponse> {
+  const res = await fetch(
+    `${getBase()}/sessions/${encodeURIComponent(sessionId)}/context/timeline`,
+    authHeaders(init),
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, await responseErrorMessage(res));
+  }
+  return res.json() as Promise<SessionContextTimelineResponse>;
+}
+
+/** ContextPage imports this name; delegate to the generated client. */
+export const getSession = (
+  id: string,
+): Promise<Session> =>
+  SessionsService.getApiV1SessionsId({ id }) as unknown as Promise<Session>;
+
+export async function enqueueSummarize(id: string): Promise<void> {
+  const res = await fetch(
+    `${getBase()}/sessions/${encodeURIComponent(id)}/summarize`,
+    authHeaders({ method: "POST" }),
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, await responseErrorMessage(res));
+  }
 }
 
 /** Get the export URL for a session.

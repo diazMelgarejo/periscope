@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	corerecall "go.kenn.io/agentsview/internal/recall"
+	corerecall "github.com/latentsignal-org/periscope/internal/recall"
 )
 
 const (
@@ -1165,7 +1165,7 @@ func (db *DB) queryRecallEntriesVector(
 	searcher := db.getRecallVectorSearcher()
 	if searcher == nil {
 		return RecallPage{}, NewSemanticUnavailableError(
-			"recall index is not available; run 'agentsview embeddings build --store recall'",
+			"recall index is not available; run 'periscope embeddings build --store recall'",
 		)
 	}
 	limit := recallLimit(q.Limit)

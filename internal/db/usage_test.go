@@ -17,12 +17,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/parsertest"
-	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/money"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/parsertest"
+	pricingpkg "github.com/latentsignal-org/periscope/internal/pricing"
 )
 
 var (

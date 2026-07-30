@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 // gistResponse represents the relevant fields from GitHub's
@@ -82,7 +82,7 @@ func createGistWithURL(
 	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "agentsview")
+	req.Header.Set("User-Agent", "periscope")
 
 	client := githubHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
@@ -114,6 +114,9 @@ func resolveGitHubToken(ctx context.Context, configured string) string {
 	if !isLocalhostContext(ctx) {
 		return ""
 	}
+	if token := strings.TrimSpace(os.Getenv("PERISCOPE_GITHUB_TOKEN")); token != "" {
+		return token
+	}
 	if token := strings.TrimSpace(os.Getenv("AGENTSVIEW_GITHUB_TOKEN")); token != "" {
 		return token
 	}
@@ -143,7 +146,7 @@ func validateGithubTokenWithURL(
 	}
 	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "agentsview")
+	req.Header.Set("User-Agent", "periscope")
 
 	client := githubHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
@@ -458,7 +461,7 @@ footer a:hover { text-decoration: underline; }
 <div class="message {{.RoleClass}}{{.ExtraClass}}{{if .FocusedHidden}} focused-hidden{{end}}" data-ordinal="{{.Ordinal}}"><div class="message-header"><span class="message-role">{{.Role}}</span><span class="message-time">{{.Timestamp}}</span></div><div class="message-content">{{.ContentHTML}}</div></div>
 {{- end}}
 </div></main>
-<footer>Exported from <a href="https://github.com/kenn-io/agentsview">agentsview</a></footer>
+<footer>Exported from <a href="https://github.com/latentsignal-org/periscope">periscope</a></footer>
 </body></html>`
 
 const insightExportTemplateStr = `<!DOCTYPE html>
@@ -621,7 +624,7 @@ footer a {
   </header>
   <article class="content">{{.ContentHTML}}</article>
 </main>
-<footer>Exported from <a href="https://github.com/kenn-io/agentsview">agentsview</a></footer>
+<footer>Exported from <a href="https://github.com/latentsignal-org/periscope">periscope</a></footer>
 </body>
 </html>`
 

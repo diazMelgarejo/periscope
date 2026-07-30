@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/latentsignal-org/periscope/internal/testjsonl"
 )
 
 func TestInferCursorSkillNameFromReadFile(t *testing.T) {

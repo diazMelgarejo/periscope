@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/latentsignal-org/periscope/internal/money"
+	"github.com/latentsignal-org/periscope/internal/parser"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 const configFileName = "config.toml"
@@ -47,7 +47,7 @@ func setupTestEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	t.Setenv("PERISCOPE_DATA_DIR", dir)
 	return dir
 }
 
@@ -252,8 +252,8 @@ func assertLogContains(t *testing.T, buf *bytes.Buffer, substrs ...string) {
 
 func loadConfigFromFlags(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
-	if os.Getenv("AGENTSVIEW_DATA_DIR") == "" {
-		t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	if os.Getenv("PERISCOPE_DATA_DIR") == "" {
+		t.Setenv("PERISCOPE_DATA_DIR", t.TempDir())
 	}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	RegisterServeFlags(fs)
@@ -265,8 +265,8 @@ func loadConfigFromFlags(t *testing.T, args ...string) (Config, error) {
 
 func loadConfigFromPFlags(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
-	if os.Getenv("AGENTSVIEW_DATA_DIR") == "" {
-		t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	if os.Getenv("PERISCOPE_DATA_DIR") == "" {
+		t.Setenv("PERISCOPE_DATA_DIR", t.TempDir())
 	}
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	RegisterServePFlags(fs)
@@ -974,7 +974,7 @@ func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
 
 	// With env override, should return the override
 	custom := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", custom)
+	t.Setenv("PERISCOPE_DATA_DIR", custom)
 	dir, err = ResolveDataDir()
 	require.NoError(t, err)
 	assert.Equal(t, custom, dir)
@@ -983,16 +983,16 @@ func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
 func TestResolveDataDir_ExpandsHome(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
-	t.Setenv("AGENTSVIEW_DATA_DIR", "~/agentsview-data")
+	t.Setenv("PERISCOPE_DATA_DIR", "~/periscope-data")
 
 	dir, err := ResolveDataDir()
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, "agentsview-data"), dir)
+	assert.Equal(t, filepath.Join(home, "periscope-data"), dir)
 }
 
-// TestDataDir_LegacyEnvFallback verifies that the legacy AGENT_VIEWER_DATA_DIR
-// env var still takes effect when the canonical AGENTSVIEW_DATA_DIR is unset,
-// and that the canonical name wins when both are set.
+// TestDataDir_LegacyEnvFallback verifies that legacy AgentsView data-dir env
+// vars still take effect when the canonical PERISCOPE_DATA_DIR is unset, and
+// that the canonical name wins when multiple are set.
 func TestDataDir_LegacyEnvFallback(t *testing.T) {
 	t.Run("legacy used when canonical unset", func(t *testing.T) {
 		legacy := t.TempDir()
@@ -1002,11 +1002,22 @@ func TestDataDir_LegacyEnvFallback(t *testing.T) {
 		assert.Equal(t, legacy, dir)
 	})
 
+	t.Run("agentsview env used when periscope unset", func(t *testing.T) {
+		legacy := t.TempDir()
+		agentsview := t.TempDir()
+		t.Setenv("AGENT_VIEWER_DATA_DIR", legacy)
+		t.Setenv("AGENTSVIEW_DATA_DIR", agentsview)
+		dir, err := ResolveDataDir()
+		require.NoError(t, err)
+		assert.Equal(t, agentsview, dir)
+	})
+
 	t.Run("canonical wins over legacy", func(t *testing.T) {
 		legacy := t.TempDir()
 		canonical := t.TempDir()
 		t.Setenv("AGENT_VIEWER_DATA_DIR", legacy)
-		t.Setenv("AGENTSVIEW_DATA_DIR", canonical)
+		t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+		t.Setenv("PERISCOPE_DATA_DIR", canonical)
 		dir, err := ResolveDataDir()
 		require.NoError(t, err)
 		assert.Equal(t, canonical, dir, "canonical should win")
@@ -1458,7 +1469,7 @@ func TestResolvePG_Defaults(t *testing.T) {
 	resolved, err := cfg.ResolvePG()
 	require.NoError(t, err, "ResolvePG")
 
-	assert.Equal(t, "agentsview", resolved.Schema)
+	assert.Equal(t, "periscope", resolved.Schema)
 	assert.NotEmpty(t, resolved.MachineName, "MachineName should default to hostname")
 }
 

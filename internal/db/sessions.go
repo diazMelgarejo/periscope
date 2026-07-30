@@ -42,7 +42,9 @@ const sessionBaseCols = `id, project, machine, agent,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
+	model_context_window_tokens,
 	has_total_output_tokens, has_peak_context_tokens,
+	has_model_context_window_tokens,
 	is_automated,
 	tool_failure_signal_count, tool_retry_count,
 	edit_churn_count, consecutive_failure_max,
@@ -73,7 +75,9 @@ const sessionPruneCols = `id, project, machine, agent,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
+	model_context_window_tokens,
 	has_total_output_tokens, has_peak_context_tokens,
+	has_model_context_window_tokens,
 	is_automated,
 	tool_failure_signal_count, tool_retry_count,
 	edit_churn_count, consecutive_failure_max,
@@ -104,7 +108,9 @@ const sessionFullCols = `id, project, machine, agent,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
+	model_context_window_tokens,
 	has_total_output_tokens, has_peak_context_tokens,
+	has_model_context_window_tokens,
 	is_automated,
 	tool_failure_signal_count, tool_retry_count,
 	edit_churn_count, consecutive_failure_max,
@@ -154,7 +160,9 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.ModelContextWindowTokens,
 		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+		&s.HasModelContextWindowTokens,
 		&s.IsAutomated,
 		&s.ToolFailureSignalCount, &s.ToolRetryCount,
 		&s.EditChurnCount, &s.ConsecutiveFailureMax,
@@ -276,26 +284,28 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 
 // Session represents a row in the sessions table.
 type Session struct {
-	ID                   string  `json:"id"`
-	Project              string  `json:"project"`
-	Machine              string  `json:"machine"`
-	Agent                string  `json:"agent"`
-	AgentLabel           string  `json:"agent_label,omitempty"`
-	Entrypoint           string  `json:"entrypoint,omitempty"`
-	FirstMessage         *string `json:"first_message"`
-	DisplayName          *string `json:"display_name,omitempty"`
-	SessionName          *string `json:"-"`
-	StartedAt            *string `json:"started_at"`
-	EndedAt              *string `json:"ended_at"`
-	MessageCount         int     `json:"message_count"`
-	UserMessageCount     int     `json:"user_message_count"`
-	ParentSessionID      *string `json:"parent_session_id,omitempty"`
-	RelationshipType     string  `json:"relationship_type,omitempty"`
-	TotalOutputTokens    int     `json:"total_output_tokens"`
-	PeakContextTokens    int     `json:"peak_context_tokens"`
-	HasTotalOutputTokens bool    `json:"has_total_output_tokens"`
-	HasPeakContextTokens bool    `json:"has_peak_context_tokens"`
-	IsAutomated          bool    `json:"is_automated"`
+	ID                          string  `json:"id"`
+	Project                     string  `json:"project"`
+	Machine                     string  `json:"machine"`
+	Agent                       string  `json:"agent"`
+	AgentLabel                  string  `json:"agent_label,omitempty"`
+	Entrypoint                  string  `json:"entrypoint,omitempty"`
+	FirstMessage                *string `json:"first_message"`
+	DisplayName                 *string `json:"display_name,omitempty"`
+	SessionName                 *string `json:"-"`
+	StartedAt                   *string `json:"started_at"`
+	EndedAt                     *string `json:"ended_at"`
+	MessageCount                int     `json:"message_count"`
+	UserMessageCount            int     `json:"user_message_count"`
+	ParentSessionID             *string `json:"parent_session_id,omitempty"`
+	RelationshipType            string  `json:"relationship_type,omitempty"`
+	TotalOutputTokens           int     `json:"total_output_tokens"`
+	PeakContextTokens           int     `json:"peak_context_tokens"`
+	ModelContextWindowTokens    int     `json:"model_context_window_tokens"`
+	HasTotalOutputTokens        bool    `json:"has_total_output_tokens"`
+	HasPeakContextTokens        bool    `json:"has_peak_context_tokens"`
+	HasModelContextWindowTokens bool    `json:"has_model_context_window_tokens"`
+	IsAutomated                 bool    `json:"is_automated"`
 
 	// Session signals (computed from messages/tool_calls).
 	ToolFailureSignalCount int      `json:"tool_failure_signal_count"`
@@ -1124,7 +1134,9 @@ func (db *DB) getSessionFullUncoalesced(
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.ModelContextWindowTokens,
 		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+		&s.HasModelContextWindowTokens,
 		&s.IsAutomated,
 		&s.ToolFailureSignalCount, &s.ToolRetryCount,
 		&s.EditChurnCount, &s.ConsecutiveFailureMax,
@@ -1310,7 +1322,9 @@ const insertSessionSQL = `
 			user_message_count, parent_session_id,
 			relationship_type,
 			total_output_tokens, peak_context_tokens,
+			model_context_window_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
+			has_model_context_window_tokens,
 			is_automated,
 			termination_status,
 			cwd, git_branch, source_session_id,
@@ -1321,7 +1335,7 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1347,8 +1361,10 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			relationship_type = excluded.relationship_type,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
+			model_context_window_tokens = excluded.model_context_window_tokens,
 			has_total_output_tokens = excluded.has_total_output_tokens,
 			has_peak_context_tokens = excluded.has_peak_context_tokens,
+			has_model_context_window_tokens = excluded.has_model_context_window_tokens,
 			is_automated = excluded.is_automated,
 			termination_status = excluded.termination_status,
 			cwd = excluded.cwd,
@@ -1405,7 +1421,9 @@ func upsertSessionArgs(s Session) []any {
 		s.UserMessageCount, s.ParentSessionID,
 		s.RelationshipType,
 		s.TotalOutputTokens, s.PeakContextTokens,
+		s.ModelContextWindowTokens,
 		s.HasTotalOutputTokens, s.HasPeakContextTokens,
+		s.HasModelContextWindowTokens,
 		sessionIsAutomated(s),
 		s.TerminationStatus,
 		s.Cwd, s.GitBranch, s.SourceSessionID,
@@ -1884,44 +1902,48 @@ func (db *DB) GetSessionVersion(
 // decide whether the Claude parser's skip-command path has left
 // the preview empty and a full parse should be forced.
 type IncrementalInfo struct {
-	ID                   string
-	Project              string
-	Machine              string
-	Cwd                  string
-	AgentLabel           string
-	Entrypoint           string
-	FileSize             int64
-	FileMtime            int64
-	NextOrdinal          int
-	LastEntryUUID        string
-	ClaudeLinearParse    *bool
-	FileInode            int64
-	FileDevice           int64
-	MsgCount             int
-	UserMsgCount         int
-	FirstMessage         string
-	TotalOutputTokens    int
-	PeakContextTokens    int
-	HasTotalOutputTokens bool
-	HasPeakContextTokens bool
+	ID                          string
+	Project                     string
+	Machine                     string
+	Cwd                         string
+	AgentLabel                  string
+	Entrypoint                  string
+	FileSize                    int64
+	FileMtime                   int64
+	NextOrdinal                 int
+	LastEntryUUID               string
+	ClaudeLinearParse           *bool
+	FileInode                   int64
+	FileDevice                  int64
+	MsgCount                    int
+	UserMsgCount                int
+	FirstMessage                string
+	TotalOutputTokens           int
+	PeakContextTokens           int
+	ModelContextWindowTokens    int
+	HasTotalOutputTokens        bool
+	HasPeakContextTokens        bool
+	HasModelContextWindowTokens bool
 }
 
 type IncrementalSessionUpdate struct {
-	EndedAt                 *string
-	TerminationStatus       *string
-	MsgCount                int
-	UserMsgCount            int
-	FileSize                int64
-	FileMtime               int64
-	FileHash                *string
-	NextOrdinal             int
-	LastEntryUUID           string
-	TotalOutputTokens       int
-	PeakContextTokens       int
-	HasTotalOutputTokens    bool
-	HasPeakContextTokens    bool
-	SubagentLinks           []ToolCallSubagentLink
-	BlockedResultCategories map[string]bool
+	EndedAt                     *string
+	TerminationStatus           *string
+	MsgCount                    int
+	UserMsgCount                int
+	FileSize                    int64
+	FileMtime                   int64
+	FileHash                    *string
+	NextOrdinal                 int
+	LastEntryUUID               string
+	TotalOutputTokens           int
+	PeakContextTokens           int
+	ModelContextWindowTokens    int
+	HasTotalOutputTokens        bool
+	HasPeakContextTokens        bool
+	HasModelContextWindowTokens bool
+	SubagentLinks               []ToolCallSubagentLink
+	BlockedResultCategories     map[string]bool
 }
 
 type ToolCallSubagentLink struct {
@@ -1964,7 +1986,9 @@ func (db *DB) GetSessionForIncremental(
 			message_count, user_message_count,
 			first_message,
 			total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens
+			model_context_window_tokens,
+			has_total_output_tokens, has_peak_context_tokens,
+			has_model_context_window_tokens
 		 FROM sessions
 		 WHERE file_path = ?
 		   AND deleted_at IS NULL`,
@@ -1977,7 +2001,9 @@ func (db *DB) GetSessionForIncremental(
 		&info.MsgCount, &info.UserMsgCount,
 		&firstMsg,
 		&info.TotalOutputTokens, &info.PeakContextTokens,
+		&info.ModelContextWindowTokens,
 		&info.HasTotalOutputTokens, &info.HasPeakContextTokens,
+		&info.HasModelContextWindowTokens,
 	)
 	if err != nil {
 		return nil, false
@@ -2007,6 +2033,9 @@ func (db *DB) GetSessionForIncremental(
 		info.HasTotalOutputTokens || info.TotalOutputTokens != 0
 	info.HasPeakContextTokens =
 		info.HasPeakContextTokens || info.PeakContextTokens != 0
+	info.HasModelContextWindowTokens =
+		info.HasModelContextWindowTokens ||
+			info.ModelContextWindowTokens != 0
 	return &info, true
 }
 
@@ -2071,8 +2100,10 @@ func updateSessionIncrementalTx(
 			last_entry_uuid = ?,
 			total_output_tokens = ?,
 			peak_context_tokens = ?,
+			model_context_window_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
+			has_model_context_window_tokens = ?,
 			termination_status = ?,
 			-- Mark the row as last written by the incremental-append path.
 			-- The full-replace writer (upsertSessionArgs) resets this to
@@ -2085,7 +2116,9 @@ func updateSessionIncrementalTx(
 		update.FileHash,
 		update.NextOrdinal, lastEntryUUID,
 		update.TotalOutputTokens, update.PeakContextTokens,
+		update.ModelContextWindowTokens,
 		update.HasTotalOutputTokens, update.HasPeakContextTokens,
+		update.HasModelContextWindowTokens,
 		update.TerminationStatus, id,
 	)
 	if err != nil {
@@ -3501,7 +3534,9 @@ func (db *DB) FindPruneCandidates(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.ModelContextWindowTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+			&s.HasModelContextWindowTokens,
 			&s.IsAutomated,
 			&s.ToolFailureSignalCount, &s.ToolRetryCount,
 			&s.EditChurnCount, &s.ConsecutiveFailureMax,
@@ -3925,7 +3960,9 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.ModelContextWindowTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+			&s.HasModelContextWindowTokens,
 			&s.IsAutomated,
 			&s.ToolFailureSignalCount, &s.ToolRetryCount,
 			&s.EditChurnCount, &s.ConsecutiveFailureMax,
@@ -4034,7 +4071,9 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.ModelContextWindowTokens,
 			&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+			&s.HasModelContextWindowTokens,
 			&s.IsAutomated,
 			&s.ToolFailureSignalCount, &s.ToolRetryCount,
 			&s.EditChurnCount, &s.ConsecutiveFailureMax,

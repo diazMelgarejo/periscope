@@ -195,9 +195,13 @@ export class RouterStore {
     );
   }
 
-  buildContextHref(id: string): string {
+  buildContextHref(
+    id: string,
+    params?: Record<string, string>,
+  ): string {
     return this.#buildUrl(
       `/context/${encodeURIComponent(id)}`,
+      this.#sessionEntryParams(params),
     );
   }
 
@@ -263,13 +267,14 @@ export class RouterStore {
     id: string,
     params: Record<string, string> = {},
   ) {
+    const nextParams = this.#sessionEntryParams(params);
     const url = this.#buildUrl(
       `/context/${encodeURIComponent(id)}`,
-      params,
+      nextParams,
     );
-    this.#updateSticky(params);
+    this.#updateSticky(nextParams);
     this.route = "context";
-    this.params = { ...this.#stickyParams, ...params };
+    this.params = { ...this.#stickyParams, ...nextParams };
     this.sessionId = id;
     window.history.pushState(null, "", url);
   }
@@ -288,7 +293,7 @@ export class RouterStore {
   /** Update query params without creating a history entry. */
   replaceParams(params: Record<string, string>) {
     const path = this.sessionId
-      ? `/sessions/${encodeURIComponent(this.sessionId)}`
+      ? `/${this.route === "context" ? "context" : "sessions"}/${encodeURIComponent(this.sessionId)}`
       : `/${this.route}`;
     const url = this.#buildUrl(path, params);
     this.#updateSticky(params);

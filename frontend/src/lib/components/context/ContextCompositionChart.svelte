@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import type { ContextCompositionItem } from "../../api/types.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { CATEGORY_COLORS, categoryLabel } from "./context-utils.js";
@@ -14,10 +15,10 @@
   );
 </script>
 
-<section class="panel">
+<Card level="default" padding="none" class="panel">
   <div class="panel-header">
     <div>
-      <div class="eyebrow">Composition</div>
+      <div class="eyebrow">Composition by category</div>
       <h3>What is consuming the visible window</h3>
     </div>
   </div>
@@ -50,37 +51,36 @@
       </div>
     {/each}
   </div>
-</section>
+</Card>
 
 <style>
-  .panel {
-    border: 1px solid var(--border-default);
-    background: var(--bg-surface);
-    border-radius: 14px;
-    padding: 18px;
+  :global(.panel) {
+    padding: 12px;
     display: grid;
-    gap: 14px;
+    gap: 12px;
   }
 
   .eyebrow {
-    font-size: 11px;
+    font-size: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--text-secondary);
-    margin-bottom: 6px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
   }
 
   h3 {
     margin: 0;
-    font-size: 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
   .stacked-bar {
     display: flex;
-    height: 18px;
+    height: 14px;
     overflow: hidden;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--bg-surface) 70%, #334155 30%);
+    background: var(--bg-inset);
   }
 
   .segment {
@@ -89,7 +89,7 @@
 
   .legend {
     display: grid;
-    gap: 10px;
+    gap: 6px;
   }
 
   .legend-row {
@@ -97,19 +97,29 @@
     justify-content: space-between;
     gap: 16px;
     align-items: center;
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .legend-name,
   .legend-metrics {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-5);
     flex-wrap: wrap;
   }
 
+  .legend-name {
+    color: var(--text-primary);
+  }
+
   .legend-metrics {
-    color: var(--text-secondary);
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .legend-metrics strong {
+    color: var(--text-primary);
+    font-weight: 600;
   }
 
   .swatch {

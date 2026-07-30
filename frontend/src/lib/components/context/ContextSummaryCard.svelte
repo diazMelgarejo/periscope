@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Card } from "@kenn-io/kit-ui";
   import type { ContextCapacity, ContextSummary } from "../../api/types.js";
   import type { Session } from "../../api/types.js";
   import { formatRelativeTime, formatTimestamp, formatTokenCount } from "../../utils/format.js";
@@ -12,39 +13,63 @@
 
   let { summary, capacity, session = null, warnings = [] }: Props = $props();
 
+  let subtitle = $derived.by(() => {
+    if (summary.visible_since_ordinal > 0) {
+      return "After compaction";
+    }
+    return "Full conversation";
+  });
+
   function percentLabel(value: number): string {
     if (!Number.isFinite(value)) return "—";
     return `${Math.round(value)}%`;
   }
 
-  function provenanceLabel(value: string): string {
+  let remainingPercent = $derived.by(() => {
+    if (!summary.remaining_known || capacity.max_tokens <= 0) return NaN;
+    return (summary.remaining_tokens / capacity.max_tokens) * 100;
+  });
+
+  function provenanceTooltip(value: string): string {
     switch (value) {
       case "measured":
-        return "Measured";
+        return "Measured from actual token counts";
       case "inferred":
-        return "Inferred";
+        return "Inferred from available data";
       case "estimated":
-        return "Estimated";
+        return "Estimated based on heuristics";
       default:
-        return "Unknown";
+        return "";
     }
   }
 </script>
 
-<section class="context-card">
-  <div class="header">
-    <div>
+<Card level="default" padding="none" class="context-card">
+  <div class="summary-header">
+    <div class="summary-leading">
       <div class="eyebrow">Context Summary</div>
-      <h2>Visible context after latest compaction</h2>
+      <h2>{subtitle}</h2>
+      <div class="session-pills">
+        <span class="pill">{session?.agent ?? capacity.agent ?? "Unknown agent"}</span>
+        {#if capacity.model}
+          <span class="pill">{capacity.model}</span>
+        {/if}
+        {#if summary.last_updated_at}
+          <span class="pill" title={formatTimestamp(summary.last_updated_at)}>
+            Updated {formatRelativeTime(summary.last_updated_at)}
+          </span>
+        {/if}
+        {#if session?.ended_at}
+          <span class="pill pill-dim">Ended</span>
+        {:else}
+          <span class="pill pill-live">Live</span>
+        {/if}
+      </div>
     </div>
     <div class="occupancy">
-      <div class="tokens">{formatTokenCount(summary.tokens_in_use)}</div>
+      <div class="tokens">{summary.visible_row_count.toLocaleString()}</div>
       <div class="tokens-meta">
-        {#if capacity.max_tokens > 0}
-          of {formatTokenCount(capacity.max_tokens)} tokens
-        {:else}
-          capacity unknown
-        {/if}
+        {summary.visible_row_count === 1 ? "turn" : "turns"}
       </div>
     </div>
   </div>
@@ -57,55 +82,26 @@
   </div>
 
   <div class="stats-grid">
-    <div class="stat">
-      <span class="label">Used</span>
-      <strong>{percentLabel(summary.percent_consumed)}</strong>
-      <span class="meta">{provenanceLabel(summary.tokens_provenance)}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Remaining</span>
+    <Card level="inset" padding="none" class="stat">
+      <span class="label" title={provenanceTooltip(summary.tokens_provenance)}>Used</span>
+      <strong>
+        {formatTokenCount(summary.tokens_in_use)}
+        {#if capacity.max_tokens > 0}
+          <span class="stat-pct">of {formatTokenCount(capacity.max_tokens)} ({percentLabel(summary.percent_consumed)})</span>
+        {/if}
+      </strong>
+    </Card>
+    <Card level="inset" padding="none" class="stat">
+      <span class="label" title={provenanceTooltip(capacity.provenance)}>Remaining</span>
       <strong>
         {#if summary.remaining_known}
           {formatTokenCount(summary.remaining_tokens)}
+          <span class="stat-pct">({percentLabel(remainingPercent)})</span>
         {:else}
           —
         {/if}
       </strong>
-      <span class="meta">{provenanceLabel(capacity.provenance)}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Window</span>
-      <strong>
-        {#if capacity.max_tokens > 0}
-          {formatTokenCount(capacity.max_tokens)}
-        {:else}
-          Unknown
-        {/if}
-      </strong>
-      <span class="meta">{provenanceLabel(capacity.provenance)}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Granularity</span>
-      <strong>{summary.row_granularity}</strong>
-      <span class="meta">Visible since row {summary.visible_since_ordinal}</span>
-    </div>
-  </div>
-
-  <div class="session-meta">
-    <span>{session?.agent ?? capacity.agent ?? "Unknown agent"}</span>
-    {#if capacity.model}
-      <span>{capacity.model}</span>
-    {/if}
-    {#if summary.last_updated_at}
-      <span title={formatTimestamp(summary.last_updated_at)}>
-        Updated {formatRelativeTime(summary.last_updated_at)}
-      </span>
-    {/if}
-    {#if session?.ended_at}
-      <span>Historical session</span>
-    {:else}
-      <span>Live session</span>
-    {/if}
+    </Card>
   </div>
 
   {#if warnings.length > 0}
@@ -115,114 +111,149 @@
       {/each}
     </div>
   {/if}
-</section>
+</Card>
 
 <style>
-  .context-card {
-    border: 1px solid var(--border-default);
-    background: var(--bg-surface);
-    border-radius: 14px;
-    padding: 18px;
+  :global(.context-card) {
+    padding: 12px;
     display: grid;
-    gap: 14px;
+    gap: 12px;
   }
 
-  .header {
+  .summary-header {
     display: flex;
     justify-content: space-between;
     gap: 16px;
     align-items: end;
   }
 
+  .summary-leading {
+    display: grid;
+    gap: 4px;
+  }
+
   .eyebrow {
-    font-size: 11px;
+    font-size: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--text-secondary);
-    margin-bottom: 6px;
+    color: var(--text-muted);
   }
 
   h2 {
     margin: 0;
-    font-size: 20px;
-    line-height: 1.2;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text-primary);
+  }
+
+  .session-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 2px;
+  }
+
+  .pill {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-inset);
+    border: 1px solid var(--border-muted);
+    border-radius: 999px;
+    padding: 1px 8px;
+    white-space: nowrap;
+  }
+
+  .pill-live {
+    color: var(--accent-teal);
+    border-color: var(--accent-teal);
+  }
+
+  .pill-dim {
+    color: var(--text-muted);
   }
 
   .occupancy {
     text-align: right;
+    flex-shrink: 0;
   }
 
   .tokens {
-    font-size: 28px;
+    font-size: 20px;
     font-weight: 700;
     line-height: 1;
+    color: var(--text-primary);
   }
 
   .tokens-meta {
-    font-size: 12px;
-    color: var(--text-secondary);
+    font-size: 11px;
+    color: var(--text-muted);
     margin-top: 4px;
   }
 
+  .stat-pct {
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-left: 2px;
+  }
+
   .meter-shell {
-    height: 12px;
-    background: color-mix(in srgb, var(--bg-surface) 65%, #334155 35%);
+    height: 8px;
+    background: var(--bg-inset);
     border-radius: 999px;
     overflow: hidden;
   }
 
   .meter-fill {
     height: 100%;
-    background: linear-gradient(90deg, #0f766e, #ea580c);
+    background: linear-gradient(
+      90deg,
+      var(--accent-teal),
+      var(--accent-amber),
+      var(--accent-rose)
+    );
   }
 
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
-  .stat {
-    padding: 12px;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--bg-surface) 88%, #0f172a 12%);
-    border: 1px solid var(--border-default);
+  :global(.stat) {
+    padding: 10px;
     display: grid;
-    gap: 4px;
+    gap: 2px;
+  }
+
+  :global(.stat) strong {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
   .label,
-  .meta,
-  .session-meta,
   .warning {
-    font-size: 12px;
-    color: var(--text-secondary);
-  }
-
-  .session-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
   }
 
   .warnings {
     display: grid;
-    gap: 8px;
+    gap: 6px;
   }
 
   .warning {
-    padding: 10px 12px;
-    border-left: 3px solid #f59e0b;
-    background: color-mix(in srgb, var(--bg-surface) 85%, #f59e0b 15%);
-    border-radius: 8px;
+    padding: 8px 10px;
+    border-left: 3px solid var(--accent-amber);
+    background: color-mix(in srgb, var(--bg-surface) 85%, var(--accent-amber) 15%);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
   }
 
   @media (max-width: 900px) {
-    .stats-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .header {
+    .summary-header {
       flex-direction: column;
       align-items: start;
     }

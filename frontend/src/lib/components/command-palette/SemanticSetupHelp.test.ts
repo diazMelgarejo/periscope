@@ -131,7 +131,7 @@ describe("SemanticSetupHelp", () => {
     expect(text()).toContain("Semantic search isn't set up");
     expect(text()).toContain("[vector]");
     expect(text()).toContain("enabled = true");
-    expect(text()).toContain("agentsview embeddings build");
+    expect(text()).toContain("periscope embeddings build");
 
     const copyButtons = document.body.querySelectorAll("button.kit-copy-btn");
     expect(copyButtons.length).toBe(2);
@@ -143,7 +143,7 @@ describe("SemanticSetupHelp", () => {
     (copyButtons[1] as HTMLButtonElement).click();
     await settle();
     expect(mockCopyToClipboard).toHaveBeenCalledWith(
-      "agentsview embeddings build",
+      "periscope embeddings build",
     );
 
     unmount(component);

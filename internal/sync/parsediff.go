@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 // ParseDiffOptions configures a report-only re-parse comparison.

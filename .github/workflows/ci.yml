@@ -196,7 +196,7 @@ jobs:
             throw "could not determine Rust host triple"
           }
           New-Item -ItemType Directory -Force desktop/src-tauri/binaries | Out-Null
-          New-Item -ItemType File -Force "desktop/src-tauri/binaries/agentsview-$hostTriple.exe" | Out-Null
+          New-Item -ItemType File -Force "desktop/src-tauri/binaries/periscope-$hostTriple.exe" | Out-Null
 
       - name: Fetch Windows desktop Rust dependencies
         shell: pwsh
@@ -352,7 +352,7 @@ jobs:
           CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
             -o /tmp/testfixture ./cmd/testfixture
           CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
-            -o /tmp/agentsview ./cmd/agentsview
+            -o /tmp/periscope ./cmd/periscope
         env:
           CGO_ENABLED: "1"
 
@@ -365,4 +365,4 @@ jobs:
         working-directory: frontend
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
-          E2E_PREBUILT_SERVER: /tmp/agentsview
+          E2E_PREBUILT_SERVER: /tmp/periscope

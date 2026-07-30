@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	corerecall "go.kenn.io/agentsview/internal/recall"
+	corerecall "github.com/latentsignal-org/periscope/internal/recall"
 )
 
 func TestFlattenTrajectoryText(t *testing.T) {

@@ -119,6 +119,14 @@ describe("SearchStore", () => {
     expect(createSearchStore(storage).mode).toBe(expected);
   });
 
+  it("migrates a legacy search mode key on load", () => {
+    const storage = memoryStorage({
+      "agentsview-search-mode": "hybrid",
+    });
+
+    expect(createSearchStore(storage).mode).toBe("hybrid");
+  });
+
   it("defensively handles unavailable storage", () => {
     const throwingStorage = {
       getItem: vi.fn(() => {

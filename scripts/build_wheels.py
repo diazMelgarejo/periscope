@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Build Python wheels for PyPI distribution from pre-built agentsview binaries.
+"""Build Python wheels for PyPI distribution from pre-built periscope binaries.
 
 Takes release archives (tar.gz/zip) and packages them into platform-specific
 Python wheels that can be uploaded to PyPI.
@@ -19,38 +19,64 @@ import zipfile
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
+# Version helpers
+# ---------------------------------------------------------------------------
+
+
+def normalize_wheel_version(version: str) -> str:
+    """Convert a release tag version to a PEP 440-compatible wheel version.
+
+    Our release tags follow the convention:
+        {semver}-{suffix}-{commit}  →  0.29.2-periscope.2-258218f5
+
+    Wheel filenames use ``-`` as a field delimiter, so the version field must
+    not contain dashes.  PEP 440 local identifiers (``+``) are the standard
+    escape hatch:
+
+        0.29.2-periscope.2-258218f5  →  0.29.2+periscope.2.258218f5
+
+    A plain semver (e.g. ``0.29.2``) is returned as-is.
+    """
+    m = re.match(r"^(\d+\.\d+\.\d+)-(.+)$", version)
+    if m:
+        local = m.group(2).replace("-", ".")
+        return f"{m.group(1)}+{local}"
+    return version
+
+
+# ---------------------------------------------------------------------------
 # Platform constants
 # ---------------------------------------------------------------------------
 
 PLATFORM_MAP: dict[str, dict[str, str]] = {
     "linux_amd64": {
         "wheel_tag": "manylinux_2_28_x86_64",
-        "binary_name": "agentsview",
+        "binary_name": "periscope",
     },
     "linux_arm64": {
         "wheel_tag": "manylinux_2_28_aarch64",
-        "binary_name": "agentsview",
+        "binary_name": "periscope",
     },
     "darwin_amd64": {
         "wheel_tag": "macosx_11_0_x86_64",
-        "binary_name": "agentsview",
+        "binary_name": "periscope",
     },
     "darwin_arm64": {
         "wheel_tag": "macosx_11_0_arm64",
-        "binary_name": "agentsview",
+        "binary_name": "periscope",
     },
     "windows_amd64": {
         "wheel_tag": "win_amd64",
-        "binary_name": "agentsview.exe",
+        "binary_name": "periscope.exe",
     },
     "windows_arm64": {
         "wheel_tag": "win_arm64",
-        "binary_name": "agentsview.exe",
+        "binary_name": "periscope.exe",
     },
 }
 
 _ARCHIVE_RE = re.compile(
-    r"^agentsview_(?P<version>[^_]+)_(?P<platform>[^.]+)\.(?:tar\.gz|zip)$"
+    r"^periscope_(?P<version>[^_]+)_(?P<platform>[^.]+)\.(?:tar\.gz|zip)$"
 )
 
 # ---------------------------------------------------------------------------
@@ -62,7 +88,7 @@ def parse_archive_filename(filename: str) -> tuple[str, str] | None:
     """Parse a release archive filename into (platform_key, version).
 
     Recognizes filenames of the form:
-        agentsview_<version>_<platform>.(tar.gz|zip)
+        periscope_<version>_<platform>.(tar.gz|zip)
 
     Returns None for unrecognized filenames or unknown platforms.
     """
@@ -132,7 +158,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    bin_path = str(Path(__file__).parent / "bin" / "agentsview")
+    bin_path = str(Path(__file__).parent / "bin" / "periscope")
     mode = os.stat(bin_path).st_mode
     if not (mode & stat.S_IXUSR):
         os.chmod(bin_path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -148,12 +174,12 @@ from pathlib import Path
 
 
 def main() -> None:
-    bin_path = Path(__file__).parent / "bin" / "agentsview.exe"
+    bin_path = Path(__file__).parent / "bin" / "periscope.exe"
     sys.exit(subprocess.call([str(bin_path)] + sys.argv[1:]))
 """
 
 _MAIN_PY = """\
-from agentsview import main
+from periscope import main
 
 main()
 """
@@ -172,7 +198,7 @@ def build_wheel(
     platform_key: str,
     readme: str | None = None,
 ) -> Path:
-    """Build a Python wheel containing the agentsview binary.
+    """Build a Python wheel containing the periscope binary.
 
     Args:
         binary_content: Raw bytes of the platform binary.
@@ -189,17 +215,19 @@ def build_wheel(
     binary_name = platform_info["binary_name"]
     is_windows = platform_key.startswith("windows")
 
-    dist_info = f"agentsview-{version}.dist-info"
-    whl_name = f"agentsview-{version}-py3-none-{wheel_tag}.whl"
+    # Normalize version for PEP 440 compliance (dashes → local identifier)
+    whl_version = normalize_wheel_version(version)
+    dist_info = f"periscope-{whl_version}.dist-info"
+    whl_name = f"periscope-{whl_version}-py3-none-{wheel_tag}.whl"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     whl_path = output_dir / whl_name
 
     init_py = _INIT_PY_WINDOWS if is_windows else _INIT_PY_UNIX
     main_py = _MAIN_PY
-    metadata = _build_metadata(version, readme)
+    metadata = _build_metadata(whl_version, readme)
     wheel_meta = _build_wheel_file(wheel_tag)
-    entry_points = "[console_scripts]\nagentsview = agentsview:main\n"
+    entry_points = "[console_scripts]\nperiscope = periscope:main\n"
 
     # Collect (arcname, data) pairs to write, then build RECORD
     entries: list[tuple[str, bytes, int]] = []
@@ -207,9 +235,9 @@ def build_wheel(
     def _add(arcname: str, data: bytes, unix_mode: int = 0o644) -> None:
         entries.append((arcname, data, unix_mode))
 
-    _add("agentsview/__init__.py", init_py.encode())
-    _add("agentsview/__main__.py", main_py.encode())
-    _add(f"agentsview/bin/{binary_name}", binary_content, 0o755)
+    _add("periscope/__init__.py", init_py.encode())
+    _add("periscope/__main__.py", main_py.encode())
+    _add(f"periscope/bin/{binary_name}", binary_content, 0o755)
     _add(f"{dist_info}/METADATA", metadata.encode())
     _add(f"{dist_info}/WHEEL", wheel_meta.encode())
     _add(f"{dist_info}/entry_points.txt", entry_points.encode())
@@ -243,11 +271,11 @@ def build_wheel(
 def _build_metadata(version: str, readme: str | None) -> str:
     lines = [
         "Metadata-Version: 2.1",
-        "Name: agentsview",
+        "Name: periscope",
         f"Version: {version}",
         "Summary: Local web viewer for AI agent sessions",
-        "Home-page: https://github.com/kenn-io/agentsview",
-        "Author: Kenn Software LLC",
+        "Home-page: https://github.com/latentsignal-org/periscope",
+        "Author: Wes McKinney",
         "License: MIT",
         "Requires-Python: >=3.9",
         "Classifier: License :: OSI Approved :: MIT License",
@@ -263,7 +291,7 @@ def _build_metadata(version: str, readme: str | None) -> str:
 def _build_wheel_file(wheel_tag: str) -> str:
     return (
         "Wheel-Version: 1.0\n"
-        "Generator: agentsview-build-wheels\n"
+        "Generator: periscope-build-wheels\n"
         "Root-Is-Purelib: false\n"
         f"Tag: py3-none-{wheel_tag}\n"
     )
@@ -333,7 +361,7 @@ def build_all_wheels(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build Python wheels from pre-built agentsview binaries."
+        description="Build Python wheels from pre-built periscope binaries."
     )
     parser.add_argument("--version", required=True, help="Package version (e.g. 0.15.0)")
     parser.add_argument(

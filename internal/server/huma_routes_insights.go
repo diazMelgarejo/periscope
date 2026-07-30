@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/insight"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"github.com/latentsignal-org/periscope/internal/activity"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/insight"
+	"github.com/latentsignal-org/periscope/internal/timeutil"
 )
 
 func (s *Server) registerInsightsRoutes() {

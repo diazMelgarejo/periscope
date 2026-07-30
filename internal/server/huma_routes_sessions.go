@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/sessionwatch"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/money"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/service"
+	"github.com/latentsignal-org/periscope/internal/sessionwatch"
 )
 
 func (s *Server) registerSessionRoutes() {

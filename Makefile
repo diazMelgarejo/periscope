@@ -63,18 +63,18 @@ pricing-snapshot: sqlite-vec-header
 
 # Build the binary (debug, with embedded pricing snapshot and frontend)
 build: pricing-snapshot frontend
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o agentsview ./cmd/agentsview
-	@chmod +x agentsview
+	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o periscope ./cmd/periscope
+	@chmod +x periscope
 
 # Build with optimizations (release)
 build-release: pricing-snapshot frontend
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview
-	@chmod +x agentsview
+	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o periscope ./cmd/periscope
+	@chmod +x periscope
 
 # Install to ~/.local/bin, $GOBIN, or $GOPATH/bin.
 # Copy to a temp file in the destination directory, then rename into place.
 # Rename is atomic and produces a fresh inode, so overwriting the binary while
-# an old agentsview is still running does not leave the kernel validating exec
+# an old periscope is still running does not leave the kernel validating exec
 # against stale code-signature pages (which SIGKILLs the new process on macOS).
 install: build-release
 	@if [ -d "$(HOME)/.local/bin" ]; then \
@@ -87,11 +87,11 @@ install: build-release
 		fi; \
 		mkdir -p "$$INSTALL_DIR"; \
 	fi; \
-	echo "Installing to $$INSTALL_DIR/agentsview"; \
-	tmp="$$(mktemp "$$INSTALL_DIR/agentsview.tmp.XXXXXX")" || exit $$?; \
+	echo "Installing to $$INSTALL_DIR/periscope"; \
+	tmp="$$(mktemp "$$INSTALL_DIR/periscope.tmp.XXXXXX")" || exit $$?; \
 	cleanup() { rm -f "$$tmp"; }; \
 	trap cleanup EXIT HUP INT TERM; \
-	cp agentsview "$$tmp" && chmod 755 "$$tmp" && mv -f "$$tmp" "$$INSTALL_DIR/agentsview"; \
+	cp periscope "$$tmp" && chmod 755 "$$tmp" && mv -f "$$tmp" "$$INSTALL_DIR/periscope"; \
 	status=$$?; \
 	trap - EXIT HUP INT TERM; \
 	cleanup; \
@@ -110,14 +110,14 @@ frontend:
 frontend-dev:
 	cd frontend && npm run dev
 
-# Build and run agentsview against a fresh snapshot of the prod SQLite DB.
+# Build and run periscope against a fresh snapshot of the prod SQLite DB.
 # Prod DB is never written; sqlite3 .backup is WAL-safe even with prod running.
 # Prod config.toml is NOT copied, so remote PG push is disabled in the snapshot.
 # Overrides:
-#   PROD_DATA_DIR  - source data dir (default: $$HOME/.agentsview)
+#   PROD_DATA_DIR  - source data dir (default: $$HOME/.periscope)
 #   SNAPSHOT_DIR   - destination dir (default: tmp/prod-snapshot)
 #   RESNAPSHOT=0   - reuse existing snapshot instead of re-cloning
-PROD_DATA_DIR ?= $(HOME)/.agentsview
+PROD_DATA_DIR ?= $(HOME)/.periscope
 SNAPSHOT_DIR ?= tmp/prod-snapshot
 # Resolve SNAPSHOT_DIR so relative and absolute paths both work.
 SNAPSHOT_ABS := $(abspath $(SNAPSHOT_DIR))
@@ -131,7 +131,7 @@ SNAPSHOT_ABS := $(abspath $(SNAPSHOT_DIR))
 # SNAPSHOT_DIR=tmp wiping unrelated tmp/ contents) even with a
 # denylist, so we now only ever delete a small set of files we
 # know we wrote.
-SNAPSHOT_MARKER := .agentsview-snapshot
+SNAPSHOT_MARKER := .periscope-snapshot
 
 dev-snapshot: build
 	@if [ ! -f "$(PROD_DATA_DIR)/sessions.db" ]; then \
@@ -164,7 +164,7 @@ dev-snapshot: build
 	else \
 		echo "Reusing existing snapshot at $(SNAPSHOT_ABS)/sessions.db"; \
 	fi
-	AGENTSVIEW_DATA_DIR="$(SNAPSHOT_ABS)" ./agentsview serve --port 0
+	PERISCOPE_DATA_DIR="$(SNAPSHOT_ABS)" ./periscope serve --port 0
 
 # Ensure air is installed for backend live reload
 check-air:
@@ -197,10 +197,10 @@ desktop-macos-app:
 	cd desktop && npm ci && npm run tauri:build:macos-app \
 		$(if $(TAURI_SIGNING_PRIVATE_KEY),,-- --config '{"bundle":{"createUpdaterArtifacts":false}}')
 	mkdir -p $(DESKTOP_DIST_DIR)/macos
-	rm -rf $(DESKTOP_DIST_DIR)/macos/AgentsView.app
-	cp -R desktop/src-tauri/target/release/bundle/macos/AgentsView.app \
-		$(DESKTOP_DIST_DIR)/macos/AgentsView.app
-	@echo "macOS app bundle copied to $(DESKTOP_DIST_DIR)/macos/AgentsView.app"
+	rm -rf $(DESKTOP_DIST_DIR)/macos/Periscope.app
+	cp -R desktop/src-tauri/target/release/bundle/macos/Periscope.app \
+		$(DESKTOP_DIST_DIR)/macos/Periscope.app
+	@echo "macOS app bundle copied to $(DESKTOP_DIST_DIR)/macos/Periscope.app"
 
 # Build macOS DMG installer
 desktop-macos-dmg:
@@ -450,7 +450,7 @@ tidy: pricing-snapshot
 
 # Clean build artifacts
 clean:
-	rm -f agentsview agentsv
+	rm -f periscope agentsv
 	rm -f $(PRICING_SNAPSHOT_FILE)
 	rm -rf internal/web/dist dist/ tmp/ $(SQLITE_INCLUDE_DIR)
 	mkdir -p internal/web/dist
@@ -490,26 +490,26 @@ release: pricing-snapshot frontend
 	mkdir -p dist
 	CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
-		-o dist/agentsview-$$(go env GOOS)-$$(go env GOARCH) ./cmd/agentsview
+		-o dist/periscope-$$(go env GOOS)-$$(go env GOARCH) ./cmd/periscope
 
 # Cross-compile targets (require CC set to target cross-compiler)
 release-darwin-arm64: pricing-snapshot frontend
 	mkdir -p dist
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
-		-o dist/agentsview-darwin-arm64 ./cmd/agentsview
+		-o dist/periscope-darwin-arm64 ./cmd/periscope
 
 release-darwin-amd64: pricing-snapshot frontend
 	mkdir -p dist
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
-		-o dist/agentsview-darwin-amd64 ./cmd/agentsview
+		-o dist/periscope-darwin-amd64 ./cmd/periscope
 
 release-linux-amd64: pricing-snapshot frontend
 	mkdir -p dist
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
-		-o dist/agentsview-linux-amd64 ./cmd/agentsview
+		-o dist/periscope-linux-amd64 ./cmd/periscope
 
 # Install pre-commit and pre-push hooks via prek
 install-hooks:
@@ -521,7 +521,7 @@ install-hooks:
 
 # Show help
 help:
-	@echo "agentsview build targets:"
+	@echo "periscope build targets:"
 	@echo ""
 	@echo "  build          - Build with embedded frontend"
 	@echo "  build-release  - Release build (optimized, stripped)"
@@ -529,7 +529,7 @@ help:
 	@echo "  install        - Build and install to ~/.local/bin or GOPATH"
 	@echo ""
 	@echo "  dev            - Run Go server with live reload via air (use with frontend-dev)"
-	@echo "  dev-snapshot   - Run agentsview against a fresh snapshot of prod sessions.db"
+	@echo "  dev-snapshot   - Run periscope against a fresh snapshot of prod sessions.db"
 	@echo "  air-install    - Install air for backend live reload"
 	@echo "  frontend       - Build frontend SPA"
 	@echo "  frontend-dev   - Run Vite+ dev server"

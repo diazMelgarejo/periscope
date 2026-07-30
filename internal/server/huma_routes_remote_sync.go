@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/remotesync"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/remotesync"
 )
 
 func (s *Server) registerRemoteSyncRoutes() {

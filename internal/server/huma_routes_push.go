@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
-	"go.kenn.io/agentsview/internal/postgres"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
+	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
+	"github.com/latentsignal-org/periscope/internal/postgres"
+	syncpkg "github.com/latentsignal-org/periscope/internal/sync"
 )
 
 // pushProgressLogInterval bounds how often the daemon-side push handlers log

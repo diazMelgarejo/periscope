@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/parser"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {

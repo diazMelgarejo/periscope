@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // Store wraps a PostgreSQL connection for read-only session
@@ -51,7 +51,9 @@ const pgSessionCols = `id, project, machine, agent,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
+	model_context_window_tokens,
 	has_total_output_tokens, has_peak_context_tokens,
+	has_model_context_window_tokens,
 	is_automated,
 	tool_failure_signal_count, tool_retry_count,
 	edit_churn_count, consecutive_failure_max,
@@ -210,7 +212,9 @@ func scanPGSession(
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.ModelContextWindowTokens,
 		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+		&s.HasModelContextWindowTokens,
 		&s.IsAutomated,
 		&s.ToolFailureSignalCount, &s.ToolRetryCount,
 		&s.EditChurnCount, &s.ConsecutiveFailureMax,

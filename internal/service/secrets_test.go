@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/secrets"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/dbtest"
+	"github.com/latentsignal-org/periscope/internal/secrets"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 func TestHTTPBackendScanSecretsStream(t *testing.T) {
@@ -64,7 +64,7 @@ func TestDirectListSecretsConfidenceDefault(t *testing.T) {
 		s.UserMessageCount = 1
 	})
 	require.NoError(t, d.InsertMessages([]db.Message{
-		dbtest.UserMsg("x1", 0, "key AKIA7QHWN2DKR4FYPLJM tok=abc123def456ghi789jkl"),
+		dbtest.UserMsg("x1", 0, "key AKIA3VBMK8XJZ6WPCNQH tok=abc123def456ghi789jkl"),
 	}))
 	require.NoError(t, d.ReplaceSessionSecretFindings("x1", []db.SecretFinding{
 		{SessionID: "x1", RuleName: "aws-access-key", Confidence: "definite",
@@ -153,7 +153,7 @@ func TestDirectScanSecretsReadOnly(t *testing.T) {
 func TestDirectListSecretsReveal(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
-	const secret = "AKIA7QHWN2DKR4FYPLJM"
+	const secret = "AKIA3VBMK8XJZ6WPCNQH"
 	content := "my key is " + secret + " ok"
 	start := strings.Index(content, secret)
 	dbtest.SeedSession(t, d, "x1", "proj", func(s *db.Session) {

@@ -6,7 +6,7 @@ package export
 import (
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 const UsageDailySchemaVersion = 4

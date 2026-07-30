@@ -2,6 +2,10 @@ import { execSync } from "node:child_process";
 import { defineConfig } from "vite-plus";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { paraglideVitePlugin } from "@inlang/paraglide-js";
+import {
+  applyDevProxyHeaders,
+  getDevProxyTarget,
+} from "./dev-proxy";
 
 function gitCommit(): string {
   try {
@@ -13,8 +17,8 @@ function gitCommit(): string {
   }
 }
 
-const apiTarget = process.env.VITE_API_TARGET ?? "http://127.0.0.1:8080";
-const apiTargetOrigin = new URL(apiTarget).origin;
+const apiTarget =
+  process.env.VITE_API_TARGET ?? getDevProxyTarget(process.env);
 
 function isIPv4LoopbackLiteral(hostname: string): boolean {
   const parts = hostname.split(".");
@@ -105,7 +109,7 @@ export default defineConfig({
       "/api": {
         target: apiTarget,
         changeOrigin: true,
-        configure(proxy) {
+        configure(proxy, options) {
           proxy.on("proxyReq", (proxyReq, req) => {
             const origin = req.headers.origin;
             if (
@@ -114,7 +118,7 @@ export default defineConfig({
                 req.headers.host,
               )
             ) {
-              proxyReq.setHeader("Origin", apiTargetOrigin);
+              applyDevProxyHeaders(proxyReq, String(options.target));
             }
           });
         },

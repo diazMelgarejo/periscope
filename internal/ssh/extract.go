@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"go.kenn.io/agentsview/internal/remotesync"
+	"github.com/latentsignal-org/periscope/internal/remotesync"
 )
 
 func extractTarStream(

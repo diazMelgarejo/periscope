@@ -354,3 +354,14 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
   commands, or describe how the change was verified.
 - Describe what the code does now, why it changed, tradeoffs, limitations, and
   where reviewers should look.
+
+## Cursor Cloud: git commits
+
+periscope is **excluded** from orama attribution-guard scripts (`commit-clean.sh`,
+`sync-attribution-guard-scripts.sh`, etc.). Use standard `git commit` per the Git
+Rules section above. PT and AlphaClaw in the same cloud workspace run
+`bash ../orama-system/scripts/git/apply-attribution-guard-all-repos.sh` from their
+repos (periscope is skipped automatically).
+
+**Fork policy:** integration branch is `merged`. Open agent PRs from
+`cursor/*` branches → `merged` (never → `main`).

@@ -2,7 +2,7 @@ name: Docker
 
 on:
   push:
-    branches: [main]
+    branches: [main, merged]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -62,9 +62,11 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=ref,event=branch
             type=semver,pattern={{version}}
+            type=sha,format=short
           labels: |
-            org.opencontainers.image.title=agentsview
+            org.opencontainers.image.title=periscope
             org.opencontainers.image.description=Local web viewer for AI agent sessions
 
       - name: Build and push Docker image

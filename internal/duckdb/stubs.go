@@ -3,7 +3,7 @@ package duckdb
 import (
 	"context"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 func (s *Store) InsertInsight(_ db.Insight) (int64, error) { return 0, db.ErrReadOnly }

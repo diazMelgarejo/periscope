@@ -62,7 +62,7 @@ function run(cmd, args, options = {}) {
 const tempDir = mkdtempSync(join(tmpdir(), "agentsview-openapi-"));
 try {
   const specPath = join(tempDir, "openapi.json");
-  const spec = run("go", ["run", "./cmd/agentsview", "openapi"], {
+  const spec = run("go", ["run", "./cmd/periscope", "openapi"], {
     cwd: repoRoot,
     capture: true,
   });

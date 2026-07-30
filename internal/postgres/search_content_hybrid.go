@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // pgHybridDisplay carries what one fused unit needs for presentation: the

@@ -338,7 +338,7 @@
         <circle cx="18" cy="8.5" r="2" fill="var(--accent-blue, #3b82f6)"/>
         <circle cx="18" cy="8.5" r="1" fill="#1d4ed8"/>
       </svg>
-      <span class="header-title">AgentsView</span>
+      <span class="header-title">Periscope</span>
     </button>
 
     <span class="project-picker">
@@ -354,6 +354,7 @@
     <FitStages class="search-fit" stages={[searchField, searchIconOnly]} />
   {/snippet}
 
+  {#snippet right()}
     <button
       class="nav-btn"
       class:active={router.route === "sessions" || router.route === "context"}
@@ -366,8 +367,6 @@
       </svg>
       <span class="nav-label">Sessions</span>
     </button>
-
-  {#snippet right()}
     {#if hasActiveSession}
       <!-- Transcript controls: mode pills + filter, grouped visually -->
       <div class="transcript-strip">

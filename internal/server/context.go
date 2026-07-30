@@ -2,15 +2,32 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 
-	"github.com/wesm/agentsview/internal/db"
-	"github.com/wesm/agentsview/internal/signals"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/guidance"
+	"github.com/latentsignal-org/periscope/internal/signals"
+)
+
+// toolBlockRE strips inline tool-call markup like
+// "[Bash]\n$ ls" or "[Read /foo]\n..." from assistant prose so
+// previews don't repeat what the tool-call group already shows.
+// Mirrors TOOL_RE in frontend/src/lib/utils/content-parser.ts.
+var toolBlockRE = regexp.MustCompile(
+	`\[(Tool|Read|Write|Edit|Bash|Glob|Grep|Other|TaskCreate|` +
+		`TaskUpdate|TaskGet|TaskList|Task|Agent|Skill|SendMessage|` +
+		`Question|Todo List|Entering Plan Mode|Exiting Plan Mode|` +
+		`exec_command|shell_command|write_stdin|apply_patch|shell|` +
+		`parallel|view_image|request_user_input|update_plan)` +
+		`[^\]]*\][\s\S]*?(?:\n\[|\n\n|$)`,
 )
 
 const (
@@ -82,6 +99,45 @@ type contextTimelineRow struct {
 	Annotations          []string               `json:"annotations,omitempty"`
 }
 
+type contextTimelineMessagePreview struct {
+	Ordinal int    `json:"ordinal"`
+	Preview string `json:"preview"`
+}
+
+type contextTimelineToolPreview struct {
+	Ordinal  int    `json:"ordinal"`
+	ToolName string `json:"tool_name"`
+	Snippet  string `json:"snippet,omitempty"`
+}
+
+type contextTimelineEntry struct {
+	Kind          string `json:"kind"`
+	Ordinal       int    `json:"ordinal"`
+	Label         string `json:"label"`
+	Preview       string `json:"preview,omitempty"`
+	OutputPreview string `json:"output_preview,omitempty"`
+}
+
+type contextTimelineTurn struct {
+	Turn                 int                            `json:"turn"`
+	StartOrdinal         int                            `json:"start_ordinal"`
+	EndOrdinal           int                            `json:"end_ordinal"`
+	Timestamp            string                         `json:"timestamp,omitempty"`
+	Label                string                         `json:"label,omitempty"`
+	DeltaTokens          int                            `json:"delta_tokens"`
+	DeltaProvenance      string                         `json:"delta_provenance"`
+	CumulativeTokens     int                            `json:"cumulative_tokens"`
+	CumulativeProvenance string                         `json:"cumulative_provenance"`
+	DominantCategory     string                         `json:"dominant_category,omitempty"`
+	Categories           []contextCategoryValue         `json:"categories"`
+	Markers              []string                       `json:"markers,omitempty"`
+	Annotations          []string                       `json:"annotations,omitempty"`
+	UserMessage          *contextTimelineMessagePreview `json:"user_message,omitempty"`
+	AssistantMessage     *contextTimelineMessagePreview `json:"assistant_message,omitempty"`
+	ToolCalls            []contextTimelineToolPreview   `json:"tool_calls,omitempty"`
+	Entries              []contextTimelineEntry         `json:"entries,omitempty"`
+}
+
 type contextSupports struct {
 	LiveUpdates       bool   `json:"live_updates"`
 	StandaloneRoute   bool   `json:"standalone_route"`
@@ -92,26 +148,51 @@ type contextSupports struct {
 }
 
 type sessionContextResponse struct {
-	Summary     contextSummary           `json:"summary"`
-	Capacity    contextCapacity          `json:"capacity"`
-	Composition []contextCompositionItem `json:"composition"`
-	Supports    contextSupports          `json:"supports"`
-	Warnings    []string                 `json:"warnings,omitempty"`
+	Summary         contextSummary           `json:"summary"`
+	Capacity        contextCapacity          `json:"capacity"`
+	Composition     []contextCompositionItem `json:"composition"`
+	Supports        contextSupports          `json:"supports"`
+	Warnings        []string                 `json:"warnings,omitempty"`
+	RewindSignal    *signals.RewindSignal    `json:"rewind_signal,omitempty"`
+	CompactSignal   *signals.CompactSignal   `json:"compact_signal,omitempty"`
+	SummaryCoverage *summaryCoverage         `json:"summary_coverage,omitempty"`
+}
+
+// summaryCoverage reports how much of the session has per-turn
+// LLM summaries. Status is one of:
+//   - "disabled": no ANTHROPIC_API_KEY configured, no summaries generated
+//   - "idle":     summariser enabled but session not starred
+//   - "pending":  starred, some (possibly zero) turns summarised
+//   - "complete": every turn has a summary
+type summaryCoverage struct {
+	Status          string `json:"status"`
+	TotalTurns      int    `json:"total_turns"`
+	SummarisedTurns int    `json:"summarised_turns"`
+	Starred         bool   `json:"starred"`
+	LastUpdatedAt   string `json:"last_updated_at,omitempty"`
 }
 
 type sessionContextTimelineResponse struct {
-	Timeline []contextTimelineRow `json:"timeline"`
-	Supports contextSupports      `json:"supports"`
-	Warnings []string             `json:"warnings,omitempty"`
+	Timeline []contextTimelineTurn `json:"timeline"`
+	Supports contextSupports       `json:"supports"`
+	Warnings []string              `json:"warnings,omitempty"`
 }
 
 type sessionContextView struct {
-	Summary     contextSummary
-	Capacity    contextCapacity
-	Composition []contextCompositionItem
-	Timeline    []contextTimelineRow
-	Supports    contextSupports
-	Warnings    []string
+	Summary         contextSummary
+	Capacity        contextCapacity
+	Composition     []contextCompositionItem
+	Timeline        []contextTimelineTurn
+	Supports        contextSupports
+	Warnings        []string
+	RewindSignal    *signals.RewindSignal
+	CompactSignal   *signals.CompactSignal
+	SummaryCoverage *summaryCoverage
+}
+
+type guidanceCacheEntry struct {
+	Rewind  *signals.RewindSignal
+	Compact *signals.CompactSignal
 }
 
 type contextRowCalc struct {
@@ -142,11 +223,14 @@ func (s *Server) handleGetSessionContext(
 	}
 
 	writeJSON(w, http.StatusOK, sessionContextResponse{
-		Summary:     view.Summary,
-		Capacity:    view.Capacity,
-		Composition: view.Composition,
-		Supports:    view.Supports,
-		Warnings:    view.Warnings,
+		Summary:         view.Summary,
+		Capacity:        view.Capacity,
+		Composition:     view.Composition,
+		Supports:        view.Supports,
+		Warnings:        view.Warnings,
+		RewindSignal:    view.RewindSignal,
+		CompactSignal:   view.CompactSignal,
+		SummaryCoverage: view.SummaryCoverage,
 	})
 }
 
@@ -192,7 +276,341 @@ func (s *Server) buildSessionContextView(
 	if err != nil {
 		return sessionContextView{}, err
 	}
-	return computeSessionContextView(*session, msgs), nil
+	view := computeSessionContextView(*session, msgs)
+	starred, err := s.db.IsSessionStarred(ctx, sessionID)
+	if err != nil && !errors.Is(err, db.ErrReadOnly) {
+		return sessionContextView{}, err
+	}
+	summaries, err := s.db.ListTurnSummaries(ctx, sessionID)
+	if err != nil && !errors.Is(err, db.ErrReadOnly) {
+		return sessionContextView{}, err
+	}
+	view.SummaryCoverage = s.computeSummaryCoverage(
+		len(view.Timeline), starred, summaries,
+	)
+	s.enrichGuidanceSignals(ctx, &view, summaries)
+	return view, nil
+}
+
+// computeSummaryCoverage reports how many turns of the session
+// have LLM summaries, and the overall lifecycle status. Returns
+// nil when there are no turns to summarise.
+func (s *Server) computeSummaryCoverage(
+	totalTurns int,
+	starred bool,
+	summaries []db.TurnSummary,
+) *summaryCoverage {
+	if totalTurns == 0 {
+		return nil
+	}
+	sc := &summaryCoverage{TotalTurns: totalTurns}
+	if s.summarizer == nil || !s.summarizer.Enabled() {
+		sc.Status = "disabled"
+		return sc
+	}
+	sc.Starred = starred
+	sc.SummarisedTurns = len(summaries)
+	for _, ts := range summaries {
+		if ts.CreatedAt > sc.LastUpdatedAt {
+			sc.LastUpdatedAt = ts.CreatedAt
+		}
+	}
+	switch {
+	case sc.SummarisedTurns >= sc.TotalTurns && sc.TotalTurns > 0:
+		sc.Status = "complete"
+	case sc.Starred:
+		sc.Status = "pending"
+	default:
+		sc.Status = "idle"
+	}
+	return sc
+}
+
+func (s *Server) enrichGuidanceSignals(
+	ctx context.Context,
+	view *sessionContextView,
+	summaries []db.TurnSummary,
+) {
+	if s == nil || view == nil || s.guidanceClient == nil ||
+		len(summaries) == 0 {
+		return
+	}
+	summaryByTurn := map[int]db.TurnSummary{}
+	for _, ts := range summaries {
+		summaryByTurn[ts.TurnIndex] = ts
+	}
+	taskTopic := pickOverallTaskTopic(summaries)
+	if view.RewindSignal != nil {
+		s.enrichRewindSignal(
+			ctx, view.RewindSignal, summaryByTurn, taskTopic,
+		)
+	}
+	if view.CompactSignal != nil {
+		s.enrichCompactSignal(
+			ctx, view.CompactSignal, view.Timeline, summaryByTurn, taskTopic,
+		)
+	}
+}
+
+func (s *Server) enrichRewindSignal(
+	ctx context.Context,
+	sig *signals.RewindSignal,
+	summaryByTurn map[int]db.TurnSummary,
+	taskTopic string,
+) {
+	if sig == nil || sig.BadStretchFrom <= 0 || sig.BadStretchTo <= 0 ||
+		sig.RewindToTurn <= 0 {
+		return
+	}
+	lastClean, ok := summaryByTurn[sig.RewindToTurn]
+	if !ok {
+		return
+	}
+	badStretch := make([]db.TurnSummary, 0, sig.BadStretchTo-sig.BadStretchFrom+1)
+	for turn := sig.BadStretchFrom; turn <= sig.BadStretchTo; turn++ {
+		ts, ok := summaryByTurn[turn]
+		if !ok {
+			return
+		}
+		badStretch = append(badStretch, ts)
+	}
+	in := guidance.RewindInput{
+		TaskTopic:     taskTopic,
+		LastCleanTurn: lastClean,
+		BadStretch:    badStretch,
+	}
+	key := s.guidanceCacheKey("rewind", in)
+	if cached := s.getCachedRewindSignal(key); cached != nil {
+		*sig = *cached
+		return
+	}
+	out, err := guidance.GenerateRewind(
+		ctx, s.guidanceClient, s.guidanceModel, in,
+	)
+	if err != nil || out.RewindRepromptText == "" {
+		return
+	}
+	augmented := *sig
+	augmented.TangentLabel = out.TangentLabel
+	augmented.RewindRepromptText = out.RewindRepromptText
+	augmented.RepromptProvenance = "model-generated"
+	augmented.RepromptModel = out.Model
+	augmented.EvidenceTurns = evidenceTurnsForRewind(
+		lastClean.TurnIndex, badStretch,
+	)
+	s.setCachedRewindSignal(key, &augmented)
+	*sig = augmented
+}
+
+func (s *Server) enrichCompactSignal(
+	ctx context.Context,
+	sig *signals.CompactSignal,
+	timeline []contextTimelineTurn,
+	summaryByTurn map[int]db.TurnSummary,
+	taskTopic string,
+) {
+	if sig == nil || len(timeline) < 2 {
+		return
+	}
+	recentCount := max(1, len(timeline)/5)
+	olderCount := len(timeline) - recentCount
+	if olderCount <= 0 {
+		return
+	}
+	olderTurns := make([]db.TurnSummary, 0, olderCount)
+	for _, turn := range timeline[:olderCount] {
+		ts, ok := summaryByTurn[turn.Turn]
+		if !ok {
+			return
+		}
+		olderTurns = append(olderTurns, ts)
+	}
+	recentTurns := make([]db.TurnSummary, 0, recentCount)
+	for _, turn := range timeline[olderCount:] {
+		ts, ok := summaryByTurn[turn.Turn]
+		if !ok {
+			return
+		}
+		recentTurns = append(recentTurns, ts)
+	}
+	in := guidance.CompactInput{
+		TaskTopic:          taskTopic,
+		OlderTurns:         olderTurns,
+		RecentTurns:        recentTurns,
+		LowValueCategories: append([]string(nil), sig.CompactFocus...),
+	}
+	key := s.guidanceCacheKey("compact", in)
+	if cached := s.getCachedCompactSignal(key); cached != nil {
+		*sig = *cached
+		return
+	}
+	out, err := guidance.GenerateCompact(
+		ctx, s.guidanceClient, s.guidanceModel, in,
+	)
+	if err != nil || out.CompactFocusText == "" {
+		return
+	}
+	augmented := *sig
+	augmented.KeepItems = out.KeepItems
+	augmented.DropItems = out.DropItems
+	augmented.CompactFocusText = out.CompactFocusText
+	augmented.FocusProvenance = "model-generated"
+	augmented.FocusModel = out.Model
+	augmented.EvidenceTurns = evidenceTurnsForCompact(
+		olderTurns, recentTurns,
+	)
+	s.setCachedCompactSignal(key, &augmented)
+	*sig = augmented
+}
+
+func pickOverallTaskTopic(summaries []db.TurnSummary) string {
+	counts := map[string]int{}
+	order := map[string]int{}
+	bestTopic := ""
+	bestCount := 0
+	bestOrder := -1
+	for i, ts := range summaries {
+		topic := strings.TrimSpace(ts.Topic)
+		if topic == "" {
+			continue
+		}
+		counts[topic]++
+		if _, ok := order[topic]; !ok {
+			order[topic] = i
+		}
+		if counts[topic] > bestCount ||
+			(counts[topic] == bestCount && order[topic] > bestOrder) {
+			bestTopic = topic
+			bestCount = counts[topic]
+			bestOrder = order[topic]
+		}
+	}
+	return bestTopic
+}
+
+func evidenceTurnsForRewind(
+	lastCleanTurn int, badStretch []db.TurnSummary,
+) []int {
+	turns := []int{lastCleanTurn}
+	if len(badStretch) == 1 {
+		return append(turns, badStretch[0].TurnIndex)
+	}
+	if len(badStretch) > 0 {
+		turns = append(turns, badStretch[0].TurnIndex)
+		if len(badStretch) > 2 {
+			turns = append(turns, badStretch[len(badStretch)/2].TurnIndex)
+		}
+		turns = append(turns, badStretch[len(badStretch)-1].TurnIndex)
+	}
+	return uniqueSortedInts(turns)
+}
+
+func evidenceTurnsForCompact(
+	olderTurns []db.TurnSummary,
+	recentTurns []db.TurnSummary,
+) []int {
+	var turns []int
+	appendEvidence := func(items []db.TurnSummary) {
+		if len(items) == 0 {
+			return
+		}
+		turns = append(turns, items[0].TurnIndex)
+		if len(items) > 2 {
+			turns = append(turns, items[len(items)/2].TurnIndex)
+		}
+		if len(items) > 1 {
+			turns = append(turns, items[len(items)-1].TurnIndex)
+		}
+	}
+	appendEvidence(olderTurns)
+	appendEvidence(recentTurns)
+	return uniqueSortedInts(turns)
+}
+
+func uniqueSortedInts(items []int) []int {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := map[int]struct{}{}
+	out := make([]int, 0, len(items))
+	for _, item := range items {
+		if _, ok := seen[item]; ok || item <= 0 {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func (s *Server) guidanceCacheKey(kind string, in any) string {
+	payload, err := json.Marshal(struct {
+		Kind string `json:"kind"`
+		In   any    `json:"in"`
+	}{
+		Kind: kind,
+		In:   in,
+	})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(payload)
+	return kind + ":" + hex.EncodeToString(sum[:])
+}
+
+func (s *Server) getCachedRewindSignal(key string) *signals.RewindSignal {
+	if key == "" {
+		return nil
+	}
+	s.guidanceMu.RLock()
+	defer s.guidanceMu.RUnlock()
+	entry, ok := s.guidanceCache[key]
+	if !ok || entry.Rewind == nil {
+		return nil
+	}
+	cloned := *entry.Rewind
+	return &cloned
+}
+
+func (s *Server) setCachedRewindSignal(
+	key string,
+	sig *signals.RewindSignal,
+) {
+	if key == "" || sig == nil {
+		return
+	}
+	cloned := *sig
+	s.guidanceMu.Lock()
+	defer s.guidanceMu.Unlock()
+	s.guidanceCache[key] = guidanceCacheEntry{Rewind: &cloned}
+}
+
+func (s *Server) getCachedCompactSignal(key string) *signals.CompactSignal {
+	if key == "" {
+		return nil
+	}
+	s.guidanceMu.RLock()
+	defer s.guidanceMu.RUnlock()
+	entry, ok := s.guidanceCache[key]
+	if !ok || entry.Compact == nil {
+		return nil
+	}
+	cloned := *entry.Compact
+	return &cloned
+}
+
+func (s *Server) setCachedCompactSignal(
+	key string,
+	sig *signals.CompactSignal,
+) {
+	if key == "" || sig == nil {
+		return
+	}
+	cloned := *sig
+	s.guidanceMu.Lock()
+	defer s.guidanceMu.Unlock()
+	s.guidanceCache[key] = guidanceCacheEntry{Compact: &cloned}
 }
 
 func computeSessionContextView(
@@ -247,10 +665,11 @@ func computeSessionContextView(
 	}
 
 	applySpikeMarkers(rows)
+	timeline := buildTimelineTurns(rows, visible)
 
 	currentTokens := cumulative
 	tokenProv := cumulativeProv
-	if len(rows) == 0 {
+	if len(timeline) == 0 {
 		tokenProv = contextProvenanceUnknown
 	}
 
@@ -277,10 +696,24 @@ func computeSessionContextView(
 		warnings = append(warnings,
 			"Context capacity is unknown for this session; occupancy and free-space values are omitted.")
 	}
-	warnings = append(warnings,
-		"Timeline rows are rendered at message granularity in V1.")
 
 	composition := buildComposition(compositionTotals, currentTokens, capacity)
+
+	// V2 debug: compute rewind signal for the last turn
+	rewindTurns := buildRewindTurns(timeline, visible)
+	rewindSig := signals.DetectRewindCandidate(rewindTurns, capacity.MaxTokens)
+	var rewindPtr *signals.RewindSignal
+	if rewindSig.ShouldRewind {
+		rewindPtr = &rewindSig
+	}
+
+	// V2 debug: compute compact signal
+	compactInput := buildCompactInput(timeline, compositionTotals, currentTokens, capacity, compactionTrimmed)
+	compactSig := signals.DetectCompactCandidate(compactInput)
+	var compactPtr *signals.CompactSignal
+	if compactSig.ShouldCompact {
+		compactPtr = &compactSig
+	}
 
 	return sessionContextView{
 		Summary: contextSummary{
@@ -290,32 +723,26 @@ func computeSessionContextView(
 			PercentProvenance:   percentProv,
 			RemainingTokens:     remaining,
 			RemainingKnown:      remainingKnown,
-			VisibleRowCount:     len(rows),
+			VisibleRowCount:     len(timeline),
 			VisibleSinceOrdinal: visibleSince,
 			LastUpdatedAt:       lastUpdatedAt,
-			RowGranularity:      contextRowGranularityMessage,
+			RowGranularity:      "turn",
 		},
 		Capacity:    capacity,
 		Composition: composition,
-		Timeline:    mapTimelineRows(rows),
+		Timeline:    timeline,
 		Supports: contextSupports{
 			LiveUpdates:       true,
 			StandaloneRoute:   true,
 			EmbeddedTab:       true,
-			TranscriptJump:    false,
-			RowGranularity:    contextRowGranularityMessage,
+			TranscriptJump:    true,
+			RowGranularity:    "turn",
 			CompactionTrimmed: compactionTrimmed,
 		},
-		Warnings: warnings,
+		Warnings:      warnings,
+		RewindSignal:  rewindPtr,
+		CompactSignal: compactPtr,
 	}
-}
-
-func mapTimelineRows(rows []contextRowCalc) []contextTimelineRow {
-	out := make([]contextTimelineRow, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, row.row)
-	}
-	return out
 }
 
 func buildComposition(
@@ -486,7 +913,7 @@ func buildContextRow(msg db.Message) contextRowCalc {
 		return b.Tokens - a.Tokens
 	})
 
-	hasCtx, _ := msg.TokenPresence()
+	hasCtx := msg.ContextTokens > 0
 	row := contextTimelineRow{
 		Ordinal:          msg.Ordinal,
 		Timestamp:        msg.Timestamp,
@@ -567,6 +994,15 @@ func trimContextMessages(msgs []db.Message) ([]db.Message, bool, int) {
 func resolveContextCapacity(
 	session db.Session, msgs []db.Message, model string,
 ) contextCapacity {
+	if session.HasModelContextWindowTokens &&
+		session.ModelContextWindowTokens > 0 {
+		return contextCapacity{
+			MaxTokens:  session.ModelContextWindowTokens,
+			Provenance: contextProvenanceMeasured,
+			Model:      model,
+			Agent:      session.Agent,
+		}
+	}
 	if recorded := extractRecordedCapacity(msgs); recorded > 0 {
 		return contextCapacity{
 			MaxTokens:  recorded,
@@ -636,13 +1072,13 @@ func anyToInt(v any) int {
 
 func pickPrimaryModel(visible, all []db.Message) string {
 	for i := len(visible) - 1; i >= 0; i-- {
-		if visible[i].Model != "" {
-			return visible[i].Model
+		if m := visible[i].Model; m != "" && m != "<synthetic>" {
+			return m
 		}
 	}
 	for i := len(all) - 1; i >= 0; i-- {
-		if all[i].Model != "" {
-			return all[i].Model
+		if m := all[i].Model; m != "" && m != "<synthetic>" {
+			return m
 		}
 	}
 	return ""
@@ -696,4 +1132,453 @@ func latestNonEmpty(current, next string) string {
 		return next
 	}
 	return current
+}
+
+func buildTimelineTurns(
+	rows []contextRowCalc, msgs []db.Message,
+) []contextTimelineTurn {
+	if len(rows) == 0 || len(rows) != len(msgs) {
+		return nil
+	}
+
+	type turnBuilder struct {
+		turn           contextTimelineTurn
+		categoryTotals map[string]int
+	}
+
+	var turns []contextTimelineTurn
+	var current *turnBuilder
+
+	flush := func() {
+		if current == nil {
+			return
+		}
+		current.turn.Categories = sortedCategoryValues(current.categoryTotals)
+		if len(current.turn.Categories) > 0 {
+			current.turn.DominantCategory = current.turn.Categories[0].Category
+		}
+		turns = append(turns, current.turn)
+		current = nil
+	}
+
+	for i, msg := range msgs {
+		row := rows[i].row
+		if current == nil || startsNewTurn(current.turn, msg) {
+			flush()
+			current = &turnBuilder{
+				turn: contextTimelineTurn{
+					StartOrdinal:         row.Ordinal,
+					EndOrdinal:           row.Ordinal,
+					Timestamp:            row.Timestamp,
+					Label:                row.Label,
+					DeltaTokens:          0,
+					DeltaProvenance:      row.DeltaProvenance,
+					CumulativeTokens:     row.CumulativeTokens,
+					CumulativeProvenance: row.CumulativeProvenance,
+					Markers:              append([]string{}, row.Markers...),
+					Annotations:          append([]string{}, row.Annotations...),
+				},
+				categoryTotals: map[string]int{},
+			}
+		}
+
+		current.turn.EndOrdinal = row.Ordinal
+		current.turn.CumulativeTokens = row.CumulativeTokens
+		current.turn.CumulativeProvenance = row.CumulativeProvenance
+		current.turn.DeltaTokens += row.DeltaTokens
+		current.turn.DeltaProvenance = weakerProvenance(
+			current.turn.DeltaProvenance, row.DeltaProvenance,
+		)
+		if current.turn.Timestamp == "" {
+			current.turn.Timestamp = row.Timestamp
+		}
+
+		for _, marker := range row.Markers {
+			if !slices.Contains(current.turn.Markers, marker) {
+				current.turn.Markers = append(current.turn.Markers, marker)
+			}
+		}
+		for _, annotation := range row.Annotations {
+			if !slices.Contains(current.turn.Annotations, annotation) {
+				current.turn.Annotations = append(current.turn.Annotations, annotation)
+			}
+		}
+		for _, category := range row.Categories {
+			current.categoryTotals[category.Category] += category.Tokens
+		}
+
+		if msg.Role == "user" && !msg.IsSystem &&
+			!msg.IsCompactBoundary && msg.SourceSubtype != "compact_boundary" {
+			if preview := messagePreview(msg); preview != "" {
+				current.turn.UserMessage = &contextTimelineMessagePreview{
+					Ordinal: msg.Ordinal,
+					Preview: preview,
+				}
+			}
+			current.turn.Entries = append(current.turn.Entries,
+				contextTimelineEntry{
+					Kind:    "user_message",
+					Ordinal: msg.Ordinal,
+					Label:   "User",
+					Preview: messagePreview(msg),
+				},
+			)
+		}
+		if msg.Role == "assistant" {
+			if preview := messagePreview(msg); preview != "" {
+				current.turn.AssistantMessage = &contextTimelineMessagePreview{
+					Ordinal: msg.Ordinal,
+					Preview: preview,
+				}
+			}
+			current.turn.Entries = append(current.turn.Entries,
+				contextTimelineEntry{
+					Kind:    "assistant_message",
+					Ordinal: msg.Ordinal,
+					Label:   "Assistant",
+					Preview: messagePreview(msg),
+				},
+			)
+		}
+		for _, tc := range msg.ToolCalls {
+			preview := toolCallSnippet(tc)
+			output := toolOutputSnippet(tc)
+			current.turn.ToolCalls = append(
+				current.turn.ToolCalls,
+				contextTimelineToolPreview{
+					Ordinal:  msg.Ordinal,
+					ToolName: toolCallLabel(tc),
+					Snippet:  preview,
+				},
+			)
+			current.turn.Entries = append(current.turn.Entries,
+				contextTimelineEntry{
+					Kind:          "tool_call",
+					Ordinal:       msg.Ordinal,
+					Label:         toolCallLabel(tc),
+					Preview:       preview,
+					OutputPreview: output,
+				},
+			)
+		}
+	}
+
+	flush()
+
+	for i := range turns {
+		turns[i].Turn = i + 1
+	}
+
+	return turns
+}
+
+func startsNewTurn(current contextTimelineTurn, msg db.Message) bool {
+	if len(current.Markers) > 0 && slices.Contains(current.Markers, "compaction") {
+		return true
+	}
+	return msg.Role == "user" && !msg.IsSystem
+}
+
+func sortedCategoryValues(totals map[string]int) []contextCategoryValue {
+	out := make([]contextCategoryValue, 0, len(totals))
+	for category, tokens := range totals {
+		if tokens <= 0 {
+			continue
+		}
+		out = append(out, contextCategoryValue{
+			Category: category,
+			Tokens:   tokens,
+		})
+	}
+	slices.SortStableFunc(out, func(a, b contextCategoryValue) int {
+		if a.Tokens == b.Tokens {
+			return strings.Compare(a.Category, b.Category)
+		}
+		return b.Tokens - a.Tokens
+	})
+	return out
+}
+
+func messagePreview(msg db.Message) string {
+	content := removeThinkingBlocks(msg.Content)
+	content = stripToolBlocks(content)
+	content = strings.TrimSpace(content)
+	content = strings.Join(strings.Fields(content), " ")
+	return truncatePreview(content, 180)
+}
+
+// stripToolBlocks removes inline tool-call markup from prose
+// while preserving any trailing delimiter (\n[ or \n\n) that
+// separates it from the next block.
+func stripToolBlocks(content string) string {
+	return toolBlockRE.ReplaceAllStringFunc(content, func(m string) string {
+		switch {
+		case strings.HasSuffix(m, "\n["):
+			return "\n["
+		case strings.HasSuffix(m, "\n\n"):
+			return "\n\n"
+		default:
+			return ""
+		}
+	})
+}
+
+func removeThinkingBlocks(content string) string {
+	const startTag = "[Thinking]\n"
+	const endTag = "\n[/Thinking]"
+	for {
+		start := strings.Index(content, startTag)
+		if start < 0 {
+			return content
+		}
+		end := strings.Index(content[start+len(startTag):], endTag)
+		if end < 0 {
+			return content[:start]
+		}
+		end += start + len(startTag)
+		content = content[:start] + content[end+len(endTag):]
+	}
+}
+
+func truncatePreview(content string, maxLen int) string {
+	if maxLen <= 0 || len(content) <= maxLen {
+		return content
+	}
+	if maxLen == 1 {
+		return "…"
+	}
+	return strings.TrimSpace(content[:maxLen-1]) + "…"
+}
+
+func toolCallLabel(tc db.ToolCall) string {
+	if tc.Category != "" && !strings.EqualFold(tc.Category, "tool") {
+		return tc.Category
+	}
+	if tc.ToolName != "" {
+		return tc.ToolName
+	}
+	return "Tool"
+}
+
+func toolCallSnippet(tc db.ToolCall) string {
+	if tc.InputJSON == "" {
+		return ""
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(tc.InputJSON), &params); err != nil {
+		return ""
+	}
+	keys := []string{
+		"file_path", "path", "pattern", "query", "command",
+		"cmd", "description", "prompt", "skill", "name",
+	}
+	for _, key := range keys {
+		if value, ok := params[key]; ok {
+			if text := truncatePreview(strings.TrimSpace(anyToString(value)), 120); text != "" {
+				return text
+			}
+		}
+	}
+	if len(params) > 0 {
+		if raw, err := json.Marshal(params); err == nil {
+			return truncatePreview(string(raw), 120)
+		}
+	}
+	return ""
+}
+
+// toolOutputSnippet returns a short preview of the tool's result
+// content, preferring tc.ResultContent and falling back to the
+// first non-empty ResultEvents content.
+func toolOutputSnippet(tc db.ToolCall) string {
+	if snippet := firstNonEmptyLine(tc.ResultContent); snippet != "" {
+		return truncatePreview(snippet, 160)
+	}
+	for _, ev := range tc.ResultEvents {
+		if snippet := firstNonEmptyLine(ev.Content); snippet != "" {
+			return truncatePreview(snippet, 160)
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyLine(s string) string {
+	for line := range strings.SplitSeq(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func anyToString(v any) string {
+	switch value := v.(type) {
+	case string:
+		return value
+	case json.Number:
+		return value.String()
+	default:
+		return strings.TrimSpace(strings.ReplaceAll(strings.Trim(fmtAny(value), `"`), "\n", " "))
+	}
+}
+
+func fmtAny(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// buildRewindTurns converts timeline turns and visible messages into
+// the signals.RewindTurn slice needed by the rewind detector.
+func buildRewindTurns(
+	timeline []contextTimelineTurn,
+	msgs []db.Message,
+) []signals.RewindTurn {
+	if len(timeline) == 0 {
+		return nil
+	}
+
+	// Index messages by ordinal for tool-call detail lookup.
+	msgByOrd := map[int]db.Message{}
+	for _, m := range msgs {
+		msgByOrd[m.Ordinal] = m
+	}
+
+	result := make([]signals.RewindTurn, 0, len(timeline))
+	for _, turn := range timeline {
+		rt := signals.RewindTurn{
+			Turn:             turn.Turn,
+			DeltaTokens:      turn.DeltaTokens,
+			CumulativeTokens: turn.CumulativeTokens,
+			DominantCategory: turn.DominantCategory,
+			Categories:       map[string]int{},
+		}
+		for _, cat := range turn.Categories {
+			rt.Categories[cat.Category] = cat.Tokens
+		}
+
+		// Collect tool calls from all messages in this turn's ordinal range.
+		for ord := turn.StartOrdinal; ord <= turn.EndOrdinal; ord++ {
+			msg, ok := msgByOrd[ord]
+			if !ok {
+				continue
+			}
+			for _, tc := range msg.ToolCalls {
+				status := ""
+				if len(tc.ResultEvents) > 0 {
+					status = tc.ResultEvents[len(tc.ResultEvents)-1].Status
+				}
+				resultContent := tc.ResultContent
+				if resultContent == "" && len(tc.ResultEvents) > 0 {
+					resultContent = tc.ResultEvents[len(tc.ResultEvents)-1].Content
+				}
+				rt.ToolCalls = append(rt.ToolCalls, signals.RewindToolCall{
+					ToolName:      tc.ToolName,
+					Category:      tc.Category,
+					InputJSON:     tc.InputJSON,
+					ResultContent: resultContent,
+					EventStatus:   status,
+				})
+
+				// Check for successful edits
+				if (tc.Category == "Edit" || tc.Category == "Write") && status != "errored" && status != "cancelled" {
+					if !isEditFailureContent(resultContent) {
+						rt.HasSuccessfulEdit = true
+					}
+				}
+			}
+		}
+
+		result = append(result, rt)
+	}
+	return result
+}
+
+func isEditFailureContent(content string) bool {
+	return strings.Contains(content, "FAILED") ||
+		strings.Contains(content, "error")
+}
+
+// buildCompactInput constructs the signals.CompactInput from
+// the timeline, composition, and capacity data already computed.
+func buildCompactInput(
+	timeline []contextTimelineTurn,
+	compositionTotals map[string]int,
+	currentTokens int,
+	capacity contextCapacity,
+	alreadyCompacted bool,
+) signals.CompactInput {
+	turnCount := len(timeline)
+
+	// Split turns into "recent" (last 20%) and "older"
+	recentCount := max(1, turnCount/5)
+	olderCount := turnCount - recentCount
+
+	var recentTokens, olderTokens int
+	for i, turn := range timeline {
+		if i < olderCount {
+			olderTokens += turn.DeltaTokens
+		} else {
+			recentTokens += turn.DeltaTokens
+		}
+	}
+
+	// Delta sums can exceed the measured cumulative total.
+	// Clamp so ratios stay in [0, 1].
+	if olderTokens > currentTokens {
+		olderTokens = currentTokens
+	}
+	if recentTokens > currentTokens {
+		recentTokens = currentTokens
+	}
+
+	// Compute median delta and recent growth rate
+	medianDelta := 0
+	recentGrowthRate := 0.0
+	if turnCount >= 3 {
+		deltas := make([]int, 0, turnCount)
+		for _, t := range timeline {
+			if t.DeltaTokens > 0 {
+				deltas = append(deltas, t.DeltaTokens)
+			}
+		}
+		if len(deltas) >= 3 {
+			sortIntsSlice(deltas)
+			medianDelta = deltas[len(deltas)/2]
+		}
+
+		// Average delta of last 5 turns (or fewer)
+		if medianDelta > 0 {
+			last := min(5, turnCount)
+			recentSum := 0
+			for i := turnCount - last; i < turnCount; i++ {
+				recentSum += timeline[i].DeltaTokens
+			}
+			avgRecent := float64(recentSum) / float64(last)
+			recentGrowthRate = avgRecent / float64(medianDelta)
+		}
+	}
+
+	return signals.CompactInput{
+		TokensInUse:       currentTokens,
+		MaxContextTokens:  capacity.MaxTokens,
+		Composition:       compositionTotals,
+		TurnCount:         turnCount,
+		AlreadyCompacted:  alreadyCompacted,
+		RecentTurnCount:   recentCount,
+		RecentTurnTokens:  recentTokens,
+		OlderTurnTokens:   olderTokens,
+		MedianDeltaTokens: medianDelta,
+		RecentGrowthRate:  recentGrowthRate,
+	}
+}
+
+func sortIntsSlice(a []int) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j] < a[j-1]; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
 }

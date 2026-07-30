@@ -1,11 +1,15 @@
 import { StarredService } from "../api/generated/index";
 import { configureGeneratedClient } from "../api/runtime.js";
+import {
+  readMigratedLocalStorageValue,
+  removeMigratedLocalStorageValue,
+} from "../storage/local-storage-key.js";
 
 interface StarredResponse {
   session_ids: string[];
 }
 
-const STORAGE_KEY = "agentsview-starred-sessions";
+const STORAGE_KEY = "periscope-starred-sessions";
 
 class StarredStore {
   // Seed from localStorage so legacy stars are visible immediately,
@@ -257,7 +261,7 @@ class StarredStore {
 
 function readLocalStorage(): Set<string> {
   try {
-    const raw = localStorage?.getItem(STORAGE_KEY);
+    const raw = readMigratedLocalStorageValue(localStorage, STORAGE_KEY);
     if (raw) {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) return new Set(arr);
@@ -269,24 +273,20 @@ function readLocalStorage(): Set<string> {
 }
 
 function clearLocalStorage() {
-  try {
-    localStorage?.removeItem(STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+  removeMigratedLocalStorageValue(localStorage, STORAGE_KEY);
 }
 
 /** Remove a single ID from localStorage (if the key exists). */
 function removeFromLocalStorage(id: string) {
   try {
-    const raw = localStorage?.getItem(STORAGE_KEY);
+    const raw = readMigratedLocalStorageValue(localStorage, STORAGE_KEY);
     if (!raw) return;
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return;
     const filtered = arr.filter((v: unknown) => v !== id);
     if (filtered.length === arr.length) return;
     if (filtered.length === 0) {
-      localStorage?.removeItem(STORAGE_KEY);
+      removeMigratedLocalStorageValue(localStorage, STORAGE_KEY);
     } else {
       localStorage?.setItem(STORAGE_KEY, JSON.stringify(filtered));
     }

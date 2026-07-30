@@ -7,7 +7,7 @@ import (
 	gosync "sync"
 	"sync/atomic"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/parser"
 	"golang.org/x/sync/semaphore"
 )
 

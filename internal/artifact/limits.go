@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // ErrArtifactExportRejected identifies a deterministic session-shape failure

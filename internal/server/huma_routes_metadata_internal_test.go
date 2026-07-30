@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 type statsSpyService struct {

@@ -18,7 +18,7 @@ func TestPrepareSidecarRestoresPricingSnapshotBeforeBuild(t *testing.T) {
 	out, err := runInWorkspace(
 		t,
 		root,
-		stubs.env("AGENTSVIEW_VERSION=v1.2.3"),
+		stubs.env("PERISCOPE_VERSION=v1.2.3"),
 		"bash",
 		"desktop/scripts/prepare-sidecar.sh",
 	)
@@ -34,7 +34,7 @@ func TestPrepareSidecarRestoresPricingSnapshotBeforeBuild(t *testing.T) {
 		"desktop",
 		"src-tauri",
 		"binaries",
-		"agentsview-x86_64-unknown-linux-gnu",
+		"periscope-x86_64-unknown-linux-gnu",
 	))
 }
 
@@ -49,7 +49,7 @@ func TestPrepareSidecarStopsWhenPricingSnapshotRestoreFails(t *testing.T) {
 	out, err := runInWorkspace(
 		t,
 		root,
-		stubs.env("AGENTSVIEW_VERSION=v1.2.3", "RESTORE_FAIL=1"),
+		stubs.env("PERISCOPE_VERSION=v1.2.3", "RESTORE_FAIL=1"),
 		"bash",
 		"desktop/scripts/prepare-sidecar.sh",
 	)

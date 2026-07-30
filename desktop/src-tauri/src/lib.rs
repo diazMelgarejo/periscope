@@ -46,7 +46,7 @@ const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(120);
 const UPDATE_STOP_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 const SERVE_STOP_STARTING_RETRY_HINT: &str = "a server is starting; retry once it is ready";
 const DATA_VERSION_TOO_NEW_EXIT_CODE: i32 = 3;
-const DESKTOP_LOG_FILE_NAME: &str = "agentsview-desktop.log";
+const DESKTOP_LOG_FILE_NAME: &str = "periscope-desktop.log";
 const DESKTOP_LOG_QUEUE_CAPACITY: usize = 64;
 const STARTUP_OUTPUT_MAX_CHARS: usize = 12_000;
 const ABOUT_MENU_ID: &str = "about";
@@ -140,7 +140,9 @@ pub fn run() {
     let mut updater_builder = tauri_plugin_updater::Builder::new();
     // Override the placeholder pubkey from tauri.conf.json with
     // the real key when baked in at compile time via env var.
-    if let Some(pubkey) = option_env!("AGENTSVIEW_UPDATER_PUBKEY") {
+    if let Some(pubkey) = option_env!("PERISCOPE_UPDATER_PUBKEY")
+        .or(option_env!("AGENTSVIEW_UPDATER_PUBKEY"))
+    {
         if !pubkey.is_empty() {
             updater_builder = updater_builder.pubkey(pubkey.to_string());
         }
@@ -155,24 +157,24 @@ pub fn run() {
         .manage(SidecarState::default())
         .setup(|app| {
             if let Err(err) = setup_menu(app) {
-                eprintln!("[agentsview] failed to set up desktop menu: {err}");
+                eprintln!("[periscope] failed to set up desktop menu: {err}");
             }
             #[cfg(target_os = "macos")]
             if let Err(err) = setup_macos_status_item(app) {
-                eprintln!("[agentsview] failed to set up macOS status item: {err}");
+                eprintln!("[periscope] failed to set up macOS status item: {err}");
             }
             #[cfg(target_os = "macos")]
             if let Err(err) = setup_macos_window_lifecycle(app) {
-                eprintln!("[agentsview] failed to set up macOS window lifecycle: {err}");
+                eprintln!("[periscope] failed to set up macOS window lifecycle: {err}");
             }
             match tauri::async_runtime::block_on(run_data_version_preflight(app.handle())) {
                 Ok(()) => {
                     if let Err(err) = launch_backend(app) {
-                        eprintln!("[agentsview] backend launch failed: {err}");
+                        eprintln!("[periscope] backend launch failed: {err}");
                         let window = main_window(app)?;
                         spawn_startup_error_render(
                             window,
-                            "AgentsView could not start",
+                            "Periscope could not start",
                             "The local backend failed to launch.",
                             err.to_string().as_str(),
                         );
@@ -181,11 +183,11 @@ pub fn run() {
                     }
                 }
                 Err(DataVersionPreflightError::TooNew(message)) => {
-                    eprintln!("[agentsview] data version preflight rejected archive: {message}");
+                    eprintln!("[periscope] data version preflight rejected archive: {message}");
                     let window = main_window(app)?;
                     spawn_preflight_error_render(
                         window,
-                        "AgentsView needs an update",
+                        "Periscope needs an update",
                         too_new_archive_status_message(message.as_str()).as_str(),
                         too_new_archive_footer_message(),
                     );
@@ -198,7 +200,7 @@ pub fn run() {
                     let window = main_window(app)?;
                     spawn_startup_error_render(
                         window,
-                        "AgentsView could not verify the archive",
+                        "Periscope could not verify the archive",
                         "The database compatibility check failed, so the backend was not started.",
                         message.as_str(),
                     );
@@ -333,7 +335,7 @@ fn spawn_sidecar_with_args(
     app: &AppHandle,
     args: Vec<String>,
 ) -> Result<(CommandRx, CommandChild), DynError> {
-    let mut command = app.shell().sidecar("agentsview")?;
+    let mut command = app.shell().sidecar("periscope")?;
     for (key, value) in sidecar_env() {
         command = command.env(key, value);
     }
@@ -373,7 +375,7 @@ enum DataVersionPreflightError {
 async fn run_data_version_preflight(app: &AppHandle) -> Result<(), DataVersionPreflightError> {
     let mut command = app
         .shell()
-        .sidecar("agentsview")
+        .sidecar("periscope")
         .map_err(|err| DataVersionPreflightError::Failed(err.to_string()))?;
     for (key, value) in sidecar_env() {
         command = command.env(key, value);
@@ -455,11 +457,11 @@ fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlug
                     .opener()
                     .open_url(url.as_str(), Option::<&str>::None)
                 {
-                    eprintln!("[agentsview] failed to open external URL in system browser: {err}");
+                    eprintln!("[periscope] failed to open external URL in system browser: {err}");
                 }
             } else {
                 eprintln!(
-                    "[agentsview] blocked disallowed external URL scheme: {}",
+                    "[periscope] blocked disallowed external URL scheme: {}",
                     url.as_str()
                 );
             }
@@ -770,7 +772,7 @@ fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
     match try_run_login_shell_env(shell, timeout) {
         Ok(bytes) => Some(bytes),
         Err(err) => {
-            eprintln!("[agentsview] login shell env probe failed: {err}");
+            eprintln!("[periscope] login shell env probe failed: {err}");
             None
         }
     }
@@ -1092,7 +1094,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
         if !timeout_state.load(Ordering::SeqCst) {
             let _ = timeout_window.eval(
                 "window.__setStatus(\
-                 'AgentsView backend is still starting. Large migrations or initial syncs can take several minutes.');",
+                 'Periscope backend is still starting. Large migrations or initial syncs can take several minutes.');",
             );
         }
     });
@@ -1178,7 +1180,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                         .as_str(),
                     );
                     eprintln!(
-                        "[agentsview] sidecar terminated (code: {:?}, signal: {:?})",
+                        "[periscope] sidecar terminated (code: {:?}, signal: {:?})",
                         payload.code, payload.signal
                     );
                     let handle = window.app_handle().clone();
@@ -1200,7 +1202,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                     if handle_sidecar_terminated(&state, startup_handled.as_ref(), generation) {
                         spawn_startup_error_render(
                             window.clone(),
-                            "AgentsView backend failed",
+                            "Periscope backend failed",
                             "The local backend exited before startup completed.",
                             startup_failure_detail(
                                 "The sidecar process ended before it reported a ready backend.",
@@ -1224,11 +1226,11 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                         "error",
                         format!("sidecar command error: {redacted}").as_str(),
                     );
-                    eprintln!("[agentsview:error] {err}");
+                    eprintln!("[periscope:error] {err}");
                     if !startup_handled.swap(true, Ordering::SeqCst) {
                         spawn_startup_error_render(
                             window.clone(),
-                            "AgentsView backend failed",
+                            "Periscope backend failed",
                             "The desktop wrapper received an error from the backend process.",
                             startup_failure_detail(
                                 redacted.as_str(),
@@ -1282,7 +1284,7 @@ fn spawn_startup_error_render(window: WebviewWindow, title: &str, message: &str,
             }
             thread::sleep(READY_POLL_INTERVAL);
         }
-        eprintln!("[agentsview] timed out waiting to render startup error");
+        eprintln!("[periscope] timed out waiting to render startup error");
     });
 }
 
@@ -1335,7 +1337,7 @@ fn spawn_preflight_error_render(window: WebviewWindow, title: &str, message: &st
             }
             thread::sleep(READY_POLL_INTERVAL);
         }
-        eprintln!("[agentsview] timed out waiting to render data-version preflight error");
+        eprintln!("[periscope] timed out waiting to render data-version preflight error");
     });
 }
 
@@ -1365,13 +1367,13 @@ fn preflight_error_script(title: &str, message: &str, footer: &str) -> String {
 }
 
 fn too_new_archive_status_message(_detail: &str) -> String {
-    "This session archive was updated by a newer version of AgentsView. \
+    "This session archive was updated by a newer version of Periscope. \
      Update the app before opening it so your data is not read or synced by an older version."
         .to_string()
 }
 
 fn too_new_archive_footer_message() -> &'static str {
-    "AgentsView is checking for updates now. If no update appears, use Check for Updates from the AgentsView menu or install the latest release manually."
+    "Periscope is checking for updates now. If no update appears, use Check for Updates from the Periscope menu or install the latest release manually."
 }
 
 fn js_string_literal(value: &str) -> String {
@@ -1385,7 +1387,7 @@ fn startup_failure_footer(handle: &AppHandle) -> String {
             path.display()
         ),
         Err(_) => {
-            "Use File > Open Logs Folder and attach agentsview-desktop.log when reporting this. If the details mention serve.log, attach that file too."
+            "Use File > Open Logs Folder and attach periscope-desktop.log when reporting this. If the details mention serve.log, attach that file too."
                 .to_string()
         }
     }
@@ -1483,7 +1485,7 @@ fn recover_webview(window: &WebviewWindow, port: u16) {
     match window.eval(health_js) {
         Ok(()) => {}
         Err(err) => {
-            eprintln!("[agentsview] WebView eval failed, recovering: {err}");
+            eprintln!("[periscope] WebView eval failed, recovering: {err}");
             let url = desktop_redirect_url(port);
             if let Ok(parsed) = Url::parse(url.as_str()) {
                 let _ = window.navigate(parsed);
@@ -1500,7 +1502,7 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
             match Url::parse(target_url.as_str()) {
                 Ok(url) => {
                     if let Err(err) = window.navigate(url) {
-                        eprintln!("[agentsview] navigate failed: {err}");
+                        eprintln!("[periscope] navigate failed: {err}");
                     }
                     // On Linux a failed WebKitGTK GPU/EGL init aborts the
                     // web content process, leaving a blank window while the
@@ -1511,7 +1513,7 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
                     spawn_webview_health_fallback(window.clone(), port);
                 }
                 Err(err) => {
-                    eprintln!("[agentsview] invalid redirect URL: {err}");
+                    eprintln!("[periscope] invalid redirect URL: {err}");
                 }
             }
             return;
@@ -1519,7 +1521,7 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
 
         spawn_startup_error_render(
             window,
-            "AgentsView interface did not respond",
+            "Periscope interface did not respond",
             "The backend reported a port, but the desktop window could not connect to it.",
             format!("Backend URL: {target_url}").as_str(),
         );
@@ -1572,7 +1574,7 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                     if first_seen.elapsed() >= DAEMON_UNHEALTHY_GRACE {
                         spawn_startup_error_render(
                             window,
-                            "AgentsView backend is not responding",
+                            "Periscope backend is not responding",
                             "A backend process is running, but it is not answering health checks.",
                             startup_failure_detail(
                                 "The daemon runtime record points to a live process, but repeated health checks did not get a usable response.",
@@ -1584,14 +1586,14 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                     }
                     let _ = window.eval(
                         "window.__setStatus(\
-                         'AgentsView found a backend process, but health checks are not responding yet.');",
+                         'Periscope found a backend process, but health checks are not responding yet.');",
                     );
                 }
                 BackendStatusProbe::NotRunning(status) => {
                     spawn_startup_error_render(
                         window,
-                        "AgentsView backend stopped",
-                        "The background launcher exited, and no AgentsView server is running.",
+                        "Periscope backend stopped",
+                        "The background launcher exited, and no Periscope server is running.",
                         startup_failure_detail(
                             "The background backend disappeared before it became ready.",
                             status.as_str(),
@@ -1603,8 +1605,8 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                 BackendStatusProbe::Incompatible(status) => {
                     spawn_startup_error_render(
                         window,
-                        "AgentsView backend is incompatible",
-                        "AgentsView found a running backend that this desktop app cannot use.",
+                        "Periscope backend is incompatible",
+                        "Periscope found a running backend that this desktop app cannot use.",
                         status.as_str(),
                     );
                     return;
@@ -1612,8 +1614,8 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                 BackendStatusProbe::ReadOnly(status) => {
                     spawn_startup_error_render(
                         window,
-                        "AgentsView backend is read-only",
-                        "AgentsView Desktop needs a writable local backend to sync and migrate the archive.",
+                        "Periscope backend is read-only",
+                        "Periscope Desktop needs a writable local backend to sync and migrate the archive.",
                         startup_failure_detail(
                             "A read-only backend is running for this archive, but desktop startup requires a writable daemon.",
                             status.as_str(),
@@ -1625,7 +1627,7 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                 BackendStatusProbe::Unusable(status) => {
                     spawn_startup_error_render(
                         window,
-                        "AgentsView backend status is unusable",
+                        "Periscope backend status is unusable",
                         "The background launcher exited, but the backend did not report a usable writable server.",
                         startup_failure_detail(
                             "The status command returned output that is not a ready writable daemon or an active startup lock.",
@@ -1640,11 +1642,11 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                     if status_probe_failures_should_stop(failed_status_probes) {
                         spawn_startup_error_render(
                             window,
-                            "AgentsView backend status is unavailable",
+                            "Periscope backend status is unavailable",
                             "The background launcher exited, but the desktop app could not confirm backend status.",
                             startup_failure_detail(
                                 format!(
-                                    "`agentsview serve status` failed, timed out, or returned no usable output after {failed_status_probes} attempts."
+                                    "`periscope serve status` failed, timed out, or returned no usable output after {failed_status_probes} attempts."
                                 )
                                 .as_str(),
                                 "",
@@ -1665,7 +1667,7 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                 long_startup_notice_shown = true;
                 let _ = window.eval(
                     "window.__setStatus(\
-                     'AgentsView is still preparing the local archive. Large migrations or full resyncs can take many minutes.');",
+                     'Periscope is still preparing the local archive. Large migrations or full resyncs can take many minutes.');",
                 );
             }
             tokio::time::sleep(background_status_poll_interval(
@@ -1714,7 +1716,7 @@ fn status_probe_failures_should_stop(failed_status_probes: u32) -> bool {
 }
 
 async fn probe_backend_status(handle: &AppHandle) -> BackendStatusProbe {
-    let Ok(mut command) = handle.shell().sidecar("agentsview") else {
+    let Ok(mut command) = handle.shell().sidecar("periscope") else {
         return BackendStatusProbe::Unavailable;
     };
     for (key, value) in sidecar_env() {
@@ -1741,7 +1743,7 @@ async fn probe_backend_status(handle: &AppHandle) -> BackendStatusProbe {
                     ));
                 }
                 CommandEvent::Error(err) => {
-                    eprintln!("[agentsview:error] {err}");
+                    eprintln!("[periscope:error] {err}");
                     return Err(());
                 }
                 _ => {}
@@ -1765,7 +1767,7 @@ fn classify_backend_status_output(stdout: &str, stderr: &str) -> BackendStatusPr
     }
 
     let detail = combined_probe_output(stdout, stderr);
-    if detail.contains("No agentsview server is running.") {
+    if detail.contains("No periscope server is running.") {
         return BackendStatusProbe::NotRunning(detail);
     }
     if detail.contains("incompatible running writable daemon") {
@@ -1787,14 +1789,14 @@ fn classify_backend_status_output(stdout: &str, stderr: &str) -> BackendStatusPr
 }
 
 fn status_output_is_unhealthy(output: &str) -> bool {
-    output.contains("agentsview process running")
+    output.contains("periscope process running")
         && output.contains("not responding to health checks")
 }
 
 fn status_output_is_starting(output: &str) -> bool {
     output
         .lines()
-        .any(|line| line.trim() == "agentsview is starting up.")
+        .any(|line| line.trim() == "periscope is starting up.")
 }
 
 fn combined_probe_output(stdout: &str, stderr: &str) -> String {
@@ -1843,7 +1845,7 @@ fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
 
         let url = format!("http://{HOST}:{port}");
         eprintln!(
-            "[agentsview] WebView content process is not responding \
+            "[periscope] WebView content process is not responding \
              (likely a GPU/EGL initialization failure); opening {url} \
              in the system browser instead"
         );
@@ -1855,25 +1857,25 @@ fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
                 handle
                     .dialog()
                     .message(format!(
-                        "AgentsView could not render its window, likely due to a \
+                        "Periscope could not render its window, likely due to a \
                          graphics driver (EGL) issue. It has been opened in your \
                          web browser instead:\n\n{url}"
                     ))
-                    .title("AgentsView")
+                    .title("Periscope")
                     .show(|_| {});
             }
             Err(err) => {
-                eprintln!("[agentsview] failed to open system browser fallback: {err}");
+                eprintln!("[periscope] failed to open system browser fallback: {err}");
                 // Keep the window up so the app stays visible and quittable.
                 handle
                     .dialog()
                     .message(format!(
-                        "AgentsView could not render its window, likely due to a \
+                        "Periscope could not render its window, likely due to a \
                          graphics driver (EGL) issue, and no web browser could be \
                          opened automatically. Open this URL in a browser to use \
-                         AgentsView:\n\n{url}"
+                         Periscope:\n\n{url}"
                     ))
-                    .title("AgentsView")
+                    .title("Periscope")
                     .show(|_| {});
             }
         }
@@ -1963,7 +1965,7 @@ fn parse_writable_listening_port_from_status(buffer: &str) -> Option<u16> {
 }
 
 fn setup_menu(app: &mut App) -> Result<(), DynError> {
-    let about = MenuItemBuilder::with_id(ABOUT_MENU_ID, "About AgentsView").build(app)?;
+    let about = MenuItemBuilder::with_id(ABOUT_MENU_ID, "About Periscope").build(app)?;
     let open_logs_folder =
         MenuItemBuilder::with_id(OPEN_LOGS_FOLDER_MENU_ID, "Open Logs Folder").build(app)?;
     let check_updates =
@@ -2001,13 +2003,13 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
 
 #[cfg(target_os = "macos")]
 fn setup_macos_status_item(app: &mut App) -> Result<(), DynError> {
-    let show = MenuItemBuilder::with_id(SHOW_MAIN_WINDOW_MENU_ID, "Show AgentsView").build(app)?;
+    let show = MenuItemBuilder::with_id(SHOW_MAIN_WINDOW_MENU_ID, "Show Periscope").build(app)?;
     let open_logs =
         MenuItemBuilder::with_id(OPEN_LOGS_FOLDER_MENU_ID, "Open Logs Folder").build(app)?;
     let check_updates =
         MenuItemBuilder::with_id(CHECK_UPDATES_MENU_ID, "Check for Updates...").build(app)?;
     let quit =
-        MenuItemBuilder::with_id(QUIT_FROM_STATUS_ITEM_MENU_ID, "Quit AgentsView").build(app)?;
+        MenuItemBuilder::with_id(QUIT_FROM_STATUS_ITEM_MENU_ID, "Quit Periscope").build(app)?;
     let menu = MenuBuilder::new(app)
         .item(&show)
         .separator()
@@ -2018,10 +2020,10 @@ fn setup_macos_status_item(app: &mut App) -> Result<(), DynError> {
         .build()?;
 
     let icon = macos_status_item_icon()?;
-    TrayIconBuilder::with_id("agentsview")
+    TrayIconBuilder::with_id("periscope")
         .icon(icon)
         .icon_as_template(true)
-        .tooltip("AgentsView")
+        .tooltip("Periscope")
         .menu(&menu)
         .build(app)?;
     Ok(())
@@ -2050,7 +2052,7 @@ fn open_logs_folder(handle: &AppHandle) {
     let log_dir = match ensure_desktop_log_dir(handle) {
         Ok(path) => path,
         Err(err) => {
-            eprintln!("[agentsview] failed to resolve logs folder: {err}");
+            eprintln!("[periscope] failed to resolve logs folder: {err}");
             return;
         }
     };
@@ -2066,10 +2068,10 @@ fn open_logs_folder(handle: &AppHandle) {
             if let Err(log_err) =
                 append_open_logs_folder_failure_at_path(&path, &log_dir, err_text.as_str())
             {
-                eprintln!("[agentsview] failed to append logs-folder failure log: {log_err}");
+                eprintln!("[periscope] failed to append logs-folder failure log: {log_err}");
             }
         }
-        eprintln!("[agentsview] {message}");
+        eprintln!("[periscope] {message}");
     }
 }
 
@@ -2098,14 +2100,14 @@ fn drain_sidecar_log_records(handle: AppHandle, log_receiver: StdReceiver<Sideca
         let path = match desktop_log_file_path(&handle) {
             Ok(path) => path,
             Err(err) => {
-                eprintln!("[agentsview] failed to resolve sidecar event log path: {err}");
+                eprintln!("[periscope] failed to resolve sidecar event log path: {err}");
                 continue;
             }
         };
         if let Err(err) =
             append_sidecar_log_record_at_path(&path, record.label, record.record.as_str())
         {
-            eprintln!("[agentsview] failed to append sidecar event log: {err}");
+            eprintln!("[periscope] failed to append sidecar event log: {err}");
         }
     }
 }
@@ -2128,11 +2130,11 @@ fn prepare_sidecar_stdout_update(
 }
 
 fn emit_redacted_sidecar_stdout_chunk(redacted_chunk: &str) {
-    emit_sidecar_console_chunk("agentsview", redacted_chunk);
+    emit_sidecar_console_chunk("periscope", redacted_chunk);
 }
 
 fn emit_redacted_sidecar_stderr_chunk(redacted_chunk: &str) {
-    emit_sidecar_console_chunk("agentsview:stderr", redacted_chunk);
+    emit_sidecar_console_chunk("periscope:stderr", redacted_chunk);
 }
 
 fn emit_sidecar_console_chunk(prefix: &str, redacted_chunk: &str) {
@@ -2291,13 +2293,13 @@ fn try_send_sidecar_log_record(
         Ok(()) => {}
         Err(TrySendError::Full(record)) => {
             eprintln!(
-                "[agentsview] dropping sidecar {} log because the log queue is full",
+                "[periscope] dropping sidecar {} log because the log queue is full",
                 record.label
             );
         }
         Err(TrySendError::Disconnected(record)) => {
             eprintln!(
-                "[agentsview] dropping sidecar {} log because the log worker is unavailable",
+                "[periscope] dropping sidecar {} log because the log worker is unavailable",
                 record.label
             );
         }
@@ -2460,7 +2462,7 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
     let updater = match handle.updater() {
         Ok(updater) => updater,
         Err(err) => {
-            eprintln!("[agentsview] updater unavailable: {err}");
+            eprintln!("[periscope] updater unavailable: {err}");
             if !silent {
                 let h = handle.clone();
                 handle
@@ -2476,7 +2478,7 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
     let update = match updater.check().await {
         Ok(update) => update,
         Err(err) => {
-            eprintln!("[agentsview] update check failed: {err}");
+            eprintln!("[periscope] update check failed: {err}");
             if !silent {
                 let h = handle.clone();
                 handle
@@ -2519,7 +2521,7 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
     let update_bytes = match update.download(|_, _| {}, || {}).await {
         Ok(bytes) => bytes,
         Err(err) => {
-            eprintln!("[agentsview] update download failed: {err}");
+            eprintln!("[periscope] update download failed: {err}");
             let h = handle.clone();
             handle
                 .dialog()
@@ -2543,7 +2545,7 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
         || restart_backend_after_update(handle.clone()),
         |bytes| update.install(bytes),
     ) {
-        eprintln!("[agentsview] update install failed: {err}");
+        eprintln!("[periscope] update install failed: {err}");
         let message = match err {
             InstallDownloadedUpdateError::BackendStopTimedOut => {
                 "The update was downloaded, but the local backend \
@@ -2682,7 +2684,7 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
                 let generation = process.generation;
                 mark_sidecar_stopping(&state, generation);
                 if let Err(err) = request_sidecar_stop(process) {
-                    eprintln!("[agentsview] failed to stop sidecar: {err}");
+                    eprintln!("[periscope] failed to stop sidecar: {err}");
                 }
                 generation
             })
@@ -2731,7 +2733,7 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
 
     if let Some(process) = process {
         if let Err(err) = process.child.kill() {
-            eprintln!("[agentsview] failed to stop sidecar: {err}");
+            eprintln!("[periscope] failed to stop sidecar: {err}");
         }
         clear_sidecar_port(app);
         return true;
@@ -2764,7 +2766,7 @@ fn stop_detached_backend_for_update_with_port(
             let (mut rx, child) = match spawn_sidecar_with_args(app, sidecar_stop_args()) {
                 Ok(spawned) => spawned,
                 Err(err) => {
-                    eprintln!("[agentsview] failed to run serve stop before update install: {err}");
+                    eprintln!("[periscope] failed to run serve stop before update install: {err}");
                     return StopLauncherResult::Fatal;
                 }
             };
@@ -2779,18 +2781,18 @@ fn stop_detached_backend_for_update_with_port(
     if result != StopLauncherResult::Success {
         if port.is_none() {
             eprintln!(
-                "[agentsview] serve stop did not report success, but no detached daemon port is known"
+                "[periscope] serve stop did not report success, but no detached daemon port is known"
             );
         }
         if result == StopLauncherResult::RetryableStartup {
-            eprintln!("[agentsview] gave up stopping the backend before update install");
+            eprintln!("[periscope] gave up stopping the backend before update install");
         }
         return false;
     }
     if let Some(port) = port {
         if !wait_for_server_stopped(port, remaining_timeout(deadline)) {
             eprintln!(
-                "[agentsview] timed out waiting for detached daemon to stop before update install"
+                "[periscope] timed out waiting for detached daemon to stop before update install"
             );
             return false;
         }
@@ -2844,16 +2846,16 @@ fn wait_for_stop_launcher(rx: &mut CommandRx, timeout: Duration) -> StopLauncher
             }
             Ok(CommandEvent::Stdout(bytes)) => {
                 let line = String::from_utf8_lossy(&bytes);
-                eprintln!("[agentsview] {}", line.trim_end());
+                eprintln!("[periscope] {}", line.trim_end());
                 output.push_str(&line);
             }
             Ok(CommandEvent::Stderr(bytes)) => {
                 let line = String::from_utf8_lossy(&bytes);
-                eprintln!("[agentsview:stderr] {}", line.trim_end());
+                eprintln!("[periscope:stderr] {}", line.trim_end());
                 output.push_str(&line);
             }
             Ok(CommandEvent::Error(err)) => {
-                eprintln!("[agentsview:error] {err}");
+                eprintln!("[periscope:error] {err}");
                 return StopLauncherResult::Fatal;
             }
             Ok(_) => {}
@@ -2863,7 +2865,7 @@ fn wait_for_stop_launcher(rx: &mut CommandRx, timeout: Duration) -> StopLauncher
             }
         }
         if Instant::now() >= deadline {
-            eprintln!("[agentsview] timed out waiting for serve stop before update install");
+            eprintln!("[periscope] timed out waiting for serve stop before update install");
             return StopLauncherResult::Fatal;
         }
         thread::sleep(READY_POLL_INTERVAL);
@@ -2894,7 +2896,7 @@ fn finish_backend_stop_wait(
         clear_sidecar_port(app);
     } else {
         mark_restart_after_stop_timeout(state, generation);
-        eprintln!("[agentsview] timed out waiting for sidecar to stop before update install");
+        eprintln!("[periscope] timed out waiting for sidecar to stop before update install");
     }
     terminated
 }
@@ -2946,7 +2948,7 @@ fn request_process_stop(pid: u32) -> io::Result<()> {
 
 fn restart_backend_after_update(handle: AppHandle) {
     if let Err(err) = launch_backend_from_handle(&handle) {
-        eprintln!("[agentsview] failed to restart backend after update: {err}");
+        eprintln!("[periscope] failed to restart backend after update: {err}");
     }
 }
 
@@ -3100,7 +3102,7 @@ mod tests {
         let mut attempts = 0;
 
         attempts = next_background_status_poll_attempts(
-            &BackendStatusProbe::Starting("agentsview is starting up.".to_string()),
+            &BackendStatusProbe::Starting("periscope is starting up.".to_string()),
             attempts,
         );
         assert_eq!(attempts, 1);
@@ -3182,14 +3184,14 @@ mod tests {
         let err = classify_data_version_preflight_exit(
             Some(1),
             "",
-            "fatal: database data version 59 is newer than this agentsview binary's data version 49",
+            "fatal: database data version 59 is newer than this periscope binary's data version 49",
         )
         .expect_err("expected generic failure");
 
         assert_eq!(
             err,
             DataVersionPreflightError::Failed(
-                "fatal: database data version 59 is newer than this agentsview binary's data version 49"
+                "fatal: database data version 59 is newer than this periscope binary's data version 49"
                     .to_string()
             )
         );
@@ -3198,11 +3200,11 @@ mod tests {
     #[test]
     fn too_new_archive_status_message_is_user_facing() {
         let message = too_new_archive_status_message(
-            "fatal: database data version 59 is newer than this agentsview binary's data version 49",
+            "fatal: database data version 59 is newer than this periscope binary's data version 49",
         );
         let footer = too_new_archive_footer_message();
 
-        assert!(message.contains("updated by a newer version of AgentsView"));
+        assert!(message.contains("updated by a newer version of Periscope"));
         assert!(!message.contains("database data version"));
         assert!(!message.contains("bundled backend"));
         assert!(footer.contains("checking for updates now"));
@@ -3270,14 +3272,14 @@ mod tests {
 
     #[test]
     fn parse_listening_port_extracts_backend_port() {
-        let line = "agentsview dev listening at http://127.0.0.1:18080 (started in 1.2s)";
+        let line = "periscope dev listening at http://127.0.0.1:18080 (started in 1.2s)";
         assert_eq!(parse_listening_port(line), Some(18080));
         assert_eq!(
-            parse_listening_port("agentsview running at http://127.0.0.1:19090 (pid 123)"),
+            parse_listening_port("periscope running at http://127.0.0.1:19090 (pid 123)"),
             Some(19090)
         );
         assert_eq!(
-            parse_listening_port("agentsview already running at http://127.0.0.1:19091 (pid 123)"),
+            parse_listening_port("periscope already running at http://127.0.0.1:19091 (pid 123)"),
             Some(19091)
         );
         assert_eq!(parse_listening_port("unrelated line"), None);
@@ -3295,7 +3297,7 @@ mod tests {
         assert_eq!(
             parse_listening_port_from_stdout_buffer(
                 &mut buf,
-                "agentsview dev listening at http://127.0.0.1:18"
+                "periscope dev listening at http://127.0.0.1:18"
             ),
             None
         );
@@ -3432,7 +3434,7 @@ mod tests {
             &log_sender,
             &mut stdout_buffer,
             &mut stdout_log_buffer,
-            b"agentsview dev listening at http://127.0.0.1:18080 (started in 1.2s)\n",
+            b"periscope dev listening at http://127.0.0.1:18080 (started in 1.2s)\n",
         );
 
         assert_eq!(stdout_update.port, Some(18080));
@@ -3440,7 +3442,7 @@ mod tests {
         assert_eq!(logged.label, "stdout");
         assert!(logged
             .record
-            .contains("agentsview dev listening at http://127.0.0.1:18080"));
+            .contains("periscope dev listening at http://127.0.0.1:18080"));
     }
 
     #[test]
@@ -3659,7 +3661,7 @@ mod tests {
     #[test]
     fn parse_listening_port_from_stdout_tail_handles_final_partial_line() {
         assert_eq!(
-            parse_listening_port_from_stdout_tail("agentsview running at http://127.0.0.1:18081"),
+            parse_listening_port_from_stdout_tail("periscope running at http://127.0.0.1:18081"),
             Some(18081)
         );
     }
@@ -3667,15 +3669,15 @@ mod tests {
     #[test]
     fn parse_listening_port_from_stdout_tail_prefers_latest_line() {
         let output = "\
-agentsview running at http://127.0.0.1:18080 (pid 123)
-agentsview running at http://127.0.0.1:18081 (pid 124)";
+periscope running at http://127.0.0.1:18080 (pid 123)
+periscope running at http://127.0.0.1:18081 (pid 124)";
         assert_eq!(parse_listening_port_from_stdout_tail(output), Some(18081));
     }
 
     #[test]
     fn parse_writable_listening_port_from_status_ignores_read_only_daemon() {
         let output = "\
-agentsview running at http://127.0.0.1:18081 (pid 123)
+periscope running at http://127.0.0.1:18081 (pid 123)
 mode:    read-only
 ";
         assert_eq!(parse_writable_listening_port_from_status(output), None);
@@ -3684,7 +3686,7 @@ mode:    read-only
     #[test]
     fn parse_writable_listening_port_from_status_accepts_writable_daemon() {
         let output = "\
-agentsview running at http://127.0.0.1:18082 (pid 123)
+periscope running at http://127.0.0.1:18082 (pid 123)
   mode:    writable
 ";
         assert_eq!(
@@ -3696,7 +3698,7 @@ agentsview running at http://127.0.0.1:18082 (pid 123)
     #[test]
     fn classify_backend_status_output_detects_ready_daemon() {
         let output = "\
-agentsview running at http://127.0.0.1:18082 (pid 123)
+periscope running at http://127.0.0.1:18082 (pid 123)
   mode:    writable
 ";
 
@@ -3709,8 +3711,8 @@ agentsview running at http://127.0.0.1:18082 (pid 123)
     #[test]
     fn classify_backend_status_output_keeps_starting_state_open_ended() {
         assert_eq!(
-            classify_backend_status_output("agentsview is starting up.", ""),
-            BackendStatusProbe::Starting("agentsview is starting up.".to_string())
+            classify_backend_status_output("periscope is starting up.", ""),
+            BackendStatusProbe::Starting("periscope is starting up.".to_string())
         );
     }
 
@@ -3718,11 +3720,11 @@ agentsview running at http://127.0.0.1:18082 (pid 123)
     fn classify_backend_status_output_keeps_starting_with_stderr_diagnostics() {
         assert_eq!(
             classify_backend_status_output(
-                "agentsview is starting up.\n",
+                "periscope is starting up.\n",
                 "warning: using default config"
             ),
             BackendStatusProbe::Starting(
-                "agentsview is starting up.\nwarning: using default config".to_string()
+                "periscope is starting up.\nwarning: using default config".to_string()
             )
         );
     }
@@ -3731,11 +3733,11 @@ agentsview running at http://127.0.0.1:18082 (pid 123)
     fn classify_backend_status_output_detects_unhealthy_daemon() {
         assert_eq!(
             classify_backend_status_output(
-                "agentsview process running (pid 123) but not responding to health checks.",
+                "periscope process running (pid 123) but not responding to health checks.",
                 "",
             ),
             BackendStatusProbe::Unhealthy(
-                "agentsview process running (pid 123) but not responding to health checks."
+                "periscope process running (pid 123) but not responding to health checks."
                     .to_string()
             )
         );
@@ -3744,7 +3746,7 @@ agentsview running at http://127.0.0.1:18082 (pid 123)
     #[test]
     fn classify_backend_status_output_rejects_read_only_daemon() {
         let output = "\
-agentsview running at http://127.0.0.1:18082
+periscope running at http://127.0.0.1:18082
   pid:     123
   version: v0.35.0
   mode:    read-only
@@ -3759,24 +3761,24 @@ agentsview running at http://127.0.0.1:18082
     #[test]
     fn classify_backend_status_output_rejects_unknown_non_startup_status() {
         assert_eq!(
-            classify_backend_status_output("agentsview status is unexpected.", ""),
-            BackendStatusProbe::Unusable("agentsview status is unexpected.".to_string())
+            classify_backend_status_output("periscope status is unexpected.", ""),
+            BackendStatusProbe::Unusable("periscope status is unexpected.".to_string())
         );
     }
 
     #[test]
     fn classify_backend_status_output_reports_absent_or_incompatible_daemon() {
         assert_eq!(
-            classify_backend_status_output("No agentsview server is running.", ""),
-            BackendStatusProbe::NotRunning("No agentsview server is running.".to_string())
+            classify_backend_status_output("No periscope server is running.", ""),
+            BackendStatusProbe::NotRunning("No periscope server is running.".to_string())
         );
         assert_eq!(
             classify_backend_status_output(
-                "agentsview found an incompatible running writable daemon.",
+                "periscope found an incompatible running writable daemon.",
                 "",
             ),
             BackendStatusProbe::Incompatible(
-                "agentsview found an incompatible running writable daemon.".to_string()
+                "periscope found an incompatible running writable daemon.".to_string()
             )
         );
     }
@@ -4557,7 +4559,7 @@ agentsview running at http://127.0.0.1:18082
             .expect("valid clock")
             .as_nanos();
         let script_path = std::env::temp_dir().join(format!(
-            "agentsview-login-shell-{stamp}-{}.sh",
+            "periscope-login-shell-{stamp}-{}.sh",
             std::process::id()
         ));
         // Probe absolute paths for the byte-emitting tool. Earlier
@@ -4651,7 +4653,7 @@ agentsview running at http://127.0.0.1:18082
             .expect("valid clock")
             .as_nanos();
         let script_path = std::env::temp_dir().join(format!(
-            "agentsview-login-shell-timeout-{stamp}-{}.sh",
+            "periscope-login-shell-timeout-{stamp}-{}.sh",
             std::process::id()
         ));
         fs::write(&script_path, "#!/bin/sh\n(sleep 2) &\nsleep 10\n").expect("write shell script");
@@ -4710,7 +4712,7 @@ agentsview running at http://127.0.0.1:18082
     #[test]
     fn run_login_shell_env_returns_none_when_shell_missing() {
         let output = run_login_shell_env(
-            "agentsview-missing-shell-binary",
+            "periscope-missing-shell-binary",
             Duration::from_millis(100),
         );
         assert!(output.is_none(), "missing shell should return None");
@@ -4719,7 +4721,7 @@ agentsview running at http://127.0.0.1:18082
     #[test]
     fn try_run_login_shell_env_reports_spawn_error_when_shell_missing() {
         let result = try_run_login_shell_env(
-            "agentsview-missing-shell-binary",
+            "periscope-missing-shell-binary",
             Duration::from_millis(100),
         );
         match result {
@@ -4740,7 +4742,7 @@ agentsview running at http://127.0.0.1:18082
             .expect("valid clock")
             .as_nanos();
         let script_path = std::env::temp_dir().join(format!(
-            "agentsview-login-shell-fail-{stamp}-{}.sh",
+            "periscope-login-shell-fail-{stamp}-{}.sh",
             std::process::id()
         ));
         fs::write(&script_path, "#!/bin/sh\necho diag-stderr >&2\nexit 42\n")

@@ -1,4 +1,4 @@
-// ABOUTME: Builds and serves the agentsview MCP server (stdio or
+// ABOUTME: Builds and serves the Periscope MCP server (stdio or
 // ABOUTME: StreamableHTTP) over the supported read-only retrieval tools.
 package mcp
 
@@ -15,7 +15,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/latentsignal-org/periscope/internal/service"
 )
 
 // Tool names. The same constant is used to register a tool and to refer
@@ -53,8 +53,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 		version = "dev"
 	}
 	s := mcp.NewServer(&mcp.Implementation{
-		Name:    "agentsview",
-		Title:   "agentsview session history",
+		Name:    "periscope",
+		Title:   "periscope session history",
 		Version: version,
 	}, nil)
 
@@ -207,7 +207,7 @@ func isCleanStdioShutdown(err error) bool {
 // address (see the cmd layer's loopback guard).
 func ServeHTTP(ctx context.Context, opts ServeOptions, addr string) error {
 	httpServer := &http.Server{Addr: addr, Handler: newHTTPHandler(opts)}
-	fmt.Fprintf(os.Stderr, "agentsview mcp: serving on %s\n", addr)
+	fmt.Fprintf(os.Stderr, "periscope mcp: serving on %s\n", addr)
 
 	errCh := make(chan error, 1)
 	go func() {

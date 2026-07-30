@@ -21,10 +21,10 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/latentsignal-org/periscope/internal/export"
+	"github.com/latentsignal-org/periscope/internal/money"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 func reflectedFieldValue(v any, name string) reflect.Value {
@@ -105,6 +105,12 @@ func callUpdateSessionIncrementalCompat(
 		update.FieldByName("PeakContextTokens").SetInt(int64(peakContextTokens))
 		update.FieldByName("HasTotalOutputTokens").SetBool(hasTotalOutputTokens)
 		update.FieldByName("HasPeakContextTokens").SetBool(hasPeakContextTokens)
+		if f := update.FieldByName("ModelContextWindowTokens"); f.IsValid() {
+			f.SetInt(0)
+		}
+		if f := update.FieldByName("HasModelContextWindowTokens"); f.IsValid() {
+			f.SetBool(false)
+		}
 		results := updateMethod.Call([]reflect.Value{
 			reflect.ValueOf(id),
 			update,

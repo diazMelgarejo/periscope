@@ -48,12 +48,18 @@
 
   // db.ErrSemanticUnavailable's base message; search failures wrapping a
   // more specific cause differ from it.
-  const GENERIC_SEARCH_UNAVAILABLE =
+  const LEGACY_GENERIC_SEARCH_UNAVAILABLE =
     "semantic search not available: enable [vector] in config.toml and run " +
     "'agentsview embeddings build'";
 
+  const GENERIC_SEARCH_UNAVAILABLE =
+    "semantic search not available: enable [vector] in config.toml and run " +
+    "'periscope embeddings build'";
+
   const specificSearchDetail = $derived(
-    searchDetail !== null && searchDetail !== GENERIC_SEARCH_UNAVAILABLE
+    searchDetail !== null &&
+      searchDetail !== GENERIC_SEARCH_UNAVAILABLE &&
+      searchDetail !== LEGACY_GENERIC_SEARCH_UNAVAILABLE
       ? searchDetail
       : null,
   );
@@ -75,7 +81,7 @@ dimension = 768
 [vector.embeddings.servers.local]
 endpoint = "http://localhost:11434/v1"`;
 
-  const BUILD_COMMAND = "agentsview embeddings build";
+  const BUILD_COMMAND = "periscope embeddings build";
   const BUILD_POLL_MS = 2000;
 
   type Phase =

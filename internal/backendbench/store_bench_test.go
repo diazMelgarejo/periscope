@@ -16,10 +16,10 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/postgres"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/duckdb"
+	"github.com/latentsignal-org/periscope/internal/money"
+	"github.com/latentsignal-org/periscope/internal/postgres"
 )
 
 const (

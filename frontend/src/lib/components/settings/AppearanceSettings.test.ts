@@ -90,7 +90,7 @@ describe("AppearanceSettings", () => {
     const { getByRole } = render(AppearanceSettings);
 
     expect(
-      (getByRole("radio", { name: "Agentsview" }) as HTMLButtonElement)
+      (getByRole("radio", { name: "Periscope" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
     expect(

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/latentsignal-org/periscope/internal/config"
+	"github.com/latentsignal-org/periscope/internal/db"
 )
 
 // Compile-time check: *Store satisfies db.Store.
@@ -250,6 +250,45 @@ func (s *Store) DeleteInsight(id int64) error {
 		return mapPGWriteError(fmt.Sprintf("deleting insight %d", id), err)
 	}
 	return nil
+}
+
+// IsSessionStarred reports whether a session is starred in shared PG metadata.
+func (s *Store) IsSessionStarred(
+	ctx context.Context, sessionID string,
+) (bool, error) {
+	var one int
+	err := s.pg.QueryRowContext(ctx,
+		`SELECT 1 FROM starred_sessions WHERE session_id = $1 LIMIT 1`,
+		sessionID,
+	).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf(
+			"checking starred for %s: %w", sessionID, err,
+		)
+	}
+	return true, nil
+}
+
+// UpsertTurnSummary is not supported in read-only mode.
+func (s *Store) UpsertTurnSummary(_ db.TurnSummary) error {
+	return db.ErrReadOnly
+}
+
+// ListTurnSummaries returns an empty slice.
+func (s *Store) ListTurnSummaries(
+	_ context.Context, _ string,
+) ([]db.TurnSummary, error) {
+	return []db.TurnSummary{}, nil
+}
+
+// HasTurnSummary returns false.
+func (s *Store) HasTurnSummary(
+	_ context.Context, _ string, _ int, _ string,
+) (bool, error) {
+	return false, nil
 }
 
 // ListInsights returns dashboard insights in created_at order.

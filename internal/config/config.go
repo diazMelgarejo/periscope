@@ -24,9 +24,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/gofrs/flock"
+	"github.com/latentsignal-org/periscope/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/pathutil"
 	"github.com/spf13/pflag"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 // TerminalConfig holds terminal launch preferences.
@@ -718,7 +718,7 @@ func Default() (Config, error) {
 			"determining home directory: %w", err,
 		)
 	}
-	dataDir := filepath.Join(home, ".agentsview")
+	dataDir := filepath.Join(home, ".periscope")
 	hostname, err := os.Hostname()
 	if err != nil {
 		return Config{}, fmt.Errorf("identify local sync machine: %w", err)
@@ -1437,9 +1437,12 @@ func (c *Config) withConfigLock(fn func() error) error {
 }
 
 // dataDirFromEnv returns the data directory from the environment, preferring
-// AGENTSVIEW_DATA_DIR and falling back to the legacy AGENT_VIEWER_DATA_DIR.
-// Returns "" when neither is set.
+// PERISCOPE_DATA_DIR and falling back to legacy AgentsView env names.
+// Returns "" when none are set.
 func dataDirFromEnv() string {
+	if v := os.Getenv("PERISCOPE_DATA_DIR"); v != "" {
+		return v
+	}
 	if v := os.Getenv("AGENTSVIEW_DATA_DIR"); v != "" {
 		return v
 	}
@@ -1462,7 +1465,7 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
 		c.pgEnvOverrides.URL = v
 	}
-	if v := os.Getenv("AGENTSVIEW_PG_SCHEMA"); v != "" {
+	if v := firstEnv("PERISCOPE_PG_SCHEMA", "AGENTSVIEW_PG_SCHEMA"); v != "" {
 		c.pgEnvOverrides.Schema = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
@@ -2157,21 +2160,25 @@ func ResolveDataDir() (string, error) {
 }
 
 // IsDefaultAgentsviewDataDir reports whether path is (or symlink-resolves to) a
-// default ~/.agentsview data directory. It is the single guard shared by the
-// CLI and HTTP recall-import paths.
+// default product data directory (~/.periscope or legacy ~/.agentsview). It is
+// the single guard shared by the CLI and HTTP recall-import paths.
 func IsDefaultAgentsviewDataDir(path string) bool {
 	clean := filepath.Clean(strings.TrimSpace(path))
 	if clean == "" || clean == "." {
 		return false
 	}
-	if filepath.Base(clean) == ".agentsview" {
+	if isDefaultProductDataDirBase(filepath.Base(clean)) {
 		return true
 	}
 	resolved, err := filepath.EvalSymlinks(clean)
 	if err != nil {
 		return false
 	}
-	return filepath.Base(filepath.Clean(resolved)) == ".agentsview"
+	return isDefaultProductDataDirBase(filepath.Base(filepath.Clean(resolved)))
+}
+
+func isDefaultProductDataDirBase(name string) bool {
+	return name == ".periscope" || name == ".agentsview"
 }
 
 // IsDefaultAgentsviewDBPath reports whether dbPath lives inside a default
@@ -2201,7 +2208,9 @@ func IsDefaultAgentsviewDBPath(dbPath string) bool {
 }
 
 func defaultAgentsviewDBDir(dbPath string) bool {
-	return filepath.Base(filepath.Dir(filepath.Clean(dbPath))) == ".agentsview"
+	return isDefaultProductDataDirBase(
+		filepath.Base(filepath.Dir(filepath.Clean(dbPath))),
+	)
 }
 
 // DefaultPGTargetName returns the effective named PG target for this config.
@@ -2320,7 +2329,7 @@ func (c *Config) resolvePGConfig(
 		pg.URL = expanded
 	}
 	if pg.Schema == "" {
-		pg.Schema = "agentsview"
+		pg.Schema = "periscope"
 	}
 	if pg.MachineName == "" {
 		h, err := os.Hostname()

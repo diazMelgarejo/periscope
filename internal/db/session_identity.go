@@ -1,6 +1,6 @@
 package db
 
-import "go.kenn.io/agentsview/internal/parser"
+import "github.com/latentsignal-org/periscope/internal/parser"
 
 // ApplyParsedSessionIdentity copies parser-owned session identity onto a DB session.
 func ApplyParsedSessionIdentity(dst *Session, src parser.ParsedSession) {

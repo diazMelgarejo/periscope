@@ -6,12 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/latentsignal-org/periscope/internal/db"
+	"github.com/latentsignal-org/periscope/internal/parser"
 )
 
 type verifiedSourceCountingProvider struct {
@@ -172,6 +173,46 @@ func newVerifiedSourceArchiveWithRewriter(
 	return engine, provider, files
 }
 
+// requireSameSizeRewriteWithRestoredMtime rewrites path in place while
+// preserving size and restoring the pre-rewrite mtime. Overlay/tmpfs hosts
+// may leave ctime equal to the trusted signature until a few metadata
+// updates land, so retry until change time diverges from warm trust.
+func requireSameSizeRewriteWithRestoredMtime(
+	t *testing.T,
+	engine *Engine,
+	path string,
+	content []byte,
+) {
+	t.Helper()
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	restoredMtime := info.ModTime()
+	wantSize := info.Size()
+
+	record, ok := engine.verifiedSources[filepath.Clean(path)]
+	require.True(t, ok, "trusted signature required before same-size rewrite fixture")
+	trustedChange := record.signature.changeTime
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		require.NoError(t, os.WriteFile(path, content, 0o600))
+		require.NoError(t, os.Chtimes(path, restoredMtime, restoredMtime))
+		afterInfo, err := os.Stat(path)
+		require.NoError(t, err)
+		require.Equal(t, wantSize, afterInfo.Size(),
+			"fixture must preserve size")
+		require.Equal(t, restoredMtime.UnixNano(), afterInfo.ModTime().UnixNano(),
+			"fixture must restore mtime")
+		afterChange, ok := fileChangeTime(path, afterInfo)
+		require.True(t, ok, "native change time unavailable after rewrite")
+		if afterChange != trustedChange {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("change time must diverge from trusted signature after same-size rewrite with restored mtime")
+}
+
 func runVerifiedSourcePass(
 	t *testing.T,
 	engine *Engine,
@@ -275,10 +316,9 @@ func TestVerifiedSourceGateRechecksAfterStatAndWatcherInvalidation(t *testing.T)
 	runVerifiedSourcePass(t, engine, files)
 	require.Equal(t, 1, provider.fingerprintCalls)
 
-	info, err := os.Stat(file.Path)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(file.Path, []byte("changed\n"), 0o600))
-	require.NoError(t, os.Chtimes(file.Path, info.ModTime(), info.ModTime()))
+	requireSameSizeRewriteWithRestoredMtime(
+		t, engine, file.Path, []byte("changed\n"),
+	)
 	runVerifiedSourcePass(t, engine, files)
 	assert.Equal(t, 2, provider.fingerprintCalls,
 		"same-size rewrite with restored mtime must deep-verify")

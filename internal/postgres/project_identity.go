@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/latentsignal-org/periscope/internal/export"
 )
 
 func (s *Store) ListProjectIdentityObservations(
