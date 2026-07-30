@@ -1,0 +1,731 @@
+# Instincts generated from https://github.com/diazMelgarejo/periscope
+# Generated: 2026-07-30T05:56:58.180Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: periscope-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix, feat, test
+
+## Evidence
+
+- 9 commits analyzed
+- Detected conventional commit pattern
+- Examples: fix(cli): expand leading tilde in DuckDB mirror paths (#1274), feat(parser): add Omnigent support (#1284)
+
+---
+id: periscope-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Commit Length
+
+## Action
+
+Write moderate-length commit messages (~57 characters)
+
+## Evidence
+
+- Average commit message length: 57 chars
+- Based on 9 commits
+
+---
+id: periscope-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Naming Files
+
+## Action
+
+Use snake_case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: snake_case
+
+---
+id: periscope-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: periscope-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: periscope-arch-type-based
+trigger: "when adding new code"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Arch Type Based
+
+## Action
+
+Place code in the appropriate type folder (components/, services/, utils/, etc.)
+
+## Evidence
+
+- Type-based module organization detected
+- Folders: 
+
+---
+id: periscope-test-framework
+trigger: "when writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Test Framework
+
+## Action
+
+Use jest as the test framework
+
+## Evidence
+
+- Test framework detected: jest
+- File pattern: *.test.ts
+
+---
+id: periscope-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.ts
+
+## Evidence
+
+- File pattern: *.test.ts
+- Consistent across test files
+
+---
+id: periscope-test-mocking
+trigger: "when mocking dependencies in tests"
+confidence: 0.75
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Test Mocking
+
+## Action
+
+Use vi.mock for mocking
+
+## Evidence
+
+- Mocking pattern detected: vi.mock
+- Consistent across test files
+
+---
+id: periscope-test-types
+trigger: "when planning tests for a feature"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Test Types
+
+## Action
+
+Write unit, integration, e2e tests to match project standards
+
+## Evidence
+
+- Test types detected: unit, integration, e2e
+- Coverage config: no
+
+---
+id: periscope-workflow-database-migration
+trigger: "when modifying the database schema or adding tables"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Database Migration
+
+## Action
+
+Follow the database-migration workflow:
+1. Create migration file
+2. Update schema definitions
+3. Generate/update types
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~13x per month
+- Files: **/schema.*, migrations/*
+
+---
+id: periscope-workflow-feature-development
+trigger: "when implementing a new feature"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Feature Development
+
+## Action
+
+Follow the feature-development workflow:
+1. Add feature implementation
+2. Add tests for feature
+3. Update documentation
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~17x per month
+- Files: frontend/src/lib/utils/*, frontend/e2e/*, frontend/src/lib/api/generated/*
+
+---
+id: periscope-workflow-add-new-parser-or-provider
+trigger: "when doing add new parser or provider"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Add New Parser Or Provider
+
+## Action
+
+Follow the add-new-parser-or-provider workflow:
+1. Implement parser/provider logic in internal/parser (e.g., <agent>_provider.go, <agent>.go)
+2. Add/update types in internal/parser/types.go
+3. Update provider registration in internal/parser/provider.go and/or provider_migration.go
+4. Add test fixtures and coverage in internal/parser/testdata/<agent>/* and <agent>_test.go
+5. Integrate with sync engine (internal/sync/engine.go, engine_test.go, integration_test.go)
+6. Update documentation (docs/internal/session-format-sources.md, docs/configuration.md)
+7. Update frontend agent utils/tests if needed (frontend/src/lib/utils/agents.ts, agents.test.ts)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: internal/parser/<agent>_provider.go, internal/parser/<agent>.go, internal/parser/types.go
+
+---
+id: periscope-workflow-add-or-evolve-database-table-and-ledger
+trigger: "when doing add or evolve database table and ledger"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Add Or Evolve Database Table And Ledger
+
+## Action
+
+Follow the add-or-evolve-database-table-and-ledger workflow:
+1. Add or modify SQL schema in internal/db/schema.sql
+2. Implement Go model and accessors in internal/db/<table>.go
+3. Add or update triggers/migrations in internal/db/db.go
+4. Write or update tests in internal/db/<table>_test.go and db_test.go
+5. Update related logic in feature code (e.g., internal/artifact/*, internal/parser/*)
+6. Update documentation/specs if needed
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: internal/db/schema.sql, internal/db/<table>.go, internal/db/db.go
+
+---
+id: periscope-workflow-feature-development-with-end-to-end-tests-and-docs
+trigger: "when doing feature development with end to end tests and docs"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Feature Development With End To End Tests And Docs
+
+## Action
+
+Follow the feature-development-with-end-to-end-tests-and-docs workflow:
+1. Implement backend logic (internal/<feature>/*.go)
+2. Integrate with CLI or daemon (cmd/agentsview/*.go)
+3. Update or add API endpoints (internal/server/*.go)
+4. Update or add frontend components and stores (frontend/src/lib/components/<feature>/*.svelte, stores, utils, tests)
+5. Write or update backend and frontend tests
+6. Update documentation (docs/<feature>.md, README.md, etc.)
+7. Add or update testdata/golden/* if output shape changes
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: internal/<feature>/*.go, cmd/agentsview/*.go, internal/server/*.go
+
+---
+id: periscope-workflow-add-or-evolve-artifact-export-import-pipeline
+trigger: "when doing add or evolve artifact export import pipeline"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Add Or Evolve Artifact Export Import Pipeline
+
+## Action
+
+Follow the add-or-evolve-artifact-export-import-pipeline workflow:
+1. Implement or update export/import logic in internal/artifact/export.go, import.go, and helpers
+2. Add or update checkpoint/queue management (internal/artifact/export_checkpoint.go, import_checkpoint.go, etc.)
+3. Add or update DB accessors and triggers (internal/db/artifact_*.go, db.go, schema.sql)
+4. Write or update tests for artifact logic and DB (internal/artifact/*_test.go, internal/db/artifact_*_test.go)
+5. Update documentation/specs if needed
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: internal/artifact/export.go, internal/artifact/import.go, internal/artifact/export_checkpoint.go
+
+---
+id: periscope-workflow-add-or-evolve-pricing-refresh-and-usage-metrics
+trigger: "when doing add or evolve pricing refresh and usage metrics"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Workflow Add Or Evolve Pricing Refresh And Usage Metrics
+
+## Action
+
+Follow the add-or-evolve-pricing-refresh-and-usage-metrics workflow:
+1. Implement/modify pricing refresh logic (internal/pricingrefresh/refresh.go, cmd/agentsview/pricing_schedule.go)
+2. Update pricing models and provenance (internal/db/pricing.go, internal/export/pricing.go, internal/parser/types.go)
+3. Update usage analytics logic (internal/db/usage.go, internal/duckdb/analytics_usage.go, internal/postgres/usage.go)
+4. Update or add frontend usage pages and components (frontend/src/lib/components/usage/*, stores/usage.svelte.ts, usageMode.ts)
+5. Write or update backend and frontend tests
+6. Update documentation (docs/token-usage.md, docs/activity.md, etc.)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: internal/pricingrefresh/refresh.go, cmd/agentsview/pricing_schedule.go, internal/db/pricing.go
+
+---
+id: periscope-instinct-naming-files
+trigger: "When creating or renaming a file"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Naming Files
+
+## Action
+
+Use snake_case for file names
+
+## Evidence
+
+- Pattern in namingConventions.files
+- Seen in files: internal/db/schema.sql, internal/parser/types.go
+
+---
+id: periscope-instinct-naming-functions
+trigger: "When defining a function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Naming Functions
+
+## Action
+
+Use camelCase for function names
+
+## Evidence
+
+- Pattern in namingConventions.functions
+- Seen in Go source files
+
+---
+id: periscope-instinct-naming-classes
+trigger: "When defining a class or struct"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Naming Classes
+
+## Action
+
+Use PascalCase for class/struct names
+
+## Evidence
+
+- Pattern in namingConventions.classes
+- Seen in Go struct definitions
+
+---
+id: periscope-instinct-naming-constants
+trigger: "When defining a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Naming Constants
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for constant names
+
+## Evidence
+
+- Pattern in namingConventions.constants
+- Seen in Go constants
+
+---
+id: periscope-instinct-import-style
+trigger: "When importing modules"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Import Style
+
+## Action
+
+Use relative import paths
+
+## Evidence
+
+- Pattern in importStyle
+- Seen in Go and TypeScript imports
+
+---
+id: periscope-instinct-export-style
+trigger: "When exporting symbols from a module"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in exportStyle
+- Seen in TypeScript files
+
+---
+id: periscope-instinct-test-file-pattern
+trigger: "When creating a test file for frontend code"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Test File Pattern
+
+## Action
+
+Name the file with a .test.ts suffix
+
+## Evidence
+
+- Pattern in testing.filePattern
+- Seen in files: frontend/src/lib/components/<feature>/*.test.ts
+
+---
+id: periscope-instinct-test-framework
+trigger: "When writing frontend tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Test Framework
+
+## Action
+
+Use jest as the test framework
+
+## Evidence
+
+- Pattern in testing.framework
+- Seen in jest config and test files
+
+---
+id: periscope-instinct-test-mocking
+trigger: "When mocking modules in frontend tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Test Mocking
+
+## Action
+
+Use vi.mock for mocking
+
+## Evidence
+
+- Pattern in testing.mockingStyle
+- Seen in .test.ts files
+
+---
+id: periscope-instinct-test-types
+trigger: "When planning tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Test Types
+
+## Action
+
+Include unit, integration, and e2e tests as appropriate
+
+## Evidence
+
+- Pattern in testing.testTypes
+- Seen in test file distribution
+
+---
+id: periscope-instinct-git-commit-format
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Git Commit Format
+
+## Action
+
+Use conventional commit format with prefixes: fix, feat, test
+
+## Evidence
+
+- Pattern in commits.prefixes
+- Seen in: fix(cli): expand leading tilde in DuckDB mirror paths (#1274)
+
+---
+id: periscope-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Git Commit Length
+
+## Action
+
+Keep commit message length around 57 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength
+- Seen in commit examples
+
+---
+id: periscope-instinct-add-new-parser-or-provider
+trigger: "When someone wants to support a new chat agent or data source format"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Add New Parser Or Provider
+
+## Action
+
+Follow the add-new-parser-or-provider workflow steps and modify files as listed
+
+## Evidence
+
+- Workflow: add-new-parser-or-provider
+- Example commits and file patterns
+
+---
+id: periscope-instinct-add-or-evolve-database-table-and-ledger
+trigger: "When someone wants to persist new types of data or add a new ledger/queue for a feature"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Add Or Evolve Database Table And Ledger
+
+## Action
+
+Follow the add-or-evolve-database-table-and-ledger workflow steps and modify files as listed
+
+## Evidence
+
+- Workflow: add-or-evolve-database-table-and-ledger
+- Example commits and file patterns
+
+---
+id: periscope-instinct-feature-development-with-e2e-tests-and-docs
+trigger: "When someone wants to add a user-facing feature or major capability"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Feature Development With E2e Tests And Docs
+
+## Action
+
+Follow the feature-development-with-end-to-end-tests-and-docs workflow steps and modify files as listed
+
+## Evidence
+
+- Workflow: feature-development-with-end-to-end-tests-and-docs
+- Example commits and file patterns
+
+---
+id: periscope-instinct-add-or-evolve-artifact-export-import-pipeline
+trigger: "When someone wants to add or improve artifact synchronization, export, or import reliability"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Add Or Evolve Artifact Export Import Pipeline
+
+## Action
+
+Follow the add-or-evolve-artifact-export-import-pipeline workflow steps and modify files as listed
+
+## Evidence
+
+- Workflow: add-or-evolve-artifact-export-import-pipeline
+- Example commits and file patterns
+
+---
+id: periscope-instinct-add-or-evolve-pricing-refresh-and-usage-metrics
+trigger: "When someone wants to support new pricing models, refresh pricing catalogs, or improve usage analytics"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Add Or Evolve Pricing Refresh And Usage Metrics
+
+## Action
+
+Follow the add-or-evolve-pricing-refresh-and-usage-metrics workflow steps and modify files as listed
+
+## Evidence
+
+- Workflow: add-or-evolve-pricing-refresh-and-usage-metrics
+- Example commits and file patterns
+
