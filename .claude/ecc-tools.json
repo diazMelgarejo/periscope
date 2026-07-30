@@ -55,8 +55,7 @@
         "label": "Security evidence",
         "status": "present",
         "evidence": [
-          "scripts/git/audit_attribution.sh",
-          "scripts/git/audit_engine.py"
+          "SECURITY.md"
         ],
         "recommendation": "Attach security evidence such as SBOMs, SARIF, audit reports, or AgentShield evidence packs."
       },
@@ -339,6 +338,16 @@
       "moduleId": "workflow-pack",
       "path": ".claude/commands/feature-development-with-tests-and-docs.md",
       "description": "Workflow command scaffold for feature-development-with-tests-and-docs."
+    },
+    {
+      "moduleId": "workflow-pack",
+      "path": ".claude/commands/context-visualizer-ui-feature-workflow.md",
+      "description": "Workflow command scaffold for context-visualizer-ui-feature-workflow."
+    },
+    {
+      "moduleId": "workflow-pack",
+      "path": ".claude/commands/database-schema-and-storage-migration.md",
+      "description": "Workflow command scaffold for database-schema-and-storage-migration."
     }
   ],
   "workflows": [
@@ -365,6 +374,18 @@
     {
       "command": "feature-development-with-tests-and-docs",
       "path": ".claude/commands/feature-development-with-tests-and-docs.md"
+    },
+    {
+      "command": "context-visualizer-ui-feature-workflow",
+      "path": ".claude/commands/context-visualizer-ui-feature-workflow.md"
+    },
+    {
+      "command": "database-schema-and-storage-migration",
+      "path": ".claude/commands/database-schema-and-storage-migration.md"
+    },
+    {
+      "command": "database-migration",
+      "path": ".claude/commands/database-migration.md"
     }
   ],
   "adapters": {
