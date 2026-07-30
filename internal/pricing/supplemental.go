@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/latentsignal-org/periscope/internal/money"
 )
 
 // supplementalVersion identifies the curated supplemental alias set.
