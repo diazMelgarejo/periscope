@@ -333,7 +333,13 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (74: Claude Code IDE context reparse. Standalone ide_opened_file and
 // ide_selection wrappers are promoted to system metadata so existing
 // VS Code sessions no longer use them as titles or user turns.)
-const dataVersion = 74
+// (75: Git worktree project attribution reparse. Hosting-oriented worktree
+// paths retain the owning repository after checkout removal, live linked
+// worktrees backed by bare common repositories resolve to the repository
+// instead of the generated checkout leaf, and generic hosting fragments defer
+// to an enclosing live repository. Existing rows need re-parsing so activity
+// is neither fragmented by worktree names nor claimed by nested fixture paths.)
+const dataVersion = 75
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1373,6 +1379,14 @@ var readOnlyRequiredTables = []string{
 	"artifact_publication_revisions",
 	"artifact_checkpoint_heads",
 	"artifact_checkpoint_floors",
+	"artifact_import_queue",
+	"artifact_import_attempt_generations",
+	"artifact_peer_checkpoint_heads",
+	"artifact_checkpoint_landings",
+	"artifact_checkpoint_landing_sessions",
+	"artifact_checkpoint_stages",
+	"artifact_checkpoint_stage_sessions",
+	"artifact_imported_sessions",
 }
 
 var (
@@ -1662,6 +1676,30 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{
+			"artifact_import_queue", "quarantine_pending",
+			"ALTER TABLE artifact_import_queue ADD COLUMN quarantine_pending INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"artifact_checkpoint_stages", "pending_count",
+			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN pending_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"artifact_checkpoint_stages", "decoded_count",
+			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN decoded_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"artifact_checkpoint_stages", "decode_offset",
+			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN decode_offset INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"artifact_checkpoint_stages", "decoder_version",
+			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN decoder_version INTEGER NOT NULL DEFAULT 1",
+		},
+		{
+			"artifact_checkpoint_stage_sessions", "satisfied",
+			"ALTER TABLE artifact_checkpoint_stage_sessions ADD COLUMN satisfied INTEGER NOT NULL DEFAULT 0",
+		},
 		{
 			"artifact_export_queue", "rejected_generation",
 			"ALTER TABLE artifact_export_queue ADD COLUMN rejected_generation INTEGER",
@@ -2485,6 +2523,9 @@ func (db *DB) migrateColumns() error {
 	if err := db.ensureCursorUsageEventsSchemaLocked(w); err != nil {
 		return err
 	}
+	if err := requeueInvalidArtifactPublicationsLocked(w); err != nil {
+		return err
+	}
 
 	runRepair, err := db.shouldRunTokenCoverageRepairLocked(w)
 	if err != nil {
@@ -2550,6 +2591,28 @@ const (
 			last_error = '',
 			rejected_at = NULL`
 )
+
+func requeueInvalidArtifactPublicationsLocked(w *writerHandle) error {
+	_, err := w.Exec(`
+		INSERT INTO artifact_export_queue(session_id)
+		SELECT session_id
+		FROM artifact_publications
+		WHERE origin = (
+			SELECT value FROM pg_sync_state WHERE key = 'artifact_origin_id'
+		) AND (session_id = '' OR instr(session_id, '~') > 0)
+		ON CONFLICT(session_id) DO UPDATE SET
+			enqueued_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+			generation = artifact_export_queue.generation + 1,
+			pending = 1,
+			rejected_generation = NULL,
+			last_error = '',
+			rejected_at = NULL
+		WHERE artifact_export_queue.pending = 0`)
+	if err != nil {
+		return fmt.Errorf("requeueing invalid artifact publications: %w", err)
+	}
+	return nil
+}
 
 var populateArtifactOriginQueueTx = func(tx *sql.Tx, origin string, requeue bool) error {
 	statement := bootstrapArtifactExportQueueSQL
@@ -2898,6 +2961,11 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
 	); err != nil {
 		return fmt.Errorf("dropping legacy usage index: %w", err)
+	}
+	if _, err := w.Exec(
+		`DROP INDEX IF EXISTS idx_artifact_checkpoint_stage_pending`,
+	); err != nil {
+		return fmt.Errorf("dropping superseded artifact stage index: %w", err)
 	}
 	// Superseded by idx_recall_extract_progress_retry (schema.sql), whose
 	// trailing updated_at column serves the same prefix.

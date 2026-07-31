@@ -475,6 +475,7 @@
   // hydration effect above so scroll intent is not re-applied
   // every time hydration state changes.
   $effect(() => {
+    const route = router.route;
     const sid = router.sessionId;
     const msgParam = router.params["msg"] ?? null;
     untrack(() => {
@@ -674,7 +675,7 @@
 
 <AppHeader />
 
-{#if router.route === "usage"}
+{#if router.route === "usage" || router.route === "token-usage"}
   <div class="page-scroll">
     <UsagePage />
   </div>

@@ -2,6 +2,7 @@ export type Route =
   | "sessions"
   | "context"
   | "usage"
+  | "token-usage"
   | "activity"
   | "trends"
   | "insights"
@@ -14,6 +15,7 @@ const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
   "sessions",
   "context",
   "usage",
+  "token-usage",
   "activity",
   "trends",
   "insights",
@@ -220,6 +222,18 @@ export class RouterStore {
     this.sessionId = null;
     window.history.pushState(null, "", url);
     return true;
+  }
+
+  replace(
+    route: Route,
+    params: Record<string, string> = {},
+  ): void {
+    const url = this.#buildUrl(`/${route}`, params);
+    this.#updateSticky(params);
+    this.route = route;
+    this.params = { ...this.#stickyParams, ...params };
+    this.sessionId = null;
+    window.history.replaceState(null, "", url);
   }
 
   navigateToSessions(

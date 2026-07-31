@@ -22,7 +22,8 @@ Instructions for autonomous coding agents working in this repository.
 
 ## Required Git Rules
 
-1. Commit every turn that changes tracked files.
+1. Do not commit after every turn; wait for explicit user review and approval
+   before committing changes.
 1. Do not make empty commits. If a turn is read-only or only changes ignored
    files, state that no commit was made.
 1. Do not amend, squash, or rebase commits unless explicitly requested.

@@ -1435,6 +1435,7 @@ func TestParseCodexSession_TokenUsage(t *testing.T) {
 		require.Len(t, msgs, 2)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
 		assert.Equal(t, 500, msgs[1].OutputTokens)
+		assert.Equal(t, 10000, msgs[1].ContextTokens)
 	})
 
 	t.Run("multiple turns get separate usage", func(t *testing.T) {

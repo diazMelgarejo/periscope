@@ -475,6 +475,15 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 			h.mu.Unlock()
 			return false, nil
 		},
+		duckDBStartupSync: func(
+			context.Context, *syncpkg.Engine, bool,
+		) (bool, error) {
+			h.mu.Lock()
+			h.startupSyncs++
+			h.events = append(h.events, "startup-sync")
+			h.mu.Unlock()
+			return false, nil
+		},
 		newPGPusher: func(*syncpkg.Engine) *pgPusher {
 			target := &pushWatchPGTarget{harness: h}
 			return &pgPusher{
@@ -486,6 +495,26 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 					return nil
 				},
 				connect: func() (pgTarget, error) { return target, nil },
+			}
+		},
+		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
+			return &duckDBPusher{
+				localSync: func(context.Context) error {
+					h.mu.Lock()
+					h.localPushSyncs++
+					h.events = append(h.events, "local-sync")
+					h.mu.Unlock()
+					return nil
+				},
+				mirrorPush: func(
+					_ context.Context, _ bool,
+				) (duckdbsync.PushResult, error) {
+					attempt, partial := h.nextAttempt("")
+					if partial {
+						return duckdbsync.PushResult{Errors: 1}, nil
+					}
+					return duckdbsync.PushResult{SessionsPushed: attempt}, nil
+				},
 			}
 		},
 	}
@@ -563,6 +592,10 @@ func (t *pushWatchPGTarget) PushWithOptions(
 }
 func (*pushWatchPGTarget) Close() error { return nil }
 
+func isLocalEnginePushWatchOwner(name string) bool {
+	return name == "local PostgreSQL" || name == "local DuckDB"
+}
+
 func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 	t *testing.T,
 ) {
@@ -576,7 +609,7 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 
 			first := receiveArchiveTest(t, h.attempts)
 			require.Equal(t, 1, first.index)
-			if owner.name != "local PostgreSQL" {
+			if !isLocalEnginePushWatchOwner(owner.name) {
 				assert.Equal(t, reasonStartup, first.reason)
 			}
 			require.Eventually(t, func() bool {
@@ -593,7 +626,7 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 			h.floor <- time.Now()
 			second := receiveArchiveTest(t, h.attempts)
 			require.Equal(t, 2, second.index)
-			if owner.name != "local PostgreSQL" {
+			if !isLocalEnginePushWatchOwner(owner.name) {
 				assert.Equal(t, reasonInterval, second.reason)
 			}
 			receiveArchiveTest(t, h.opened)
@@ -608,7 +641,7 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 			assert.Equal(t, "collect", events[0],
 				"watcher collection must precede startup work")
 			assert.Equal(t, 1, opens)
-			if owner.name == "local PostgreSQL" {
+			if isLocalEnginePushWatchOwner(owner.name) {
 				assert.Equal(t, 1, startupSyncs)
 				assert.GreaterOrEqual(t, localSyncs, 2,
 					"initial and retry pushes each run local sync")
@@ -637,7 +670,7 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 
 			first := receiveArchiveTest(t, h.attempts)
 			require.Equal(t, 1, first.index)
-			if owner.name != "local PostgreSQL" {
+			if !isLocalEnginePushWatchOwner(owner.name) {
 				assert.Equal(t, reasonStartup, first.reason)
 			}
 			receiveArchiveTest(t, h.opened)
@@ -655,7 +688,7 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 			h.floor <- time.Now()
 			second := receiveArchiveTest(t, h.attempts)
 			require.Equal(t, 2, second.index)
-			if owner.name != "local PostgreSQL" {
+			if !isLocalEnginePushWatchOwner(owner.name) {
 				assert.Equal(t, reasonInterval, second.reason)
 			}
 			select {
@@ -671,7 +704,7 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 			h.floor <- time.Now()
 			third := receiveArchiveTest(t, h.attempts)
 			require.Equal(t, 3, third.index)
-			if owner.name != "local PostgreSQL" {
+			if !isLocalEnginePushWatchOwner(owner.name) {
 				assert.Equal(t, reasonInterval, third.reason)
 			}
 			require.NoError(t, receiveArchiveTest(t, callbackDone))
@@ -708,7 +741,7 @@ func TestPushWatchProductionOwnersFallbackUsesActiveIntervalFloor(t *testing.T) 
 
 			h.floor <- time.Now()
 			attempt := receiveArchiveTest(t, h.attempts)
-			if owner.name != "local PostgreSQL" {
+			if !isLocalEnginePushWatchOwner(owner.name) {
 				assert.Equal(t, reasonInterval, attempt.reason)
 			}
 			cancel()
@@ -976,9 +1009,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				hooks.newDuckDBPusher = func(*syncpkg.Engine) *duckDBPusher {
 					return &duckDBPusher{
 						localSync: func(context.Context) error { return nil },
-						pushMirror: func(
-							context.Context, DuckDBPushConfig, bool,
-						) (duckdbsync.PushResult, error) {
+						mirrorPush: func(context.Context, bool) (duckdbsync.PushResult, error) {
 							return duckdbsync.PushResult{}, nil
 						},
 					}
