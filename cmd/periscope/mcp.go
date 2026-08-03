@@ -17,10 +17,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	mcpserver "github.com/latentsignal-org/periscope/internal/mcp"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	mcpserver "go.kenn.io/agentsview/internal/mcp"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func newMCPCommand() *cobra.Command {

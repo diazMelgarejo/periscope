@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/importer"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/importer"
 )
 
 func (s *Server) registerImportRoutes() {

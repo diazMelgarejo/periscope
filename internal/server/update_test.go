@@ -6,9 +6,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/server"
-	"github.com/latentsignal-org/periscope/internal/update"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/update"
 )
 
 func stubChecker(

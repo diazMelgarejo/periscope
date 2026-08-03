@@ -8,7 +8,7 @@
 #   1. Fetches the upstream remote (adds it if missing)
 #   2. Merges upstream/<ref> into the current branch (default: agentsview or main)
 #   3. Auto-resolves known-safe conflicts using our periscope-layer rules:
-#      - go.mod module path: always keep ours (github.com/latentsignal-org/periscope)
+#      - go.mod module path: always keep upstream's (go.kenn.io/agentsview) — never diverge here
 #      - cmd/ directory: upstream renames are rebased onto ours (cmd/periscope)
 #      - internal/db/sessions.go: keep our extra columns (model_context_window_tokens etc.)
 #      - internal/sync/engine.go: keep our UpdateSessionIncremental call signature
@@ -194,7 +194,7 @@ check_exists "frontend/src/lib/components/context/ActivityMinimap.svelte" "Activ
 check_exists "jetbrains-plugin" "JetBrains plugin"
 check_exists "cmd/periscope" "periscope binary cmd"
 
-check_contains "go.mod" "github.com/latentsignal-org/periscope" "go.mod module path"
+check_contains "go.mod" "go.kenn.io/agentsview" "go.mod module path"
 check_contains "vite.config.ts" "/api/context" "vite.config.ts context proxy"
 
 if [[ $INVARIANT_FAILURES -gt 0 ]]; then

@@ -10,7 +10,7 @@ import (
 	"runtime/trace"
 	"slices"
 
-	"github.com/latentsignal-org/periscope/internal/pathutil"
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 // startSyncProfile starts whichever of the hidden --cpuprofile,

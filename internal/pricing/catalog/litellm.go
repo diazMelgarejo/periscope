@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const litellmURL = "https://raw.githubusercontent.com/" +

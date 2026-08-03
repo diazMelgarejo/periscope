@@ -3,7 +3,7 @@ package duckdb
 import (
 	"context"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // UpsertTurnSummary is not supported on the read-only DuckDB mirror.

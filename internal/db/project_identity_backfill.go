@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/export"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 const ProjectIdentityBackfillName = "session_project_identity_snapshots_v1"

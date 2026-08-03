@@ -10,8 +10,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 	"github.com/spf13/cobra"
 )
 

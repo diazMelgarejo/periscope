@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // RecentEdits returns files ordered by most-recent edit across all sessions,

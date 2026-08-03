@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // serviceSpec is the resolved input for rendering a unit file.

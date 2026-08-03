@@ -13,9 +13,9 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/sync"
 	"github.com/spf13/pflag"
 )
 

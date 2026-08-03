@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/update"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/update"
 )
 
 type UpdateConfig struct {

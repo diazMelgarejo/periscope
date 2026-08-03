@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
-	"github.com/latentsignal-org/periscope/internal/pathutil"
-	"github.com/latentsignal-org/periscope/internal/server"
+	"go.kenn.io/agentsview/internal/config"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/pathutil"
+	"go.kenn.io/agentsview/internal/server"
 	"github.com/spf13/cobra"
 )
 

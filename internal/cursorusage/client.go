@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const defaultBaseURL = "https://api.cursor.com"

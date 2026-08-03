@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 var projectsHTTPClient = &http.Client{Timeout: 30 * time.Second}

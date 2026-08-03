@@ -11,7 +11,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // Copilot JSONL event types.

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/service"
-	"github.com/latentsignal-org/periscope/internal/update"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/update"
 )
 
 func (s *Server) registerMetadataRoutes() {

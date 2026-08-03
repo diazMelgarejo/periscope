@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // Store wraps a PostgreSQL connection for read-only session

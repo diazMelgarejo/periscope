@@ -21,9 +21,9 @@ import (
 	"github.com/spf13/cobra"
 	kitvec "go.kenn.io/kit/vector"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/vector"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/vector"
 )
 
 // embeddingsPollInterval bounds how often the daemon build path polls

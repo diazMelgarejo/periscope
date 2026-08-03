@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/recall/extract"
-	"github.com/latentsignal-org/periscope/internal/server"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 // extractDistillation is the resolved, ready-to-run extraction setup derived

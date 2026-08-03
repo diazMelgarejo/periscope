@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 const quackAttachmentName = "agentsview_remote"

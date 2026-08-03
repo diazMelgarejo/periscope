@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 func orderedSessionIDs(sessions []db.Session) []string {

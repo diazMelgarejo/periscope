@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // Ptr returns a pointer to v.

@@ -3,7 +3,7 @@ package config
 import (
 	"fmt"
 
-	"github.com/latentsignal-org/periscope/internal/pathutil"
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 func expandDataDir(cfg *Config) error {

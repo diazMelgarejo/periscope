@@ -31,7 +31,7 @@ import (
 	"time"
 
 	"github.com/ccoveille/go-safecast/v2"
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // kiloLegacyDefaultDirs returns the platform-specific default

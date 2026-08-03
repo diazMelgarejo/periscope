@@ -3,7 +3,7 @@ package pricing
 import (
 	"context"
 
-	"github.com/latentsignal-org/periscope/internal/pricing/catalog"
+	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
 
 // ModelPricing holds per-model token pricing in cost per

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ManifestEntry describes one regular file available for remote sync.

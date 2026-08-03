@@ -14,7 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const (

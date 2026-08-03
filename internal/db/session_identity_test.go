@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestApplyParsedSessionIdentity(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/postgres"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/postgres"
 	"github.com/spf13/cobra"
 )
 

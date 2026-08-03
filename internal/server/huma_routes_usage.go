@@ -11,9 +11,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/money"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func (s *Server) registerUsageRoutes() {

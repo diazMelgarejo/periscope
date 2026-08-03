@@ -6,7 +6,7 @@
 
 ## Intent
 
-Canonical **Periscope fork identity** (`github.com/latentsignal-org/periscope`, binary
+Canonical **Periscope fork identity** (module `go.kenn.io/agentsview`, binary
 `periscope`, Layer 3 tooling) remains the merge base. Absorb the purified upstream
 replay (kenn-io modernization + #1274/#1251/#1284) additively.
 

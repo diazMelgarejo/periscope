@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // GetSessionTiming computes the per-session timing summary on the PG

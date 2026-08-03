@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latentsignal-org/periscope/internal/llm"
+	"go.kenn.io/agentsview/internal/llm"
 )
 
 type captureClient struct {

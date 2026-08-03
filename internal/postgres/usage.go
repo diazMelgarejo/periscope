@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/export"
-	"github.com/latentsignal-org/periscope/internal/money"
-	pricingpkg "github.com/latentsignal-org/periscope/internal/pricing"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"github.com/tidwall/gjson"
 )
 

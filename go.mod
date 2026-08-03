@@ -1,4 +1,4 @@
-module github.com/latentsignal-org/periscope
+module go.kenn.io/agentsview
 
 go 1.26.3
 

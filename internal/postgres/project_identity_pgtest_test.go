@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/latentsignal-org/periscope/internal/export"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 type identityRow struct {

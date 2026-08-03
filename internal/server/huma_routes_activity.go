@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/activity"
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 func (s *Server) registerActivityRoutes() {

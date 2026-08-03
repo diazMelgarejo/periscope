@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/parser"
-	"github.com/latentsignal-org/periscope/internal/remotesync"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotesync"
 )
 
 // buildTarCommand generates the remote shell script for the given

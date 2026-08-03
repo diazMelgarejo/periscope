@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/latentsignal-org/periscope/internal/secrets"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/secrets"
+	"go.kenn.io/agentsview/internal/service"
 	"github.com/spf13/cobra"
 )
 

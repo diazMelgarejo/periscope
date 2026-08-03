@@ -10,13 +10,13 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
-	"github.com/latentsignal-org/periscope/internal/parser"
-	"github.com/latentsignal-org/periscope/internal/postgres"
-	"github.com/latentsignal-org/periscope/internal/pricingrefresh"
-	syncpkg "github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/pricingrefresh"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type archiveWriteBackend interface {

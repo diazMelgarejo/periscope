@@ -10,9 +10,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/db"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type sessionSpec struct {

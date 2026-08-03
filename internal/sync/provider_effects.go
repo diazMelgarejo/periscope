@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // validateProviderOutcome rejects a provider parse outcome whose sessions,

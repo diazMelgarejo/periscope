@@ -3,7 +3,7 @@ package db
 import (
 	"testing"
 
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/money"
 	"github.com/stretchr/testify/assert"
 )
 

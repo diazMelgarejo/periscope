@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 )
 
 // These tests cover the quack serve reopen loop's pure decision logic

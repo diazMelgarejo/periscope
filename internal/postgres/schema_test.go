@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	localdb "github.com/latentsignal-org/periscope/internal/db"
+	localdb "go.kenn.io/agentsview/internal/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

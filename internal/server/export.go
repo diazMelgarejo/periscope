@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // gistResponse represents the relevant fields from GitHub's
@@ -461,7 +461,7 @@ footer a:hover { text-decoration: underline; }
 <div class="message {{.RoleClass}}{{.ExtraClass}}{{if .FocusedHidden}} focused-hidden{{end}}" data-ordinal="{{.Ordinal}}"><div class="message-header"><span class="message-role">{{.Role}}</span><span class="message-time">{{.Timestamp}}</span></div><div class="message-content">{{.ContentHTML}}</div></div>
 {{- end}}
 </div></main>
-<footer>Exported from <a href="https://github.com/latentsignal-org/periscope">periscope</a></footer>
+<footer>Exported from <a href="https://go.kenn.io/agentsview">periscope</a></footer>
 </body></html>`
 
 const insightExportTemplateStr = `<!DOCTYPE html>
@@ -624,7 +624,7 @@ footer a {
   </header>
   <article class="content">{{.ContentHTML}}</article>
 </main>
-<footer>Exported from <a href="https://github.com/latentsignal-org/periscope">periscope</a></footer>
+<footer>Exported from <a href="https://go.kenn.io/agentsview">periscope</a></footer>
 </body>
 </html>`
 

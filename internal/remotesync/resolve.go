@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func ResolveTargets(cfg config.Config) TargetSet {

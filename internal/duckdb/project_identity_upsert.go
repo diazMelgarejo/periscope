@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/export"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 const projectIdentityDeleteBatchSize = 300

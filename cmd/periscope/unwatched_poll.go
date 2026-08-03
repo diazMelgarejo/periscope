@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/server"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 var errUnwatchedPollStopped = errors.New("unwatched poll coordinator stopped")

@@ -1,6 +1,6 @@
 package server
 
-import "github.com/latentsignal-org/periscope/internal/db"
+import "go.kenn.io/agentsview/internal/db"
 
 type worktreeMappingsResponse struct {
 	Machine  string                      `json:"machine"`

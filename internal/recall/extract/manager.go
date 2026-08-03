@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	recall "github.com/latentsignal-org/periscope/internal/recall"
-	"github.com/latentsignal-org/periscope/internal/secrets"
+	"go.kenn.io/agentsview/internal/db"
+	recall "go.kenn.io/agentsview/internal/recall"
+	"go.kenn.io/agentsview/internal/secrets"
 )
 
 const (

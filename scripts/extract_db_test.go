@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	avdb "github.com/latentsignal-org/periscope/internal/db"
+	avdb "go.kenn.io/agentsview/internal/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

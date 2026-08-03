@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // messageScopeFilter adapts the model/day/hour parts of an AnalyticsFilter into

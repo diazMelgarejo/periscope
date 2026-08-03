@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // refreshWatermarkKey is the metadata-table key holding the source-defined

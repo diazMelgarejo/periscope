@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/pricingrefresh"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/pricingrefresh"
 )
 
 const periodicPricingRefreshInterval = 24 * time.Hour

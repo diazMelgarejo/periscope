@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/dbtest"
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

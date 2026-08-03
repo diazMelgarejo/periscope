@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/latentsignal-org/periscope/internal/recall"
+	"go.kenn.io/agentsview/internal/recall"
 )
 
 func TestRankFiltersByProjectAndScoresKeywordOverlap(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // fakeBuildEncoder returns a deterministic 3-dimensional encoder that never

@@ -17,13 +17,13 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/parser"
-	"github.com/latentsignal-org/periscope/internal/remotesync"
-	"github.com/latentsignal-org/periscope/internal/server"
-	"github.com/latentsignal-org/periscope/internal/ssh"
-	"github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotesync"
+	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/ssh"
+	"go.kenn.io/agentsview/internal/sync"
 )
 
 // SyncConfig holds parsed CLI options for the sync command.

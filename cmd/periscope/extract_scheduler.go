@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/recall/extract"
-	"github.com/latentsignal-org/periscope/internal/server"
-	"github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/sync"
 )
 
 // extractDebounceInterval is the quiet period the scheduler waits, after the

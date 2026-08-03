@@ -1,8 +1,8 @@
 package sync
 
 import (
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/secrets"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/secrets"
 )
 
 // computeSignalsAndSecrets computes a session's signal update and its secret

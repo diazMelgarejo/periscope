@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/postgres"
-	"github.com/latentsignal-org/periscope/internal/service"
-	"github.com/latentsignal-org/periscope/internal/update"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/update"
 )
 
 type transportMode int

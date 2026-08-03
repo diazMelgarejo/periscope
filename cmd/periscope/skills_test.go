@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/latentsignal-org/periscope/internal/skills"
+	"go.kenn.io/agentsview/internal/skills"
 )
 
 // skillHeaderFormat mirrors the private header format in internal/skills so

@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/latentsignal-org/periscope/internal/recall/extract"
-	"github.com/latentsignal-org/periscope/internal/server"
+	"go.kenn.io/agentsview/internal/recall/extract"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 // fakePassManager records every TryPass call and returns scripted

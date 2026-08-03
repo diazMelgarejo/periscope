@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/latentsignal-org/periscope/internal/dbtest"
-	agentsync "github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/dbtest"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 type pricingCatalogTransport struct {

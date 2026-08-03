@@ -9,8 +9,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/parser"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/service"
 	"github.com/spf13/cobra"
 )
 

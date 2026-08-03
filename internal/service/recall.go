@@ -7,8 +7,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	corerecall "github.com/latentsignal-org/periscope/internal/recall"
+	"go.kenn.io/agentsview/internal/db"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 const (

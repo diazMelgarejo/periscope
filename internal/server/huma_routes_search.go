@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func (s *Server) registerSearchRoutes() {

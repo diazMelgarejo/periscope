@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/pathutil"
-	corerecall "github.com/latentsignal-org/periscope/internal/recall"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/pathutil"
+	corerecall "go.kenn.io/agentsview/internal/recall"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func newRecallCommand() *cobra.Command {

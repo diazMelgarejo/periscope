@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/latentsignal-org/periscope/internal/vector"
+	"go.kenn.io/agentsview/internal/vector"
 )
 
 // activateCall records one Activate or Retire invocation on

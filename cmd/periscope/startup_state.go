@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // startupStateFileName is the data-dir file holding the starting

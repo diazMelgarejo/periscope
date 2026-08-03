@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/latentsignal-org/periscope/internal/vector"
+	"go.kenn.io/agentsview/internal/vector"
 )
 
 // EmbeddingsManager is the subset of *vector.Manager's API the embeddings

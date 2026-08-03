@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/kit/daemon"
 )
 
