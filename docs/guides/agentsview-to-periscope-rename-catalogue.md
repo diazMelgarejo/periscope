@@ -64,7 +64,7 @@ Apply these on **`merged`** (and PR branches targeting `merged`), not on the
 | --- | --- | --- |
 | `cmd/agentsview/` | `cmd/periscope/` | Done on merged |
 | binary `agentsview` | `periscope` | Makefile, CI, installers |
-| module `github.com/wesm/agentsview` | `go.kenn.io/agentsview` (unchanged from upstream) | Reverted 2026-08-03 — a Cursor Cloud Agent inferred this rename beyond its authorized scope (only `cmd/agentsview/` → `cmd/periscope/` was authorized); module identity always tracks upstream, never forks |
+| module `github.com/wesm/agentsview` | `go.kenn.io/agentsview` (unchanged from upstream) | Reverted 2026-08-03; see note below |
 | `AGENTSVIEW_DATA_DIR` | `PERISCOPE_DATA_DIR` | Keep legacy read in `config.go` |
 | `AGENT_VIEWER_DATA_DIR` | `PERISCOPE_DATA_DIR` | Legacy alias still supported |
 | `AGENTSVIEW_VERSION` | `PERISCOPE_VERSION` | `prepare-sidecar.sh` uses PERISCOPE_* |
@@ -75,6 +75,10 @@ Apply these on **`merged`** (and PR branches targeting `merged`), not on the
 | User-Agent `agentsview` | `periscope` | `internal/server/export.go` |
 | UI title `AgentsView` | `Periscope` | `internal/web/fallback/index.html`, docs |
 | PG schema default (product) | `periscope` | CLI default; many pg tests still say `agentsview` |
+
+**Module path note (2026-08-03):** a Cursor Cloud Agent inferred the module
+rename beyond its authorized scope — only `cmd/agentsview/` → `cmd/periscope/`
+was authorized. Module identity always tracks upstream and is never forked.
 
 ## Category index (844 files)
 
