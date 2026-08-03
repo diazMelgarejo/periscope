@@ -1138,7 +1138,7 @@ func buildTimelineTurns(
 	rows []contextRowCalc, msgs []db.Message,
 ) []contextTimelineTurn {
 	if len(rows) == 0 || len(rows) != len(msgs) {
-		return nil
+		return []contextTimelineTurn{}
 	}
 
 	type turnBuilder struct {
