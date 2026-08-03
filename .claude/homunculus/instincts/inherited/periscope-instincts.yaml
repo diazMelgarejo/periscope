@@ -1,0 +1,338 @@
+# Instincts generated from https://github.com/diazMelgarejo/periscope
+# Generated: 2026-08-03T11:50:00.182Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: periscope-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: revert, fix, docs
+
+## Evidence
+
+- 3 commits analyzed
+- Detected conventional commit pattern
+- Examples: revert(identity): undo unauthorized module-path rename to latentsignal-org/periscope, fix(watch): localArchiveWriteBackend.DuckDBPushWatch skipped localSync
+
+---
+id: periscope-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Commit Length
+
+## Action
+
+Write moderate-length commit messages (~74 characters)
+
+## Evidence
+
+- Average commit message length: 74 chars
+- Based on 3 commits
+
+---
+id: periscope-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Naming Files
+
+## Action
+
+Use snake_case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: snake_case
+
+---
+id: periscope-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: periscope-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: periscope-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/diazMelgarejo/periscope
+---
+
+# Periscope Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: periscope-instinct-file-naming
+trigger: "When creating a new file"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct File Naming
+
+## Action
+
+Name the file using snake_case
+
+## Evidence
+
+- Pattern in namingConventions.files: snake_case
+
+---
+id: periscope-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Function Naming
+
+## Action
+
+Use camelCase for the function name
+
+## Evidence
+
+- Pattern in namingConventions.functions: camelCase
+
+---
+id: periscope-instinct-class-naming
+trigger: "When defining a new class or struct"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Class Naming
+
+## Action
+
+Use PascalCase for the class or struct name
+
+## Evidence
+
+- Pattern in namingConventions.classes: PascalCase
+
+---
+id: periscope-instinct-constant-naming
+trigger: "When declaring a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Constant Naming
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for the constant name
+
+## Evidence
+
+- Pattern in namingConventions.constants: SCREAMING_SNAKE_CASE
+
+---
+id: periscope-instinct-import-style
+trigger: "When importing modules in Go files"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Import Style
+
+## Action
+
+Use relative import paths
+
+## Evidence
+
+- Pattern in importStyle: relative
+
+---
+id: periscope-instinct-export-style
+trigger: "When exporting functions or types"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in exportStyle: named
+
+---
+id: periscope-instinct-commit-format
+trigger: "When writing a git commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Commit Format
+
+## Action
+
+Use conventional commit prefixes such as 'fix', 'docs', or 'revert' followed by (scope): message
+
+## Evidence
+
+- Seen in commit: fix(watch): localArchiveWriteBackend.DuckDBPushWatch skipped localSync
+- Seen in commit: docs(rename-catalogue): move long module-path note out of table cell
+- Pattern in commits.prefixes
+
+---
+id: periscope-instinct-commit-length
+trigger: "When writing a git commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Commit Length
+
+## Action
+
+Keep the commit message concise, around 74 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength: 74
+
+---
+id: periscope-instinct-test-location
+trigger: "When adding or updating tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Test Location
+
+## Action
+
+Place test files in a separate test location, not mixed with source files
+
+## Evidence
+
+- Pattern in architecture.testLocation: separate
+
+---
+id: periscope-instinct-folder-structure
+trigger: "When creating new modules or commands"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Folder Structure
+
+## Action
+
+Organize code under 'internal' for private packages and 'cmd' for entry points
+
+## Evidence
+
+- Pattern in architecture.commonFolders: internal, cmd
+
+---
+id: periscope-instinct-entry-point
+trigger: "When adding a new application entry point"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: diazMelgarejo/periscope
+---
+
+# Periscope Instinct Entry Point
+
+## Action
+
+Place the entry point in the 'cmd' directory as a separate folder with a main.go file
+
+## Evidence
+
+- Pattern in architecture.entryPoints: cmd/periscope/main.go, cmd/testfixture/main.go
+
