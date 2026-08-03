@@ -1146,7 +1146,7 @@ func buildTimelineTurns(
 		categoryTotals map[string]int
 	}
 
-	var turns []contextTimelineTurn
+	turns := make([]contextTimelineTurn, 0)
 	var current *turnBuilder
 
 	flush := func() {
