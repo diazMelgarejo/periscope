@@ -18,9 +18,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	corerecall "github.com/latentsignal-org/periscope/internal/recall"
-	"github.com/latentsignal-org/periscope/internal/service"
+	"go.kenn.io/agentsview/internal/db"
+	corerecall "go.kenn.io/agentsview/internal/recall"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestRecallCWDFlagExpandsHome(t *testing.T) {

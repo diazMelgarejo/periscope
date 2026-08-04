@@ -15,12 +15,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/dbtest"
-	"github.com/latentsignal-org/periscope/internal/server"
-	"github.com/latentsignal-org/periscope/internal/service"
-	"github.com/latentsignal-org/periscope/internal/sessionwatch"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/sessionwatch"
 )
 
 // httpBackendEnv is a running in-memory HTTP test server backed by a

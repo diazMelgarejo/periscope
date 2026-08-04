@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db/git"
-	"github.com/latentsignal-org/periscope/internal/export"
-	"github.com/latentsignal-org/periscope/internal/money"
-	"github.com/latentsignal-org/periscope/internal/timeutil"
+	"go.kenn.io/agentsview/internal/db/git"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 // StatsFilter mirrors the service-layer StatsFilter but lives in db

@@ -7,7 +7,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
-	"github.com/latentsignal-org/periscope/internal/config"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 // OpenAPISpec returns the same Huma OpenAPI document served by /api/openapi.json

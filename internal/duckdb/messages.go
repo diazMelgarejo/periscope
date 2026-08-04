@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 func (s *Store) GetMessages(

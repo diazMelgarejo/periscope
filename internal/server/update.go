@@ -1,6 +1,6 @@
 package server
 
-import "github.com/latentsignal-org/periscope/internal/update"
+import "go.kenn.io/agentsview/internal/update"
 
 // UpdateCheckFunc is the signature for functions that check for
 // available updates. The default is update.CheckForUpdate.

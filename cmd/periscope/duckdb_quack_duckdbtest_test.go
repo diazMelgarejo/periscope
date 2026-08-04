@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	_ "github.com/duckdb/duckdb-go/v2"
-	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

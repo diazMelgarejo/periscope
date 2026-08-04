@@ -10,13 +10,13 @@ import (
 	stdsync "sync"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	duckdbsync "github.com/latentsignal-org/periscope/internal/duckdb"
-	"github.com/latentsignal-org/periscope/internal/parser"
-	"github.com/latentsignal-org/periscope/internal/postgres"
-	"github.com/latentsignal-org/periscope/internal/pricingrefresh"
-	syncpkg "github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/pricingrefresh"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type archiveWriteBackend interface {
@@ -851,13 +851,6 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 		b.watchHooks,
 		"duckdb watch", debounce, interval,
 		func(c context.Context, r pushReason) error {
-			if b.watchHooks != nil && b.watchHooks.duckDBPush != nil {
-				res, err := b.watchHooks.duckDBPush(c, r, false)
-				if err != nil {
-					return err
-				}
-				return completeDuckDBWatchPush(res, r)
-			}
 			return pusher.push(c, r, false)
 		},
 	)
@@ -894,18 +887,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	}
 	initialErr := startupErr
 	if initialErr == nil {
-		if b.watchHooks != nil && b.watchHooks.duckDBPush != nil {
-			res, err := b.watchHooks.duckDBPush(
-				ctx, reasonStartup, cfg.Full || didResync,
-			)
-			if err != nil {
-				initialErr = err
-			} else {
-				initialErr = completeDuckDBWatchPush(res, reasonStartup)
-			}
-		} else {
-			initialErr = pusher.push(ctx, reasonStartup, cfg.Full || didResync)
-		}
+		initialErr = pusher.push(ctx, reasonStartup, cfg.Full || didResync)
 	}
 	if initialErr != nil {
 		if errors.Is(initialErr, context.Canceled) && ctx.Err() != nil {

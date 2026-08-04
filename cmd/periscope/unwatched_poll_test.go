@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/dbtest"
-	"github.com/latentsignal-org/periscope/internal/parser"
-	agentsync "github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 type recordingUnwatchedPollSyncer struct {

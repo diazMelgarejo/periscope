@@ -11,9 +11,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/postgres"
-	"github.com/latentsignal-org/periscope/internal/vector"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/vector"
 )
 
 // vectorPushSource adapts a read-only vector.Index to

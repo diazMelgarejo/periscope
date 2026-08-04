@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/config"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 type daemonPushRequest struct {

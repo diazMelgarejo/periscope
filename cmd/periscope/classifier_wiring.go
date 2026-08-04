@@ -3,8 +3,8 @@
 package main
 
 import (
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // applyClassifierConfig installs user-defined classifier

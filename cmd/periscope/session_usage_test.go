@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

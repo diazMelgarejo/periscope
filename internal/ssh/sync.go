@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/remotesync"
-	"github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/remotesync"
+	"go.kenn.io/agentsview/internal/sync"
 )
 
 // SyncStats summarizes the outcome of a remote sync run.

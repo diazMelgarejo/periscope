@@ -6,13 +6,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/activity"
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/parser"
-	"github.com/latentsignal-org/periscope/internal/pricing"
-	"github.com/latentsignal-org/periscope/internal/pricingrefresh"
-	"github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/pricingrefresh"
+	"go.kenn.io/agentsview/internal/sync"
 )
 
 type archiveQueryReadOnlyDaemonPolicy int

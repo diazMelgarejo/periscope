@@ -4,8 +4,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/signals"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 // computeSignalsFromMessages produces a SessionSignalUpdate from

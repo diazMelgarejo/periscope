@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // CursorUsageEvent stores authoritative Cursor admin usage data.

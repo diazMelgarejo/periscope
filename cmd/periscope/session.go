@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/service"
-	"github.com/latentsignal-org/periscope/internal/timeutil"
-	"github.com/latentsignal-org/periscope/internal/pathutil"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/timeutil"
+	"go.kenn.io/agentsview/internal/pathutil"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )

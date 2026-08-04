@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/latentsignal-org/periscope/internal/config"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 // TestHandleSearchContentInvalidParams covers the handler's request-validation

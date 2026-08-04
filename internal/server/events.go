@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 
-	"github.com/latentsignal-org/periscope/internal/sessionwatch"
+	"go.kenn.io/agentsview/internal/sessionwatch"
 )
 
 // sessionMonitor returns a channel that ticks whenever the

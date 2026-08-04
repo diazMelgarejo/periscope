@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // StubAgentDefs appends defs to the parser registry for the duration

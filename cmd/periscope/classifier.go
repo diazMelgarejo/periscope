@@ -11,9 +11,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/postgres"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/postgres"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/cobra"
 )

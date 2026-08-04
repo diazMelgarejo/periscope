@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // readOnlyUsageSpy stubs the Store interface and returns

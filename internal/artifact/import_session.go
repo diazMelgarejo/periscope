@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 type importClosureOutcome uint8

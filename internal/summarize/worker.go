@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/llm"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/llm"
 )
 
 // Store is the subset of db.Store the worker needs.

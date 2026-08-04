@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 type artifactCheckpointSequenceDB interface {

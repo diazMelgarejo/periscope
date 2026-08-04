@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 const artifactImportDrainLimit = 128

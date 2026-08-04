@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 const managedCaddyStartGrace = 300 * time.Millisecond

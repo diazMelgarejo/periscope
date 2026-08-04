@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // ModelPricing holds per-model token pricing (per million tokens).

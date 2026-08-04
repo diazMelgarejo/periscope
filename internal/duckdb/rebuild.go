@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // mirrorWorkDirSuffix is appended to the mirror path to form the mirror's

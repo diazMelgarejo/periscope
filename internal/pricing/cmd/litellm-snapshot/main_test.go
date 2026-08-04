@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/latentsignal-org/periscope/internal/pricing/catalog"
+	"go.kenn.io/agentsview/internal/pricing/catalog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

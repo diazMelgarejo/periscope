@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/server"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 type serveRuntimeOptions struct {

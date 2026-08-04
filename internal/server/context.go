@@ -12,9 +12,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/guidance"
-	"github.com/latentsignal-org/periscope/internal/signals"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/guidance"
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 // toolBlockRE strips inline tool-call markup like
@@ -1138,7 +1138,7 @@ func buildTimelineTurns(
 	rows []contextRowCalc, msgs []db.Message,
 ) []contextTimelineTurn {
 	if len(rows) == 0 || len(rows) != len(msgs) {
-		return nil
+		return []contextTimelineTurn{}
 	}
 
 	type turnBuilder struct {
@@ -1146,7 +1146,7 @@ func buildTimelineTurns(
 		categoryTotals map[string]int
 	}
 
-	var turns []contextTimelineTurn
+	turns := make([]contextTimelineTurn, 0)
 	var current *turnBuilder
 
 	flush := func() {

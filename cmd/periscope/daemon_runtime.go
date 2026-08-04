@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/server"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/server"
 	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/kit/daemon"
 )

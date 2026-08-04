@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/testjsonl"
+	"go.kenn.io/agentsview/internal/testjsonl"
 	"github.com/tidwall/gjson"
 
 	"github.com/stretchr/testify/assert"

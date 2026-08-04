@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // rooCodeHistoryItem mirrors the HistoryItem in history_item.json.

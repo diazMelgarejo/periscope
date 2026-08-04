@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // searchContentSemanticPG runs mode "semantic" on the PostgreSQL store,

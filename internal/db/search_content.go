@@ -12,7 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/latentsignal-org/periscope/internal/secrets"
+	"go.kenn.io/agentsview/internal/secrets"
 	"github.com/mattn/go-sqlite3"
 )
 

@@ -3,8 +3,8 @@ package sync
 import (
 	"testing"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/signals"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/signals"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

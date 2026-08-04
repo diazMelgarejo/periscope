@@ -10,8 +10,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/export"
-	"github.com/latentsignal-org/periscope/internal/money"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 // Params controls one range aggregation. RangeStart/RangeEnd are the resolved

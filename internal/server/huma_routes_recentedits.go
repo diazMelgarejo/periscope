@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 type recentEditsInput struct {

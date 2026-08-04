@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/shlex"
-	"github.com/latentsignal-org/periscope/internal/config"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 func (s *Server) registerConfigRoutes() {

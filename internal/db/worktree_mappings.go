@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/parser"
+	"go.kenn.io/agentsview/internal/parser"
 	"github.com/mattn/go-sqlite3"
 )
 

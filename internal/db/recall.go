@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	corerecall "github.com/latentsignal-org/periscope/internal/recall"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 const (

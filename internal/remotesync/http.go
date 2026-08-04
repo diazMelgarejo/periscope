@@ -15,8 +15,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/latentsignal-org/periscope/internal/db"
-	syncpkg "github.com/latentsignal-org/periscope/internal/sync"
+	"go.kenn.io/agentsview/internal/db"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type HTTPSync struct {

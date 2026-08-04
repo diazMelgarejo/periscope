@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // PromptVersion is bumped when the summariser prompt or output schema

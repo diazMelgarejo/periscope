@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	corerecall "github.com/latentsignal-org/periscope/internal/recall"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 // Extraction generation states. A generation is one distillation

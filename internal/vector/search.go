@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 	kitvec "go.kenn.io/kit/vector"
 )
 

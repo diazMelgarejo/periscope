@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/config"
-	"github.com/latentsignal-org/periscope/internal/db"
-	"github.com/latentsignal-org/periscope/internal/importer"
-	"github.com/latentsignal-org/periscope/internal/pathutil"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/importer"
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 type ImportConfig struct {

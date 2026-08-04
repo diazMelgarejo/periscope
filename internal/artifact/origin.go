@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // EnsureOrigin returns the persisted origin ID, creating one when absent.

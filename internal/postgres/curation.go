@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/db"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // StarSession marks a session as starred in the shared PG dashboard

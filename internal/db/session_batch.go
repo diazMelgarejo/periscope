@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/latentsignal-org/periscope/internal/export"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // SessionBatchWrite is one full session rewrite for a bulk

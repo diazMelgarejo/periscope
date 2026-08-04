@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	corerecall "github.com/latentsignal-org/periscope/internal/recall"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 // defaultEvalChunkChars is the rune-window size for splitting a flattened

@@ -1,6 +1,6 @@
 package server
 
-import "github.com/latentsignal-org/periscope/internal/config"
+import "go.kenn.io/agentsview/internal/config"
 
 // settingsResponse is the JSON shape returned by GET /api/v1/settings.
 type settingsResponse struct {

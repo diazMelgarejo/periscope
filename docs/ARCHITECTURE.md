@@ -163,9 +163,9 @@ top of Layers 1+2.
 | `AGENTSVIEW_*` env vars | Read for compatibility; prefer `PERISCOPE_*` |
 | `~/.agentsview/desktop.env` | Keep — desktop shell compatibility path |
 
-The shipping integration line uses
-`github.com/latentsignal-org/periscope` and `cmd/periscope/`. The
-`agentsview` mirror keeps the upstream module and command paths unchanged.
+The shipping integration line uses the upstream module path
+`go.kenn.io/agentsview` with the renamed `cmd/periscope/` command directory.
+The Go module identity itself is never forked — only the `cmd/` binary name is.
 
 ---
 

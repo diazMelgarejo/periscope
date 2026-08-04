@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/latentsignal-org/periscope/internal/fsevents"
+	"go.kenn.io/agentsview/internal/fsevents"
 )
 
 const (
