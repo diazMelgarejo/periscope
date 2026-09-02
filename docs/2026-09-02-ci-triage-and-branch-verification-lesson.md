@@ -1,3 +1,8 @@
+---
+title: CI triage on merged — a branch-verification mistake worth keeping
+description: How four reported CI failures on periscope turned out to be stale, and the branch-verification discipline that would have caught it sooner
+---
+
 # CI triage on `merged`: investigation log and a mistake worth keeping
 
 **Context.** Four CI job links were reported as failing (a Benchmark

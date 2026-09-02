@@ -1,3 +1,8 @@
+---
+title: Upstream merge effort assessment — 2026-09-02
+description: Real conflict count and risk-tiered breakdown from an actual (aborted) merge attempt against upstream AgentsView, with a recommendation on how to structure the effort if pursued
+---
+
 # Upstream merge effort assessment — 2026-09-02
 
 **Status:** Measurement only. No conflicts were resolved in this pass.
