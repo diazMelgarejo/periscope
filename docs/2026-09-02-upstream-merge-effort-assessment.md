@@ -5,9 +5,13 @@ description: Real conflict count and risk-tiered breakdown from an actual (abort
 
 # Upstream merge effort assessment — 2026-09-02
 
-**Status:** Measurement only. No conflicts were resolved in this pass.
-**Author:** Claude Sonnet 5, per explicit request to measure (not attempt)
-a full upstream integrative merge, as a companion to
+**Status:** Measurement only. A real merge was attempted
+(`git merge --no-commit --no-ff`) for measurement purposes, then
+aborted cleanly -- no conflicts were resolved and no merge commit was
+made.
+**Author:** Claude Sonnet 5, per explicit request to actually attempt
+the merge and report real numbers instead of estimating, as a
+companion to
 [#48](https://github.com/diazMelgarejo/periscope/pull/48) (the
 docs/assets-only fix).
 
@@ -36,6 +40,10 @@ Rough breakdown by area (commit count touching each path):
 | `cmd/` + `internal/` (core app logic) | 136 |
 | `docs/` | 94 |
 | `frontend/` | 53 |
+
+Counts are non-exclusive: a commit touching more than one of these
+paths is counted once per row, so the rows sum to more (283) than the
+182-commit total above -- this is expected, not an error.
 
 ## Genuinely new subsystems upstream added
 

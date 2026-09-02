@@ -27,11 +27,13 @@ None of the four represented a currently-broken state on `merged`.
 
 `7d53c0c8` is a commit on `main`, not `merged` -- confirmed only after
 first cloning the repo (which defaults to `main`) and building several
-fixes against it without checking. `git merge-base --is-ancestor
-7d53c0c8 origin/merged` later confirmed `main` was **695 commits
-behind** `merged` at the time. The two branches hadn't diverged
-(`7d53c0c8` genuinely is an ancestor of `merged`), but `merged` had
-moved forward independently and already carried fixes for the same
+fixes against it without checking. Two separate commands established
+this, not one: `git merge-base --is-ancestor 7d53c0c8 origin/merged`
+(a boolean check -- exit code 0 confirmed `7d53c0c8` genuinely is an
+ancestor of `merged`, not diverged from it), then separately
+`git log --oneline 7d53c0c8..origin/merged | wc -l`, which returned
+**695**, the actual source of the commit-count figure below. `merged`
+had moved forward independently and already carried fixes for the same
 issues, in a substantially reshaped `internal/db/sessions.go` (1787
 lines on the stale snapshot vs. 4216 lines on the real `merged` tip).
 
