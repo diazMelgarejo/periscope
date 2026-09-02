@@ -14,7 +14,12 @@ in the header navigation bar. Insights, Pinned, and Trash all
 live under the **More** dropdown as of 0.21.0, which leaves
 **Sessions** and **Usage** as the top-level nav buttons.
 
-![Insights page](/assets/generated/screenshots/insights.png)
+<!--
+  Screenshot pending regeneration -- see docs/assets/hydrate-assets.sh's
+  pending_generated_assets. Restore with:
+  ![Insights page](/assets/generated/screenshots/insights.png)
+  once docs/screenshots/run.sh --push has republished it.
+-->
 
 ## Insight Types
 
@@ -102,7 +107,12 @@ panel displays:
 - **Rendered markdown** — the full insight content with
   headings, lists, code blocks, tables, and blockquotes
 
-![Insight content](/assets/generated/screenshots/insight-content.png)
+<!--
+  Screenshot pending regeneration -- see docs/assets/hydrate-assets.sh's
+  pending_generated_assets. Restore with:
+  ![Insight content](/assets/generated/screenshots/insight-content.png)
+  once docs/screenshots/run.sh --push has republished it.
+-->
 
 ## Managing Insights
 
