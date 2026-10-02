@@ -72,6 +72,17 @@ func TestGrokProviderGoldenCurrentTranscriptSemantics(t *testing.T) {
 	assert.Equal(t, "also keep interjections", result.Messages[4].Content)
 }
 
+func TestGrokProjectAndCwdUsesRecordedRootNotLocalGit(t *testing.T) {
+	project, cwd := grokProjectAndCwd(grokSummaryFields{
+		Cwd:                "/workspace/grok-worktrees/parser-audit",
+		SourceWorkspaceDir: "/workspace/agentsview",
+		GitRootDir:         "/workspace/agentsview",
+		HeadBranch:         "feature/parser-audit",
+	}, "")
+	assert.Equal(t, "/workspace/grok-worktrees/parser-audit", cwd)
+	assert.Equal(t, "agentsview", project)
+}
+
 func TestGrokProviderGoldenCurrentMetadata(t *testing.T) {
 	result := parseGrokGolden(t, "current")
 	session := result.Session
