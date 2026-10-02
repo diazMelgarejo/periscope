@@ -459,9 +459,15 @@ func (b *fsnotifyBackend) forgetRemovedSubtree(path string) (bool, []string) {
 	slices.Sort(removed)
 	for _, watched := range removed {
 		delete(b.watchOwners, watched)
-		// A remove or rename event means fsnotify has already invalidated the
-		// native watch. Calling Remove again from the event loop can block on
-		// Windows and prevents Stop from joining that loop.
+		// Drop the native watch even when the kernel already delivered the
+		// removal. Child watches and synthetic events stay in WatchList until
+		// Remove runs; ErrNonExistentWatch means the watch is already gone.
+		if err := b.watchOps.Remove(watched); err != nil &&
+			!errors.Is(err, fsnotify.ErrNonExistentWatch) {
+			b.reportError(fmt.Errorf(
+				"remove invalidated native watch %q: %w", watched, err,
+			))
+		}
 		b.reclaimWatchBudgetLocked(watched)
 	}
 	roots := make([]string, 0, len(lostRoots))
