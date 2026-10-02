@@ -861,12 +861,21 @@ func grokProjectAndCwd(
 		strings.TrimSpace(summary.Cwd),
 		strings.TrimSpace(summary.GitRootDir),
 	)
-	projectCwd := firstNonEmptyJSONLString(
+	// Prefer the vendor-recorded repo path. ExtractProjectFromCwd walks
+	// live local git metadata, so a recorded path such as
+	// /workspace/agentsview is misattributed when the importer itself
+	// is checked out at /workspace (cloud agents, some CI images).
+	recordedRoot := firstNonEmptyJSONLString(
 		strings.TrimSpace(summary.SourceWorkspaceDir),
-		cwd,
+		strings.TrimSpace(summary.GitRootDir),
 	)
-	if projectCwd != "" {
-		if p := ExtractProjectFromCwdWithBranch(projectCwd, summary.HeadBranch); p != "" {
+	if recordedRoot != "" {
+		if p := grokProjectFromRecordedPath(recordedRoot, summary.HeadBranch); p != "" {
+			return p, cwd
+		}
+	}
+	if cwd != "" {
+		if p := ExtractProjectFromCwdWithBranch(cwd, summary.HeadBranch); p != "" {
 			return p, cwd
 		}
 	}
@@ -890,6 +899,25 @@ func grokProjectAndCwd(
 		}
 	}
 	return "", cwd
+}
+
+func grokProjectFromRecordedPath(path, gitBranch string) string {
+	cleaned := filepath.Clean(path)
+	if p := projectFromAnchoredWorktreeLayout(cleaned); p != "" {
+		return NormalizeName(p)
+	}
+	if p := projectFromWorktreeLayout(cleaned); p != "" {
+		return NormalizeName(p)
+	}
+	name := filepath.Base(cleaned)
+	if isInvalidPathBase(name) {
+		return ""
+	}
+	name = trimBranchSuffix(name, gitBranch)
+	if isInvalidPathBase(name) {
+		return ""
+	}
+	return NormalizeName(name)
 }
 
 func parseGrokSignals(path string) (grokSignalMetrics, error) {
