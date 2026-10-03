@@ -459,6 +459,9 @@ func (b *fsnotifyBackend) forgetRemovedSubtree(path string) (bool, []string) {
 	slices.Sort(removed)
 	for _, watched := range removed {
 		delete(b.watchOwners, watched)
+		// Drop the native watch even when the kernel already delivered the
+		// removal. Child watches and synthetic events stay in WatchList until
+		// Remove runs; ErrNonExistentWatch means the watch is already gone.
 		if err := b.watchOps.Remove(watched); err != nil &&
 			!errors.Is(err, fsnotify.ErrNonExistentWatch) {
 			b.reportError(fmt.Errorf(

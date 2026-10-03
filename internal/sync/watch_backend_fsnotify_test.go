@@ -170,6 +170,20 @@ type blockingRemoveWatchOps struct {
 	addOnce       sync.Once
 }
 
+type countingRemoveWatchOps struct {
+	watcher     *fsnotify.Watcher
+	removeCalls int
+}
+
+func (w *countingRemoveWatchOps) Add(path string) error {
+	return w.watcher.Add(path)
+}
+
+func (w *countingRemoveWatchOps) Remove(string) error {
+	w.removeCalls++
+	return fsnotify.ErrNonExistentWatch
+}
+
 type failPathWatchOps struct {
 	watcher  *fsnotify.Watcher
 	failPath string
@@ -247,6 +261,44 @@ func TestFSNotifyBackendRuntimeDirectoryChurnReclaimsWatchBudget(t *testing.T) {
 	}
 }
 
+func TestFSNotifyBackendRemovalEventRemovesInvalidatedNativeWatch(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	root := t.TempDir()
+	removed := filepath.Join(root, "removed")
+	require.NoError(t, os.Mkdir(removed, 0o755))
+
+	result := backend.AddRecursive(root, 2)
+	require.NoError(t, result.Err)
+	require.Equal(t, 2, result.Watched)
+
+	ops := &countingRemoveWatchOps{watcher: backend.watcher}
+	backend.watchOps = ops
+
+	event, relevant := backend.translateEvent(fsnotify.Event{
+		Name: removed,
+		Op:   fsnotify.Remove,
+	})
+	require.True(t, relevant)
+	assert.Equal(t, backendItemDirectory, event.ItemType)
+	assert.Equal(t, 1, ops.removeCalls,
+		"the removed directory's native watch must be dropped")
+	select {
+	case err := <-backend.errors:
+		t.Fatalf("ErrNonExistentWatch from Remove must not be reported: %v", err)
+	default:
+	}
+
+	backend.watchMu.Lock()
+	_, retained := backend.watchOwners[removed]
+	_, rootRetained := backend.watchOwners[root]
+	budget := backend.runtimeBudget
+	backend.watchMu.Unlock()
+	assert.False(t, retained, "removed directory ownership must be pruned")
+	assert.True(t, rootRetained, "the surviving root watch must stay owned")
+	assert.Equal(t, 1, budget,
+		"removed runtime watch must return its budget slot")
+}
+
 func TestFSNotifyBackendRootLossTransfersExactScopeToPolling(t *testing.T) {
 	backend := testFSNotifyBackend(t)
 	root := t.TempDir()
@@ -290,7 +342,12 @@ func TestFSNotifyBackendRootLossTransfersExactScopeToPolling(t *testing.T) {
 	obligation := requireReceiveWithin(t, polling, time.Second)
 	assert.Equal(t, "fsnotify-runtime:"+root, obligation.Key)
 	assert.Equal(t, []string{syncDir}, obligation.Roots)
-	assert.Empty(t, backend.watcher.WatchList())
+	backend.watchMu.Lock()
+	assert.Empty(t, backend.watchOwners,
+		"removed paths must drop native ownership even when fsnotify keeps invalidated descriptors")
+	_, degraded := backend.degradedRoots[root]
+	backend.watchMu.Unlock()
+	assert.True(t, degraded, "configured root must transfer to runtime polling")
 }
 
 func waitForBackendEvent(
