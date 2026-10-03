@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"sync"
 	"syscall"
 	"testing"
@@ -344,7 +345,9 @@ func TestFSNotifyBackendRemovalEventReportsRemoveFailureAndStillPrunes(t *testin
 	select {
 	case err := <-backend.errors:
 		assert.ErrorIs(t, err, removeErr)
-		assert.ErrorContains(t, err, removed)
+		// forgetRemovedSubtree formats the path with %q, which escapes
+		// Windows separators. Match that quoted form.
+		assert.ErrorContains(t, err, strconv.Quote(removed))
 	default:
 		t.Fatal("a Remove error other than ErrNonExistentWatch must be reported")
 	}
