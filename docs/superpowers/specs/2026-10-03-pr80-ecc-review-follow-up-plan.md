@@ -126,9 +126,9 @@ repository.
 - **Harness compatibility — already satisfied.** The harness audit of
   `bench-pr.yml` found no harness issue. Claude and Codex adapters
   already live in the tree and are not part of this diff.
-- **Security evidence packs — already satisfied.** The enforce-mode gate
-  found no scanner gap. The focused regression is the caller contract
-  test, not an SBOM for an unchanged `go.mod`.
+- **Security evidence — already satisfied.** `.claude/ecc-tools.json`
+  marks `security-evidence` present and names `SECURITY.md` as its
+  evidence. The enforce-mode scanner result is a separate finding.
 - **CI failure-mode evidence — fix.** Covered by the performance-gates
   paragraph and the caller contract test. Decoy fixture filenames were
   not added to chase an unread heuristic.
