@@ -72,13 +72,13 @@ func readRepoFile(t *testing.T, root, rel string) string {
 
 func workflowUses(t *testing.T, body string) string {
 	t.Helper()
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "uses:") {
-			return strings.TrimSpace(strings.TrimPrefix(trimmed, "uses:"))
+		if after, ok := strings.CutPrefix(trimmed, "uses:"); ok {
+			return strings.TrimSpace(after)
 		}
 	}
 	t.Fatal("workflow has no uses: line")
@@ -87,7 +87,7 @@ func workflowUses(t *testing.T, body string) string {
 
 func workflowPermissions(t *testing.T, body string) string {
 	t.Helper()
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
 			continue
