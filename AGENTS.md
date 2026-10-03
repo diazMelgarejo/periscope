@@ -357,18 +357,18 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 
 ## Cursor Cloud specific instructions
 
-- Build and test through `make`. `make build`, `make test`, `make test-short`,
-  `make vet`, and `make dev` restore the pricing snapshot, stage
-  `.sqlite-include/sqlite3.h`, and set `CGO_CFLAGS` so sqlite-vec compiles.
-  Plain `go test` and `go build` need `CGO_ENABLED=1`, `-tags fts5`, and that
-  include path. The environment install exports those flags for login shells.
-- The frontend pins npm 12. That npm refuses git dependencies unless
-  `allow-git=root` is set. `@kenn-io/kit-ui` is a public git dependency, so
-  the environment install sets `allow-git=root` in the user npm config before
-  `npm ci`. `make frontend` and `make build` then install successfully.
-- Node must satisfy the frontend `engines` range (24.11 or newer). An older
-  `node` may appear earlier on `PATH` than `/usr/local/bin`. The environment
-  install puts Node 24.21.0 and npm 12.0.1 first on `PATH`.
+- The environment install only prepares dependencies. It installs compilers,
+  `pkg-config`, and `libsqlite3-dev`, puts Node 24.21.0 and npm 12.0.1 on
+  `PATH` through `~/.local/bin` (ahead of any older `node`), and installs
+  golangci-lint v2.11.4.
+- npm 12 does not fetch git dependencies unless `allow-git=root` is set. The
+  install sets that in the user npm config so `npm ci` can fetch the public
+  `@kenn-io/kit-ui` dependency. `make frontend` and `make build` rely on it.
+- When `make sqlite-vec-header` and `make pricing-snapshot` exist, the install
+  runs them and exports `CGO_CFLAGS` for that bundled SQLite header. `make
+  build`, `make test`, `make test-short`, `make vet`, and `make dev` set the
+  same flags. Plain `go test` and `go build` need `CGO_ENABLED=1` and
+  `-tags fts5`.
 - The development binary is `./periscope`. For a UI check, seed a scratch
   database with `cmd/testfixture` and run
   `PERISCOPE_DATA_DIR=<scratch> ./periscope serve --host 127.0.0.1 --port 8080
