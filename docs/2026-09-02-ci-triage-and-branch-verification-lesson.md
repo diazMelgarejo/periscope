@@ -17,37 +17,26 @@ the fix, is the reusable lesson for next time.
 | Job | Commit tested | Age | Status on `merged` today |
 | --- | --- | --- | --- |
 | Benchmark Gate | `a158f3f9` | 2026-07-30 (a month old) | The failing file (`internal/pricing/supplemental.go`) no longer exists in this form |
-| coverage | `7d53c0c8` (run `head_branch`: `main`) | current at capture time | Bug already independently fixed by the time `merged` reached its current tip |
-| lint | `7d53c0c8` (run `head_branch`: `main`) | current at capture time | Already clean on `merged`'s current tip |
-| integration | `7d53c0c8` (run `head_branch`: `main`) | current at capture time | Same root cause as coverage; already fixed |
+| coverage | `7d53c0c8` (run on `main`) | current at capture time | Bug already independently fixed by the time `merged` reached its current tip |
+| lint | `7d53c0c8` (run on `main`) | current at capture time | Already clean on `merged`'s current tip |
+| integration | `7d53c0c8` (run on `main`) | current at capture time | Same root cause as coverage; already fixed |
 
 None of the four represented a currently-broken state on `merged`.
 
 ## A real mistake, and how it was caught
 
-The coverage, lint, and integration rows are one Actions run,
+The coverage, lint, and integration jobs are Actions run
 [33597403060](https://github.com/diazMelgarejo/periscope/actions/runs/33597403060)
-(workflow `CI`, event `push`, created `2026-09-02T06:06:08Z`). The run
-record's `head_branch` is `main` and its `head_sha` is `7d53c0c8`.
-Read that branch from the run record. Commit reachability is a
-separate check, made with `git merge-base --is-ancestor`.
-
-`7d53c0c8` is the tip of `origin/main` (merge of pull request #45,
-committer `2026-09-02T06:06:05Z`). A fresh clone defaults to `main`,
-and several fixes were built against that commit before the run
-record was checked. The commit is absent from `merged` history.
-`git merge-base --is-ancestor 7d53c0c8 d64726e9` exits 1. `d64726e9`
-is the `merged` tip named later in this doc. The same command against
-`origin/merged` at `ea823133` (re-checked 2026-10-03) also exits 1.
-Both pairs diverge at `852b8e38`. `git log --oneline
-7d53c0c8..d64726e9 | wc -l` still returns **695**: `A..B` counts
-commits reachable from B excluding commits reachable from A. That
-number is the size of the range against the pinned tip `d64726e9`.
-Re-running it against a later `origin/merged` prints a different
-count (741 against `ea823133` on 2026-10-03) and still says nothing
-about ancestry. `merged` at `d64726e9` had already carried fixes for
-the same issues, in a substantially reshaped `internal/db/sessions.go`
-(`wc -l`: 1786 lines at `7d53c0c8`, 4215 lines at `d64726e9`).
+(`head_branch` `main`, `head_sha` `7d53c0c8`). A fresh clone defaults
+to `main`, and several fixes were built against that commit before
+the run record was checked. Reachability is separate:
+`git merge-base --is-ancestor 7d53c0c8 d64726e9` exits 1, so the
+commit is not in the `merged` tip named below. `git log --oneline
+7d53c0c8..d64726e9 | wc -l` returns **695**; that is the size of the
+range against that pinned tip, not an ancestry result. `merged` had
+already carried fixes for the same issues, in a substantially
+reshaped `internal/db/sessions.go` (`wc -l`: 1786 lines at
+`7d53c0c8`, 4215 at `d64726e9`).
 
 Re-verified against the actual, current `merged` tip once this was
 caught:
@@ -73,14 +62,11 @@ caught:
 Before touching any code in response to a reported CI failure here,
 confirm three things explicitly, not just "does the file exist":
 
-1. **Which branch the failing run targeted.** Read `head_branch` from
-   the Actions run
-   (`GET /repos/{owner}/{repo}/actions/runs/{run_id}`). Then, as a
-   separate check, ask whether that commit is in `merged` history
-   with `git merge-base --is-ancestor <sha> origin/merged` (exit 0
-   means it is). `git log <sha>..origin/merged` is only a range size;
-   pin the `merged` tip you counted. On this incident `head_branch`
-   was `main`, and `7d53c0c8` is outside `origin/merged` history.
+1. **Which branch the failing run targeted.** Read `head_branch` on
+   the Actions run. Check reachability separately with
+   `git merge-base --is-ancestor <sha> origin/merged`.
+   `git log <sha>..origin/merged` only counts a range; pin the tip
+   you counted.
 2. **How old is the run** -- a job link from weeks or months ago may be
    testing code that's since been substantially reshaped or already
    fixed by unrelated work.
