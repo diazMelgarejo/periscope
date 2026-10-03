@@ -360,11 +360,12 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 - The environment install only prepares dependencies. It installs compilers,
   `pkg-config`, and `libsqlite3-dev`, puts Node 24.21.0 on `PATH` through
   `~/.local/bin` (ahead of any older `node`), and installs golangci-lint
-  v2.11.4. Use the npm shipped with that Node. Do not install npm 12: Node
-  will not bundle it until Node 27, because npm 12 blocks install scripts and
-  git dependencies unless each one is opted in. `npm ci` with the bundled npm
-  still fetches the public `@kenn-io/kit-ui` git dependency, which `make
-  frontend` and `make build` need.
+  v2.11.4. The frontend pins npm 11.21.0, the latest npm 11 release. Node
+  24.21.0 bundles 11.19.0, so the install updates npm to 11.21.0 and stops
+  there. Do not install npm 12: Node will not bundle it until Node 27,
+  because npm 12 blocks install scripts and git dependencies unless each one
+  is opted in. `npm ci` on npm 11 still fetches the public `@kenn-io/kit-ui`
+  git dependency, which `make frontend` and `make build` need.
 - When `make sqlite-vec-header` and `make pricing-snapshot` exist, the install
   runs them and exports `CGO_CFLAGS` for that bundled SQLite header. `make
   build`, `make test`, `make test-short`, `make vet`, and `make dev` set the
