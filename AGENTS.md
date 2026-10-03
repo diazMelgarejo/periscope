@@ -355,6 +355,28 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 - Describe what the code does now, why it changed, tradeoffs, limitations, and
   where reviewers should look.
 
+## Cursor Cloud specific instructions
+
+- Build and test through `make`. `make build`, `make test`, `make test-short`,
+  `make vet`, and `make dev` restore the pricing snapshot, stage
+  `.sqlite-include/sqlite3.h`, and set `CGO_CFLAGS` so sqlite-vec compiles.
+  Plain `go test` and `go build` need `CGO_ENABLED=1`, `-tags fts5`, and that
+  include path. The environment install exports those flags for login shells.
+- The frontend pins npm 12. That npm refuses git dependencies unless
+  `allow-git=root` is set. `@kenn-io/kit-ui` is a public git dependency, so
+  the environment install sets `allow-git=root` in the user npm config before
+  `npm ci`. `make frontend` and `make build` then install successfully.
+- Node must satisfy the frontend `engines` range (24.11 or newer). An older
+  `node` may appear earlier on `PATH` than `/usr/local/bin`. The environment
+  install puts Node 24.21.0 and npm 12.0.1 first on `PATH`.
+- The development binary is `./periscope`. For a UI check, seed a scratch
+  database with `cmd/testfixture` and run
+  `PERISCOPE_DATA_DIR=<scratch> ./periscope serve --host 127.0.0.1 --port 8080
+  --no-browser --no-sync`. When the browser origin is not loopback, pass
+  `--public-url` set to that origin.
+- PostgreSQL integration tests and the desktop app are optional. Core
+  development does not need Docker.
+
 ## Cursor Cloud: git commits
 
 periscope is **excluded** from orama attribution-guard scripts (`commit-clean.sh`,
