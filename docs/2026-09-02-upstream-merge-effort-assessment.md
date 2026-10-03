@@ -20,17 +20,30 @@ docs/assets-only fix).
 The most recent upstream integrative merge on record is
 [#39](https://github.com/diazMelgarejo/periscope/pull/39) ("Reconcile
 periscope onto current AgentsView upstream (third integrative merge)"),
-merged 2026-07-30, which synced periscope to
-`kenn-io/agentsview@a421fe8d` ("fix(pricing): refresh daemon catalog
-daily (#1285)"). No upstream merge has landed on `merged` since.
+merged 2026-07-31 (UTC). The pull request record's `merged_at` is
+`2026-07-31T07:41:15Z` (merge commit `f5d92c26`, committer
+`2026-07-31T15:41:14+08:00`). That merge synced periscope to baseline
+`kenn-io/agentsview@a421fe8d11022374ac42c36f4bab1aba80ca8b15`
+("fix(pricing): refresh daemon catalog daily (#1285)", committer
+`2026-07-29T22:59:50-04:00`, which is `2026-07-30T02:59:50Z`). No
+upstream merge has landed on `merged` since.
 
-## The delta today
+## The measured delta
+
+Both measurements below used one resolved upstream commit, so they
+can be repeated after `kenn-io/agentsview` `main` moves. That commit
+is `fea56e5ac1f1b078bccaad420ab5aa5b14f03a1d` on `kenn-io/agentsview`
+("docs(site): rewrite tiered-site copy in a plainer human voice
+(#1579)", committer `2026-09-02T03:15:53Z`). It is the baseline's
+descendant by 182 commits. Committer interval:
+`2026-07-30T02:59:50Z` through `2026-09-02T03:15:53Z`.
 
 ```text
-git diff --shortstat a421fe8d kenn-io/agentsview/main
+git diff --shortstat a421fe8d11022374ac42c36f4bab1aba80ca8b15 fea56e5ac1f1b078bccaad420ab5aa5b14f03a1d
   1523 files changed, 270941 insertions(+), 31565 deletions(-)
 
-182 commits since a421fe8d (2026-07-30 -> 2026-09-01)
+git rev-list --count a421fe8d11022374ac42c36f4bab1aba80ca8b15..fea56e5ac1f1b078bccaad420ab5aa5b14f03a1d
+182
 ```
 
 Rough breakdown by area (commit count touching each path):
@@ -73,9 +86,10 @@ own state is itself mid-migration on that axis already.
 
 ## Actual merge attempt: real conflict count
 
-Ran `git merge --no-commit --no-ff kenn-io/agentsview/main` against
-`origin/merged` and captured the result, then aborted (no broken state
-was left in any branch):
+Ran `git merge --no-commit --no-ff fea56e5ac1f1b078bccaad420ab5aa5b14f03a1d`
+against `origin/merged` and captured the result, then aborted (no
+broken state was left in any branch). That SHA is the
+`kenn-io/agentsview` commit recorded in "The measured delta":
 
 **60 files in genuine content conflict** (both sides changed the same
 lines), out of 1523 upstream-touched files. Auto-merge succeeded
