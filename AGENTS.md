@@ -357,7 +357,7 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 
 ## Cursor Cloud specific instructions
 
-- The environment install only prepares dependencies. It installs compilers,
+- Dependency setup is `.cursor/cloud-agent-install.sh`. It installs compilers,
   `pkg-config`, and `libsqlite3-dev`, puts Node 24.21.0 on `PATH` through
   `~/.local/bin` (ahead of any older `node`), and installs golangci-lint
   v2.11.4. The frontend pins npm 11.21.0, the latest npm 11 release. Node
