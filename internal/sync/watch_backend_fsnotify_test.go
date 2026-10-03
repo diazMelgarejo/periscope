@@ -173,15 +173,34 @@ type blockingRemoveWatchOps struct {
 type countingRemoveWatchOps struct {
 	watcher     *fsnotify.Watcher
 	removeCalls int
+	removed     []string
 }
 
 func (w *countingRemoveWatchOps) Add(path string) error {
 	return w.watcher.Add(path)
 }
 
-func (w *countingRemoveWatchOps) Remove(string) error {
+func (w *countingRemoveWatchOps) Remove(path string) error {
 	w.removeCalls++
+	w.removed = append(w.removed, path)
 	return fsnotify.ErrNonExistentWatch
+}
+
+// failingRemoveWatchOps is a separate double from countingRemoveWatchOps:
+// a real Remove error must be reported, and the already-gone path must not.
+type failingRemoveWatchOps struct {
+	watcher *fsnotify.Watcher
+	removed []string
+	err     error
+}
+
+func (w *failingRemoveWatchOps) Add(path string) error {
+	return w.watcher.Add(path)
+}
+
+func (w *failingRemoveWatchOps) Remove(path string) error {
+	w.removed = append(w.removed, path)
+	return w.err
 }
 
 type failPathWatchOps struct {
@@ -282,6 +301,8 @@ func TestFSNotifyBackendRemovalEventRemovesInvalidatedNativeWatch(t *testing.T) 
 	assert.Equal(t, backendItemDirectory, event.ItemType)
 	assert.Equal(t, 1, ops.removeCalls,
 		"the removed directory's native watch must be dropped")
+	assert.Equal(t, []string{removed}, ops.removed,
+		"Remove must target the invalidated directory, not the surviving root")
 	select {
 	case err := <-backend.errors:
 		t.Fatalf("ErrNonExistentWatch from Remove must not be reported: %v", err)
@@ -297,6 +318,46 @@ func TestFSNotifyBackendRemovalEventRemovesInvalidatedNativeWatch(t *testing.T) 
 	assert.True(t, rootRetained, "the surviving root watch must stay owned")
 	assert.Equal(t, 1, budget,
 		"removed runtime watch must return its budget slot")
+}
+
+func TestFSNotifyBackendRemovalEventReportsRemoveFailureAndStillPrunes(t *testing.T) {
+	backend := testFSNotifyBackend(t)
+	root := t.TempDir()
+	removed := filepath.Join(root, "removed")
+	require.NoError(t, os.Mkdir(removed, 0o755))
+
+	result := backend.AddRecursive(root, 2)
+	require.NoError(t, result.Err)
+	require.Equal(t, 2, result.Watched)
+
+	removeErr := errors.New("watcher closed")
+	ops := &failingRemoveWatchOps{watcher: backend.watcher, err: removeErr}
+	backend.watchOps = ops
+
+	_, relevant := backend.translateEvent(fsnotify.Event{
+		Name: removed,
+		Op:   fsnotify.Remove,
+	})
+	require.True(t, relevant)
+	assert.Equal(t, []string{removed}, ops.removed)
+
+	select {
+	case err := <-backend.errors:
+		assert.ErrorIs(t, err, removeErr)
+		assert.ErrorContains(t, err, removed)
+	default:
+		t.Fatal("a Remove error other than ErrNonExistentWatch must be reported")
+	}
+
+	backend.watchMu.Lock()
+	_, retained := backend.watchOwners[removed]
+	_, rootRetained := backend.watchOwners[root]
+	budget := backend.runtimeBudget
+	backend.watchMu.Unlock()
+	assert.False(t, retained, "ownership must be pruned even when Remove fails")
+	assert.True(t, rootRetained, "the surviving root watch must stay owned")
+	assert.Equal(t, 1, budget,
+		"a failed Remove must still return the runtime budget slot")
 }
 
 func TestFSNotifyBackendRootLossTransfersExactScopeToPolling(t *testing.T) {
