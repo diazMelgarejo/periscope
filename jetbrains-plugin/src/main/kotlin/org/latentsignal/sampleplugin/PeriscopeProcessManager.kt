@@ -74,6 +74,9 @@ object PeriscopeProcessManager {
      */
     fun serverUrl(): String = "http://localhost:$resolvedPort/"
 
+    /** Binary names to search for, in preference order (periscope first, agentsview fallback). */
+    internal fun binaryNames(): List<String> = listOf("periscope", "agentsview")
+
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private fun launchProcess(project: Project) {
