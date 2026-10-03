@@ -74,6 +74,9 @@ object PeriscopeProcessManager {
      */
     fun serverUrl(): String = "http://localhost:$resolvedPort/"
 
+    /** Binary names to search for, in preference order (periscope first, agentsview fallback). */
+    internal fun binaryNames(): List<String> = listOf("periscope", "agentsview")
+
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private fun launchProcess(project: Project) {
@@ -141,19 +144,23 @@ object PeriscopeProcessManager {
      * Search order: PATH, ~/periscope, ~/.local/bin/periscope, /usr/local/bin/periscope.
      */
     private fun resolveBinary(): File? {
-        // Candidates in preference order
-        val name = if (System.getProperty("os.name").lowercase().contains("win")) "periscope.exe" else "periscope"
-        val homeDir = System.getProperty("user.home")
-        val candidates = listOf(
-            File(homeDir, name),
-            File(homeDir, ".local/bin/$name"),
-            File("/usr/local/bin/$name"),
-            File("/opt/homebrew/bin/$name"),
-        )
-        // Prefer PATH first
-        val fromPath = findOnPath(name)
-        if (fromPath != null) return fromPath
-        return candidates.firstOrNull { it.exists() && it.canExecute() }
+        val win = System.getProperty("os.name").lowercase().contains("win")
+        for (baseName in binaryNames()) {
+            val name = if (win) "$baseName.exe" else baseName
+            val fromPath = findOnPath(name)
+            if (fromPath != null) return fromPath
+
+            val homeDir = System.getProperty("user.home")
+            val candidates = listOf(
+                File(homeDir, name),
+                File(homeDir, ".local/bin/$name"),
+                File("/usr/local/bin/$name"),
+                File("/opt/homebrew/bin/$name"),
+            )
+            val found = candidates.firstOrNull { it.exists() && it.canExecute() }
+            if (found != null) return found
+        }
+        return null
     }
 
     private fun findOnPath(name: String): File? {
