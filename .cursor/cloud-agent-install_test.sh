@@ -4,6 +4,8 @@
 # for a non-interactive shell, checksum rejection, a pinned go install,
 # BASH_ENV restoring Node and CGO, and go env reaching the caller's go when
 # that binary is not /usr/bin/go. CGO is read back from that same binary.
+# Missing Go fails before any toolchain command. environment.json must invoke
+# this installer.
 set -euo pipefail
 
 script_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cloud-agent-install.sh"
@@ -428,6 +430,68 @@ EOF
   cleanup_root "${root}"
 }
 
+# PATH has the other stubs and not go, and it does not include /usr/bin, so
+# the runner's own Go cannot satisfy the check.
+reject_missing_go() {
+  local root status err
+  root="$(mktemp -d)"
+  new_workspace "${root}"
+  rm -f "${root}/stubs/go"
+  : > "${root}/go.log"
+  : > "${root}/curl.log"
+  err="${root}/stderr"
+  status=0
+  env -i \
+    HOME="${root}/home" \
+    PATH="${root}/stubs" \
+    PERISCOPE_CLOUD_PREFIX="${root}/prefix" \
+    TMPDIR="${root}/tmp" \
+    PERISCOPE_TEST_GO_LOG="${root}/go.log" \
+    PERISCOPE_TEST_CURL_LOG="${root}/curl.log" \
+    PERISCOPE_TEST_MAKE_LOG="${root}/make.log" \
+    /usr/bin/bash "${root}/repo/.cursor/cloud-agent-install.sh" \
+    >"${root}/stdout" 2>"${err}" || status=$?
+  if [ "${status}" -eq 0 ]; then
+    fail "installer succeeded without go"
+  fi
+  if ! grep -qx 'Go is required on PATH. This installer does not install Go.' "${err}"; then
+    fail "missing go diagnostic: $(cat "${err}")"
+  fi
+  assert_eq "$(cat "${root}/go.log")" "" "go was invoked without a go binary"
+  assert_eq "$(cat "${root}/curl.log")" "" "curl ran without a go binary"
+  if [ -e "${root}/prefix/usr/local/bin/golangci-lint" ]; then
+    fail "golangci-lint was installed without go"
+  fi
+  cleanup_root "${root}"
+}
+
+assert_environment_invokes_installer() {
+  local cursor_dir env_json install
+  cursor_dir="$(cd "$(dirname "${script_src}")" && pwd)"
+  env_json="${cursor_dir}/environment.json"
+  if [ ! -f "${env_json}" ]; then
+    fail "environment.json is missing"
+  fi
+  if ! install="$(
+    python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+if not isinstance(data, dict) or "install" not in data:
+    raise SystemExit("install key missing")
+print(data["install"])
+' "${env_json}"
+  )"; then
+    fail "environment.json is not the install contract"
+  fi
+  assert_eq "${install}" "bash .cursor/cloud-agent-install.sh" \
+    "environment.json install command"
+  if [ ! -f "${cursor_dir}/cloud-agent-install.sh" ]; then
+    fail "environment.json install target is missing"
+  fi
+}
+
+assert_environment_invokes_installer
+reject_missing_go
 reject_bad_node_tarball
 persist_when_header_exists
 skip_cgo_when_header_absent

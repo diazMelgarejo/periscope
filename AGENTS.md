@@ -357,29 +357,27 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 
 ## Cursor Cloud specific instructions
 
-- Dependency setup is `.cursor/cloud-agent-install.sh`. It installs compilers,
-  `pkg-config`, and `libsqlite3-dev`. Node 24.21.0 is unpacked under
-  `/usr/local` after its published SHA-256 matches, then linked from
-  `~/.local/bin`. The script writes `~/.config/periscope/cloud-agent-env.sh`
-  and sources that file from `~/.bashrc`, `~/.profile`, and `/etc/profile.d`.
-  The file prepends `~/.local/bin` and exports `BASH_ENV`, so a login shell and
-  a non-interactive bash started from one both resolve Node 24.21.0 ahead of
-  an older `node`. golangci-lint v2.11.4 comes from
-  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4`
-  (the module checksum database) and is copied to `/usr/local/bin`. The
-  frontend pins npm 11.21.0, the latest npm 11 release. Node 24.21.0 bundles
-  11.19.0, so the install updates npm to 11.21.0 and stops there. Do not
-  install npm 12: Node will not bundle it until Node 27, because npm 12 blocks
-  install scripts and git dependencies unless each one is opted in. `npm ci`
-  on npm 11 still fetches the public `@kenn-io/kit-ui` git dependency, which
-  `make frontend` and `make build` need.
-- The script locates the checkout from its own path. When `make
-  sqlite-vec-header` and `make pricing-snapshot` exist, it runs them. If the
-  bundled SQLite header is present, `go env -w` stores `CGO_ENABLED=1` and
-  `CGO_CFLAGS` for that header, so plain `go test` and `go build` use it even
-  when the shell does not source rc files. `make build`, `make test`, `make
-  test-short`, `make vet`, and `make dev` set the same flags. Plain `go test`
-  and `go build` still need `-tags fts5`.
+- Dependency setup is `.cursor/cloud-agent-install.sh`, run from the checkout
+  that contains it. Go must already be on `PATH`. The script does not install
+  or replace Go. It installs compilers, `pkg-config`, and `libsqlite3-dev`,
+  then makes Node 24.21.0 and npm 11.21.0 available through `~/.local/bin`.
+  Node 24.21.0 bundles npm 11.19.0. The install updates npm to 11.21.0, the
+  latest npm 11 release, and stops there. Do not install npm 12: Node will
+  not bundle it until Node 27, because npm 12 blocks install scripts and git
+  dependencies unless each one is opted in. `npm ci` on npm 11 still fetches
+  the public `@kenn-io/kit-ui` git dependency, which `make frontend` and
+  `make build` need. golangci-lint v2.11.4 comes from
+  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4`.
+- The script writes `~/.config/periscope/cloud-agent-env.sh` and sources it
+  from `~/.bashrc`, `~/.profile`, and `/etc/profile.d`. That file prepends
+  `~/.local/bin` and exports `BASH_ENV`, so a non-interactive bash started
+  from a login shell resolves the pinned Node. When `make sqlite-vec-header`
+  and `make pricing-snapshot` exist, the script runs them. If the bundled
+  SQLite header is present, `go env -w` stores `CGO_ENABLED=1` and
+  `CGO_CFLAGS` for that header, so plain `go test` and `go build` use it
+  even when the shell does not source rc files. Those commands still need
+  `-tags fts5`. `make build`, `make test`, `make test-short`, `make vet`,
+  and `make dev` set the same flags.
 - The development binary is `./periscope`. For a UI check, seed a scratch
   database with `cmd/testfixture` and run
   `PERISCOPE_DATA_DIR=<scratch> ./periscope serve --host 127.0.0.1 --port 8080

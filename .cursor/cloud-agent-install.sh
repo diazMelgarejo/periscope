@@ -2,10 +2,12 @@
 # Idempotent Cloud Agent install for periscope.
 # Dependency and toolchain setup only; no servers and no tests.
 #
-# Checkout paths come from this file's directory. Toolchain exports are written
-# for later shells: ~/.config/periscope/cloud-agent-env.sh (sourced from
-# ~/.bashrc, ~/.profile, and /etc/profile.d, and exported as BASH_ENV) and
-# `go env -w` for CGO, which the go command reads with no shell startup files.
+# Go must already be installed and available on PATH. This installer does not
+# install or replace Go. Checkout paths come from this file's directory.
+# Toolchain exports are written for later shells:
+# ~/.config/periscope/cloud-agent-env.sh (sourced from ~/.bashrc, ~/.profile,
+# and /etc/profile.d, and exported as BASH_ENV) and `go env -w` for CGO, which
+# the go command reads with no shell startup files.
 # PERISCOPE_CLOUD_PREFIX, when set, is the destination root instead of /.
 set -euo pipefail
 
@@ -17,6 +19,11 @@ GCL_VERSION=v2.11.4
 GCL_MODULE=github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
 : "${HOME:?HOME is required}"
+
+if ! command -v go >/dev/null 2>&1; then
+  echo "Go is required on PATH. This installer does not install Go." >&2
+  exit 1
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dest_root="${PERISCOPE_CLOUD_PREFIX:-}"
