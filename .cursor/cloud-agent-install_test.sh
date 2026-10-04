@@ -147,35 +147,47 @@ EOF
   chmod +x "${bin}/node" "${bin}/npm" "${bin}/npx" "${bin}/corepack"
 }
 
-# The caller's go, before run_install replaces PATH with the stubs.
-require_host_go() {
+# type -P can be a distro wrapper. Prefer the toolchain binary under the
+# GOROOT that wrapper reports, and exec that absolute path.
+resolve_host_go() {
+  local -n _go="$1"
+  local -n _root="$2"
   local found
-  found="$(command -v go || true)"
+  found="$(type -P go || true)"
   if [ -z "${found}" ]; then
     fail "go is not on PATH"
   fi
-  case "${found}" in
-    /*) ;;
-    *) fail "go on PATH is not an absolute path: ${found}" ;;
-  esac
-  if [ ! -x "${found}" ]; then
-    fail "go on PATH is not executable: ${found}"
+  _root="$("${found}" env GOROOT)"
+  if [ -z "${_root}" ]; then
+    fail "go env GOROOT was empty"
   fi
-  printf '%s\n' "${found}"
+  if [ -x "${_root}/bin/go" ]; then
+    _go="${_root}/bin/go"
+  else
+    _go="${found}"
+  fi
 }
 
-host_go="$(require_host_go)"
-host_goroot="$("${host_go}" env GOROOT)"
-host_go_dir="$(dirname "${host_go}")"
+resolve_host_go host_go host_goroot
+
+# Read CGO back from the captured toolchain binary. No PATH lookup.
+read_persisted_go_env() {
+  local home="$1"
+  local goenv="$2"
+  env -i \
+    HOME="${home}" \
+    GOENV="${goenv}" \
+    GOROOT="${host_goroot}" \
+    GOTOOLCHAIN=local \
+    bash --noprofile --norc -c \
+      '"$1" env CGO_CFLAGS; "$1" env CGO_ENABLED' \
+      bash "${host_go}"
+}
 
 run_install() {
   local root="$1"
   local go_bin go_root
-  go_bin="$(require_host_go)"
-  go_root="$("${go_bin}" env GOROOT)"
-  if [ -z "${go_root}" ]; then
-    fail "go env GOROOT was empty"
-  fi
+  resolve_host_go go_bin go_root
   env -i \
     HOME="${root}/home" \
     PATH="${root}/stubs:/usr/bin:/bin" \
@@ -274,15 +286,7 @@ persist_when_header_exists() {
   assert_eq "${shell_out}" "$(printf 'v24.21.0\n-O2 -g -I%s' "${include}")" \
     "login shell child node and CGO_CFLAGS"
 
-  shell_out="$(
-    env -i \
-      HOME="${root}/home" \
-      GOENV="${root}/goenv" \
-      GOROOT="${host_goroot}" \
-      GOTOOLCHAIN=local \
-      PATH="${host_go_dir}:/usr/bin:/bin" \
-      bash --noprofile --norc -c 'printf "%s\n%s\n" "$(go env CGO_CFLAGS)" "$(go env CGO_ENABLED)"'
-  )"
+  shell_out="$(read_persisted_go_env "${root}/home" "${root}/goenv")"
   assert_eq "${shell_out}" "$(printf -- '-O2 -g -I%s\n1' "${include}")" \
     "go env CGO without shell startup"
 
@@ -298,19 +302,14 @@ skip_cgo_when_header_absent() {
   : > "${root}/curl.log"
   : > "${root}/go.log"
   : > "${root}/make.log"
+  # A fresh GOENV already prints the built-in -O2 -g. A stale flag is the
+  # only way to see that go env -u actually ran.
+  printf 'CGO_CFLAGS=-I/old\n' > "${root}/goenv"
   run_install "${root}"
   assert_eq "$(cat "${root}/make.log")" "" "make stays idle without snapshot targets"
-  out="$(
-    env -i \
-      HOME="${root}/home" \
-      GOENV="${root}/goenv" \
-      GOROOT="${host_goroot}" \
-      GOTOOLCHAIN=local \
-      PATH="${host_go_dir}:/usr/bin:/bin" \
-      bash --noprofile --norc -c 'go env CGO_CFLAGS; go env CGO_ENABLED'
-  )"
+  out="$(read_persisted_go_env "${root}/home" "${root}/goenv")"
   assert_eq "${out}" "$(printf -- '-O2 -g\n1')" \
-    "go env CGO_CFLAGS without a bundled header"
+    "go env drops stale CGO_CFLAGS without a bundled header"
   out="$(
     env -i \
       HOME="${root}/home" \
@@ -377,7 +376,7 @@ esac
 EOF
   chmod +x "${hostbin}/go"
 
-  resolved="$(PATH="${hostbin}:${PATH}" command -v go)"
+  resolved="$(PATH="${hostbin}:${PATH}" type -P go)"
   if [ "${resolved}" != "${hostbin}/go" ]; then
     fail "host go fixture was not selected: ${resolved}"
   fi
