@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs .cursor/cloud-agent-install.sh against a throwaway checkout.
 # The installer's observable contract: repo path, persisted CGO, Node on PATH
-# for a non-interactive shell, checksum rejection, a pinned go install, and
-# go env reaching the caller's go when that binary is not /usr/bin/go.
+# for a non-interactive shell, checksum rejection, a pinned go install,
+# BASH_ENV restoring Node and CGO, and go env reaching the caller's go when
+# that binary is not /usr/bin/go. CGO is read back from that same binary.
 set -euo pipefail
 
 script_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cloud-agent-install.sh"
@@ -168,32 +169,41 @@ resolve_host_go() {
   fi
 }
 
-resolve_host_go host_go host_goroot
-
-# Read CGO back from the captured toolchain binary. No PATH lookup.
+# Read CGO back from the Go binary run_install forwarded. No PATH lookup.
+# The binary and GOROOT are the ones captured for that install, so a later
+# PATH change cannot make this read a different toolchain.
 read_persisted_go_env() {
   local home="$1"
   local goenv="$2"
+  local go_bin="$3"
+  local go_root="$4"
+  if [ -z "${go_bin}" ] || [ ! -x "${go_bin}" ]; then
+    fail "read_persisted_go_env needs the go binary run_install forwarded"
+  fi
+  if [ -z "${go_root}" ]; then
+    fail "read_persisted_go_env needs the GOROOT run_install forwarded"
+  fi
   env -i \
     HOME="${home}" \
     GOENV="${goenv}" \
-    GOROOT="${host_goroot}" \
+    GOROOT="${go_root}" \
     GOTOOLCHAIN=local \
     bash --noprofile --norc -c \
       '"$1" env CGO_CFLAGS; "$1" env CGO_ENABLED' \
-      bash "${host_go}"
+      bash "${go_bin}"
 }
 
 run_install() {
   local root="$1"
-  local go_bin go_root
-  resolve_host_go go_bin go_root
+  # Globals: the caller reads these back. They are the PATH resolution for
+  # this invocation, not the go binary found when the script started.
+  resolve_host_go forwarded_go forwarded_goroot
   env -i \
     HOME="${root}/home" \
     PATH="${root}/stubs:/usr/bin:/bin" \
-    PERISCOPE_TEST_HOST_GO="${go_bin}" \
+    PERISCOPE_TEST_HOST_GO="${forwarded_go}" \
     GOENV="${root}/goenv" \
-    GOROOT="${go_root}" \
+    GOROOT="${forwarded_goroot}" \
     GOTOOLCHAIN=local \
     TMPDIR="${root}/tmp" \
     PERISCOPE_CLOUD_PREFIX="${root}/prefix" \
@@ -277,16 +287,24 @@ persist_when_header_exists() {
   assert_eq "${shell_out}" "$(printf 'v24.21.0\n-O2 -g -I%s' "${include}")" \
     "profile.d shell node and CGO_CFLAGS"
 
+  # ~/.profile is what a login shell sources for this user. bash -l also
+  # reads /etc/profile, which is host state, so source the file we wrote and
+  # then drop PATH and CGO. The child has to recover both from BASH_ENV.
   shell_out="$(
     env -i \
       HOME="${root}/home" \
       PATH="${root}/oldbin:/usr/bin:/bin" \
-      bash -lc "bash --noprofile --norc -c 'printf \"%s\n%s\n\" \"\$(node -v)\" \"\$CGO_CFLAGS\"'"
+      bash --noprofile --norc -c \
+      ". \"\$HOME/.profile\"
+       unset CGO_CFLAGS CGO_ENABLED
+       export PATH=$(printf '%q' "${root}/oldbin:/usr/bin:/bin")
+       bash --noprofile --norc -c 'printf \"%s\n%s\n\" \"\$(node -v)\" \"\$CGO_CFLAGS\"'"
   )"
   assert_eq "${shell_out}" "$(printf 'v24.21.0\n-O2 -g -I%s' "${include}")" \
-    "login shell child node and CGO_CFLAGS"
+    "profile child recovers node and CGO_CFLAGS from BASH_ENV"
 
-  shell_out="$(read_persisted_go_env "${root}/home" "${root}/goenv")"
+  shell_out="$(read_persisted_go_env "${root}/home" "${root}/goenv" \
+    "${forwarded_go}" "${forwarded_goroot}")"
   assert_eq "${shell_out}" "$(printf -- '-O2 -g -I%s\n1' "${include}")" \
     "go env CGO without shell startup"
 
@@ -307,7 +325,8 @@ skip_cgo_when_header_absent() {
   printf 'CGO_CFLAGS=-I/old\n' > "${root}/goenv"
   run_install "${root}"
   assert_eq "$(cat "${root}/make.log")" "" "make stays idle without snapshot targets"
-  out="$(read_persisted_go_env "${root}/home" "${root}/goenv")"
+  out="$(read_persisted_go_env "${root}/home" "${root}/goenv" \
+    "${forwarded_go}" "${forwarded_goroot}")"
   assert_eq "${out}" "$(printf -- '-O2 -g\n1')" \
     "go env drops stale CGO_CFLAGS without a bundled header"
   out="$(
@@ -399,11 +418,12 @@ EOF
     fail "installer exited ${status} when host go was outside /usr/bin"
   fi
 
-  got="$("${hostbin}/go" env CGO_ENABLED)"
-  assert_eq "${got}" "1" "go env CGO_ENABLED from host go outside /usr/bin"
-  got="$("${hostbin}/go" env CGO_CFLAGS)"
-  assert_eq "${got}" "-O2 -g -I${include}" \
-    "go env CGO_CFLAGS from host go outside /usr/bin"
+  assert_eq "${forwarded_go}" "${hostbin}/go" \
+    "installer forwarded the go outside /usr/bin"
+  got="$(read_persisted_go_env "${root}/home" "${root}/goenv" \
+    "${forwarded_go}" "${forwarded_goroot}")"
+  assert_eq "${got}" "$(printf -- '-O2 -g -I%s\n1' "${include}")" \
+    "go env CGO from the forwarded host go"
 
   cleanup_root "${root}"
 }
