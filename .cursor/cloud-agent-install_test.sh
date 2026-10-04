@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs .cursor/cloud-agent-install.sh against a throwaway checkout.
 # The installer's observable contract: repo path, persisted CGO, Node on PATH
-# for a non-interactive shell, checksum rejection, and a pinned go install.
+# for a non-interactive shell, checksum rejection, a pinned go install, and
+# go env reaching the caller's go when that binary is not /usr/bin/go.
 set -euo pipefail
 
 script_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cloud-agent-install.sh"
@@ -99,8 +100,13 @@ EOF
   cat > "${root}/stubs/go" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${PERISCOPE_TEST_GO_LOG}"
+# Only `go env` is the host toolchain. PATH no longer contains it.
 if [ "${1:-}" = "env" ]; then
-  exec /usr/bin/go "$@"
+  if [ -z "${PERISCOPE_TEST_HOST_GO:-}" ]; then
+    echo "go env requires PERISCOPE_TEST_HOST_GO" >&2
+    exit 127
+  fi
+  exec "${PERISCOPE_TEST_HOST_GO}" "$@"
 fi
 if [ "${1:-}" = "install" ]; then
   dest="${GOBIN:?GOBIN is required}"
@@ -141,15 +147,41 @@ EOF
   chmod +x "${bin}/node" "${bin}/npm" "${bin}/npx" "${bin}/corepack"
 }
 
-host_goroot="$(go env GOROOT)"
+# The caller's go, before run_install replaces PATH with the stubs.
+require_host_go() {
+  local found
+  found="$(command -v go || true)"
+  if [ -z "${found}" ]; then
+    fail "go is not on PATH"
+  fi
+  case "${found}" in
+    /*) ;;
+    *) fail "go on PATH is not an absolute path: ${found}" ;;
+  esac
+  if [ ! -x "${found}" ]; then
+    fail "go on PATH is not executable: ${found}"
+  fi
+  printf '%s\n' "${found}"
+}
+
+host_go="$(require_host_go)"
+host_goroot="$("${host_go}" env GOROOT)"
+host_go_dir="$(dirname "${host_go}")"
 
 run_install() {
   local root="$1"
+  local go_bin go_root
+  go_bin="$(require_host_go)"
+  go_root="$("${go_bin}" env GOROOT)"
+  if [ -z "${go_root}" ]; then
+    fail "go env GOROOT was empty"
+  fi
   env -i \
     HOME="${root}/home" \
     PATH="${root}/stubs:/usr/bin:/bin" \
+    PERISCOPE_TEST_HOST_GO="${go_bin}" \
     GOENV="${root}/goenv" \
-    GOROOT="${host_goroot}" \
+    GOROOT="${go_root}" \
     GOTOOLCHAIN=local \
     TMPDIR="${root}/tmp" \
     PERISCOPE_CLOUD_PREFIX="${root}/prefix" \
@@ -248,7 +280,7 @@ persist_when_header_exists() {
       GOENV="${root}/goenv" \
       GOROOT="${host_goroot}" \
       GOTOOLCHAIN=local \
-      PATH="/usr/bin:/bin" \
+      PATH="${host_go_dir}:/usr/bin:/bin" \
       bash --noprofile --norc -c 'printf "%s\n%s\n" "$(go env CGO_CFLAGS)" "$(go env CGO_ENABLED)"'
   )"
   assert_eq "${shell_out}" "$(printf -- '-O2 -g -I%s\n1' "${include}")" \
@@ -274,7 +306,7 @@ skip_cgo_when_header_absent() {
       GOENV="${root}/goenv" \
       GOROOT="${host_goroot}" \
       GOTOOLCHAIN=local \
-      PATH="/usr/bin:/bin" \
+      PATH="${host_go_dir}:/usr/bin:/bin" \
       bash --noprofile --norc -c 'go env CGO_CFLAGS; go env CGO_ENABLED'
   )"
   assert_eq "${out}" "$(printf -- '-O2 -g\n1')" \
@@ -290,7 +322,95 @@ skip_cgo_when_header_absent() {
   cleanup_root "${root}"
 }
 
+# Host go lives only outside /usr/bin. The installer still has to persist CGO
+# through `go env`, and the values must come back from that same binary.
+go_env_follows_host_outside_usr_bin() {
+  local root hostbin store include repo got status resolved
+  root="$(mktemp -d)"
+  hostbin="${root}/opt/go/bin"
+  store="${root}/host-go-env"
+  mkdir -p "${hostbin}" "${root}/goroot"
+  : > "${store}"
+
+  cat > "${hostbin}/go" <<EOF
+#!/bin/bash
+set -euo pipefail
+store=$(printf '%q' "${store}")
+goroot=$(printf '%q' "${root}/goroot")
+if [ "\${1:-}" != "env" ]; then
+  echo "host go outside /usr/bin: unexpected \$*" >&2
+  exit 1
+fi
+shift
+if [ "\${1:-}" = "GOROOT" ]; then
+  printf '%s\n' "\${goroot}"
+  exit 0
+fi
+if [ "\${1:-}" = "-w" ]; then
+  kv="\${2:?go env -w needs KEY=VALUE}"
+  key="\${kv%%=*}"
+  val="\${kv#*=}"
+  tmp="\${store}.tmp"
+  grep -v "^\${key}=" "\${store}" > "\${tmp}" || true
+  printf '%s=%s\n' "\${key}" "\${val}" >> "\${tmp}"
+  mv "\${tmp}" "\${store}"
+  exit 0
+fi
+if [ "\${1:-}" = "-u" ]; then
+  key="\${2:?go env -u needs a key}"
+  tmp="\${store}.tmp"
+  grep -v "^\${key}=" "\${store}" > "\${tmp}" || true
+  mv "\${tmp}" "\${store}"
+  exit 0
+fi
+key="\${1:?go env needs a key}"
+line="\$(grep "^\${key}=" "\${store}" || true)"
+if [ -n "\${line}" ]; then
+  printf '%s\n' "\${line#*=}"
+  exit 0
+fi
+case "\${key}" in
+  CGO_CFLAGS) printf '%s\n' '-O2 -g' ;;
+  CGO_ENABLED) printf '%s\n' '0' ;;
+  *) printf '\n' ;;
+esac
+EOF
+  chmod +x "${hostbin}/go"
+
+  resolved="$(PATH="${hostbin}:${PATH}" command -v go)"
+  if [ "${resolved}" != "${hostbin}/go" ]; then
+    fail "host go fixture was not selected: ${resolved}"
+  fi
+  case "${resolved}" in
+    /usr/bin/* | /bin/*) fail "host go fixture must not live under /usr/bin or /bin" ;;
+  esac
+
+  new_workspace "${root}"
+  seed_node "${root}"
+  repo="${root}/repo"
+  include="${repo}/.sqlite-include"
+  printf 'sqlite-vec-header:\npricing-snapshot:\n' > "${repo}/Makefile"
+  : > "${root}/curl.log"
+  : > "${root}/go.log"
+  : > "${root}/make.log"
+
+  status=0
+  PATH="${hostbin}:${PATH}" run_install "${root}" || status=$?
+  if [ "${status}" -ne 0 ]; then
+    fail "installer exited ${status} when host go was outside /usr/bin"
+  fi
+
+  got="$("${hostbin}/go" env CGO_ENABLED)"
+  assert_eq "${got}" "1" "go env CGO_ENABLED from host go outside /usr/bin"
+  got="$("${hostbin}/go" env CGO_CFLAGS)"
+  assert_eq "${got}" "-O2 -g -I${include}" \
+    "go env CGO_CFLAGS from host go outside /usr/bin"
+
+  cleanup_root "${root}"
+}
+
 reject_bad_node_tarball
 persist_when_header_exists
 skip_cgo_when_header_absent
+go_env_follows_host_outside_usr_bin
 printf 'ok\n'
