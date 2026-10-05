@@ -355,6 +355,37 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 - Describe what the code does now, why it changed, tradeoffs, limitations, and
   where reviewers should look.
 
+## Cursor Cloud specific instructions
+
+- Dependency setup is `.cursor/cloud-agent-install.sh`, run from the checkout
+  that contains it. Go must already be on `PATH`. The script does not install
+  or replace Go. It installs compilers, `pkg-config`, and `libsqlite3-dev`,
+  then makes Node 24.21.0 and npm 11.21.0 available through `~/.local/bin`.
+  Node 24.21.0 bundles npm 11.19.0. The install updates npm to 11.21.0, the
+  latest npm 11 release, and stops there. Do not install npm 12: Node will
+  not bundle it until Node 27, because npm 12 blocks install scripts and git
+  dependencies unless each one is opted in. `npm ci` on npm 11 still fetches
+  the public `@kenn-io/kit-ui` git dependency, which `make frontend` and
+  `make build` need. golangci-lint v2.11.4 comes from
+  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4`.
+- The script writes `~/.config/periscope/cloud-agent-env.sh` and sources it
+  from `~/.bashrc`, `~/.profile`, and `/etc/profile.d`. That file prepends
+  `~/.local/bin` and exports `BASH_ENV`, so a non-interactive bash started
+  from a login shell resolves the pinned Node. When `make sqlite-vec-header`
+  and `make pricing-snapshot` exist, the script runs them. If the bundled
+  SQLite header is present, `go env -w` stores `CGO_ENABLED=1` and
+  `CGO_CFLAGS` for that header, so plain `go test` and `go build` use it
+  even when the shell does not source rc files. Those commands still need
+  `-tags fts5`. `make build`, `make test`, `make test-short`, `make vet`,
+  and `make dev` set the same flags.
+- The development binary is `./periscope`. For a UI check, seed a scratch
+  database with `cmd/testfixture` and run
+  `PERISCOPE_DATA_DIR=<scratch> ./periscope serve --host 127.0.0.1 --port 8080
+  --no-browser --no-sync`. When the browser origin is not loopback, pass
+  `--public-url` set to that origin.
+- PostgreSQL integration tests and the desktop app are optional. Core
+  development does not need Docker.
+
 ## Cursor Cloud: git commits
 
 periscope is **excluded** from orama attribution-guard scripts (`commit-clean.sh`,
