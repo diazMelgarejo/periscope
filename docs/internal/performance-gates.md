@@ -66,6 +66,18 @@ sessions" or "the manifest is read once per root regardless of session count".
 
 ### 2. Benchmark gate (runs on every PR via `bench.yml`)
 
+Pull requests enter that workflow through `.github/workflows/bench-pr.yml`,
+which calls `./.github/workflows/bench.yml` in this repository. The caller
+used to pin `kenn-io/agentsview/.github/workflows/bench.yml@main`. That pin
+failed closed in two ways, both recorded on the caller: while the upstream
+file existed it required `BENCH_GATE_HEAVY` under `set -u`, which this
+Makefile does not emit, and after agentsview #1667 deleted `bench.yml` the
+job failed before it started. `bench.yml` evaluates
+`make -s bench-gate-config` on the pull-request head and passes
+`BENCH_GATE_COUNT` and `BENCH_GATE_TIME` into the merge-base run.
+`TestBenchPRCallerStaysLocal` in `cmd/benchgate/caller_contract_test.go`
+locks that local call and those two variable names.
+
 `.github/workflows/bench.yml` runs `make bench-gate` — the single source of
 truth for the gated package list, sample count, and iteration count — on the PR
 head and its merge base on the same runner, then compares the outputs with

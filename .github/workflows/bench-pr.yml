@@ -1,8 +1,12 @@
 name: Bench Gate
 
-# The PR dispatcher always calls the main-pinned workflow. That workflow
-# independently routes same-repository Linux jobs to the managed public fleet
-# and fork jobs to GitHub-hosted runners.
+# Call the workflow in this repository. It matches Makefile
+# bench-gate-config, which emits BENCH_GATE_COUNT and BENCH_GATE_TIME.
+# kenn-io/agentsview@main no longer contains bench.yml (removed in
+# agentsview #1667). The previous @main pin failed closed: while that
+# file still existed it required BENCH_GATE_HEAVY under `set -u`, which
+# this Makefile does not emit, and after the file was deleted the
+# caller failed before any job started.
 on:
   pull_request:
     # Docs/frontend-only PRs cannot change the gated Go paths. If
@@ -19,4 +23,4 @@ permissions: read-all
 
 jobs:
   run:
-    uses: kenn-io/agentsview/.github/workflows/bench.yml@main
+    uses: ./.github/workflows/bench.yml
